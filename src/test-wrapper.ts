@@ -16,6 +16,8 @@ async function main() {
     process.stdout.write("\n--- Response Stream ---\n");
     
     let fullText = "";
+    let usage: any = null;
+
     for await (const chunk of streamResult) {
       if (firstTokenTime === null) {
         firstTokenTime = performance.now();
@@ -23,6 +25,10 @@ async function main() {
       const chunkText = chunk.text || "";
       fullText += chunkText;
       process.stdout.write(chunkText);
+      
+      if (chunk.usageMetadata) {
+        usage = chunk.usageMetadata;
+      }
     }
 
     const endTime = performance.now();
@@ -33,6 +39,15 @@ async function main() {
     console.log(`⏱️ Time to First Token (TTFT): ${ttft}s`);
     console.log(`✨ Total response time: ${totalDuration}s`);
     console.log(`📏 Character count: ${fullText.length}`);
+
+    if (usage) {
+      console.log(`\n--- Token Usage ---`);
+      console.log(`📤 Prompt Tokens:     ${usage.promptTokenCount}`);
+      console.log(`📥 Response Tokens:   ${usage.candidatesTokenCount}`);
+      console.log(`💎 Total Tokens:      ${usage.totalTokenCount}`);
+    } else {
+      console.log(`\n⚠️ Token usage data not available in this stream.`);
+    }
 
   } catch (error: any) {
     console.error("Test failed:", error.message);
