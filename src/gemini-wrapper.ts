@@ -3,25 +3,37 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 export class GeminiWrapper {
-  private client: GoogleGenAI;
+  private clients: GoogleGenAI[] = [];
   private modelName: string;
   private systemInstruction: string;
+  private currentKeyIndex: number = 0;
 
   constructor(systemInstruction?: string) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is missing in .env file");
+    const apiKeys = process.env.GEMINI_API_KEYS?.split(",").map(key => key.trim()).filter(key => key.length > 0);
+    
+    if (!apiKeys || apiKeys.length === 0) {
+      throw new Error("GEMINI_API_KEYS is missing or empty in .env file");
     }
 
-    this.client = new GoogleGenAI({ apiKey });
+    this.clients = apiKeys.map(apiKey => new GoogleGenAI({ apiKey }));
     this.modelName = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview";
     this.systemInstruction = systemInstruction || 
       "You are a helpful assistant. Prioritize quality and clarity in every response.";
+    
+    console.log(`Initialized GeminiWrapper with ${this.clients.length} API keys.`);
+  }
+
+  private getNextClient() {
+    const client = this.clients[this.currentKeyIndex];
+    console.log(`[Load Balancer] Using API Key at index: ${this.currentKeyIndex}`);
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.clients.length;
+    return client;
   }
 
   async generateContent(prompt: string) {
     try {
-      const result = await this.client.models.generateContent({
+      const client = this.getNextClient();
+      const result = await client.models.generateContent({
         model: this.modelName,
         contents: prompt,
         config: {
@@ -31,14 +43,15 @@ export class GeminiWrapper {
       });
       return result;
     } catch (error) {
-      console.error("Error calling Gemini API:", error);
+      console.error(`Error calling Gemini API with key index ${this.currentKeyIndex}:`, error);
       throw error;
     }
   }
 
   async generateContentStream(prompt: string) {
     try {
-      return await this.client.models.generateContentStream({
+      const client = this.getNextClient();
+      return await client.models.generateContentStream({
         model: this.modelName,
         contents: prompt,
         config: {
@@ -49,7 +62,7 @@ export class GeminiWrapper {
         }
       });
     } catch (error) {
-      console.error("Error calling Gemini API (Stream):", error);
+      console.error(`Error calling Gemini API (Stream) with key index ${this.currentKeyIndex}:`, error);
       throw error;
     }
   }
