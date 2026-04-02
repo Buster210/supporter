@@ -1,0 +1,31 @@
+{
+  "name": "suppporter",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/gemini-wrapper.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "bun run src/test-wrapper.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Parmod0537/Suppporter.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Parmod0537/Suppporter/issues"
+  },
+  "homepage": "https://github.com/Parmod0537/Suppporter#readme",
+  "dependencies": {
+    "@google/genai": "^1.49.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
