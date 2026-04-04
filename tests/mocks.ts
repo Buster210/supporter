@@ -1,13 +1,17 @@
 import { mock } from "bun:test";
 
-export const getMockGeminiResponse = (text: string = "Mocked Response") => ({
-  text,
-  usageMetadata: {
+export const getMockGeminiResponse = (text: string = "Mocked Response") => {
+  const usageMetadata = {
     promptTokenCount: 10,
     candidatesTokenCount: 20,
     totalTokenCount: 30,
-  },
-});
+  };
+  return {
+    text,
+    usageMetadata,
+    usage: usageMetadata
+  };
+};
 
 export const mockGenAI = {
   models: {

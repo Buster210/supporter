@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Content } from "@google/genai";
 import { ILLMProvider, LLMOptions, LLMResult, LLMChunk } from "../index";
 
 export class GeminiProvider implements ILLMProvider {
@@ -13,46 +13,79 @@ export class GeminiProvider implements ILLMProvider {
       "You are a helpful assistant. Prioritize quality and clarity in every response.";
   }
 
-  async generate(prompt: string, options?: LLMOptions): Promise<LLMResult> {
+  private prepareContents(prompt: string | Content[], history: Content[] = []): Content[] {
+    const freshContent = typeof prompt === "string" ? [{ role: "user", parts: [{ text: prompt }] }] : prompt;
+    return [...history, ...freshContent];
+  }
+
+  async generate(prompt: string | Content[], options?: LLMOptions): Promise<LLMResult> {
     try {
-      const result = await this.client.models.generateContent({
-        model: options?.model || this.modelName,
-        contents: prompt,
+      const { 
+        history, 
+        systemInstruction, 
+        temperature,
+        topP,
+        topK,
+        maxOutputTokens,
+        config: userConfig,
+        ...sdkOptions 
+      } = options || {};
+      
+      const response = await this.client.models.generateContent({
+        model: sdkOptions.model || this.modelName,
+        contents: this.prepareContents(prompt, history),
         config: {
-          systemInstruction: options?.systemInstruction || this.defaultSystemInstruction,
-          temperature: options?.temperature ?? 0.7,
-          topP: options?.topP,
-          topK: options?.topK,
-          maxOutputTokens: options?.maxOutputTokens,
-        }
+          systemInstruction: systemInstruction || this.defaultSystemInstruction,
+          temperature: temperature ?? userConfig?.temperature ?? 0.7,
+          topP: topP ?? userConfig?.topP,
+          topK: topK ?? userConfig?.topK,
+          maxOutputTokens: maxOutputTokens ?? userConfig?.maxOutputTokens,
+          ...userConfig,
+        },
+        ...sdkOptions
       });
 
       return {
-        text: result.text || "",
-        usage: result.usageMetadata ? {
-          promptTokens: result.usageMetadata.promptTokenCount,
-          completionTokens: result.usageMetadata.candidatesTokenCount,
-          totalTokens: result.usageMetadata.totalTokenCount,
-        } : undefined,
-        raw: result
-      };
+        ...response,
+        text: response.text || "",
+        usage: response.usageMetadata && {
+          promptTokens: response.usageMetadata.promptTokenCount || 0,
+          completionTokens: response.usageMetadata.candidatesTokenCount || 0,
+          totalTokens: response.usageMetadata.totalTokenCount || 0,
+        },
+        raw: response
+      } as LLMResult;
     } catch (error) {
       console.error("Error calling Gemini API:", error);
       throw error;
     }
   }
 
-  async *generateStream(prompt: string, options?: LLMOptions): AsyncIterable<LLMChunk> {
+  async *generateStream(prompt: string | Content[], options?: LLMOptions): AsyncIterable<LLMChunk> {
     try {
+      const { 
+        history, 
+        systemInstruction, 
+        temperature,
+        topP,
+        topK,
+        maxOutputTokens,
+        config: userConfig,
+        ...sdkOptions 
+      } = options || {};
+
       const stream = await this.client.models.generateContentStream({
-        model: options?.model || this.modelName,
-        contents: prompt,
+        model: sdkOptions.model || this.modelName,
+        contents: this.prepareContents(prompt, history),
         config: {
-          systemInstruction: options?.systemInstruction || this.defaultSystemInstruction,
-          temperature: options?.temperature ?? 0.7,
-          topP: options?.topP,
-          topK: options?.topK,
-        }
+          systemInstruction: systemInstruction || this.defaultSystemInstruction,
+          temperature: temperature ?? userConfig?.temperature ?? 0.7,
+          topP: topP ?? userConfig?.topP,
+          topK: topK ?? userConfig?.topK,
+          maxOutputTokens: maxOutputTokens ?? userConfig?.maxOutputTokens,
+          ...userConfig,
+        },
+        ...sdkOptions
       });
 
       for await (const chunk of stream) {

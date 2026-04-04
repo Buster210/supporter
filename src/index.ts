@@ -1,16 +1,20 @@
+import { 
+  Content, 
+  GenerateContentRequest, 
+  GenerateContentResponse, 
+  Schema, 
+  Tool 
+} from "@google/genai";
 import { GeminiProvider } from "./providers/gemini-provider";
 
 
-export interface LLMOptions {
-  model?: string;
-  temperature?: number;
-  topP?: number;
-  topK?: number;
-  maxOutputTokens?: number;
+export interface LLMOptions extends Partial<Omit<GenerateContentRequest, 'contents'>> {
+  history?: Content[];
   systemInstruction?: string;
+  responseSchema?: Schema;
 }
 
-export interface LLMResult {
+export interface LLMResult extends GenerateContentResponse {
   text: string;
   usage?: {
     promptTokens: number;
@@ -27,21 +31,21 @@ export interface LLMChunk {
 }
 
 export interface ILLMProvider {
-  generate(prompt: string, options?: LLMOptions): Promise<LLMResult>;
-  generateStream(prompt: string, options?: LLMOptions): AsyncIterable<LLMChunk>;
+  generate(prompt: string | Content[], options?: LLMOptions): Promise<LLMResult>;
+  generateStream(prompt: string | Content[], options?: LLMOptions): AsyncIterable<LLMChunk>;
   getName(): string;
 }
 
 export type ProviderType = 'gemini' | 'openai' | 'local' | 'openrouter';
 
 
-export class LoadBalancerProvider implements ILLMProvider {
+export class RoundRobinKeyProvider implements ILLMProvider {
   private instances: ILLMProvider[];
   private currentIndex: number = 0;
 
   constructor(instances: ILLMProvider[]) {
     if (instances.length === 0) {
-      throw new Error("LoadBalancerProvider requires at least one provider instance.");
+      throw new Error("RoundRobinKeyProvider requires at least one provider instance.");
     }
     this.instances = instances;
   }
@@ -52,40 +56,39 @@ export class LoadBalancerProvider implements ILLMProvider {
     return instance;
   }
 
-  async generate(prompt: string, options?: LLMOptions): Promise<LLMResult> {
+  async generate(prompt: string | Content[], options?: LLMOptions): Promise<LLMResult> {
     return this.getNextInstance().generate(prompt, options);
   }
 
-  async *generateStream(prompt: string, options?: LLMOptions): AsyncIterable<LLMChunk> {
+  async *generateStream(prompt: string | Content[], options?: LLMOptions): AsyncIterable<LLMChunk> {
     yield* this.getNextInstance().generateStream(prompt, options);
   }
 
   getName(): string {
-    return `${this.instances[0].getName()} (Load Balanced x${this.instances.length})`;
+    return `${this.instances[0].getName()} (Rotated x${this.instances.length})`;
   }
 }
 
 
 export class LLMFactory {
   static getProvider(type?: ProviderType): ILLMProvider {
-    const providerType = type || (process.env.LLM_PROVIDER as ProviderType) || 'gemini';
+    const targetType = type || (process.env.LLM_PROVIDER as ProviderType) || 'gemini';
 
-    switch (providerType) {
-      case 'gemini': {
-        const keysEnv = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
-        const keys = keysEnv.split(',').map(k => k.trim()).filter(k => k.length > 0);
-        
-        if (keys.length === 0) {
-          throw new Error("GEMINI_API_KEYS is missing in environment variables");
-        }
-        
-        const instances = keys.map(key => new GeminiProvider(key));
-        return instances.length > 1 ? new LoadBalancerProvider(instances) : instances[0];
-      }
-      default:
-        throw new Error(`Unsupported provider type: ${providerType}`);
+    if (targetType !== 'gemini') {
+      throw new Error(`Unsupported provider type: ${targetType}`);
     }
+
+    const rawKeys = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
+    const keys = rawKeys.split(',').map(k => k.trim()).filter(Boolean);
+
+    if (keys.length === 0) {
+      throw new Error("GEMINI_API_KEYS is missing in environment variables");
+    }
+
+    const instances = keys.map(key => new GeminiProvider(key));
+    return instances.length > 1 ? new RoundRobinKeyProvider(instances) : instances[0];
   }
 }
 
 export { GeminiProvider };
+export { ChatAgent } from "./agent";
