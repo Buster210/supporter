@@ -2,7 +2,7 @@ import type { Content, Tool } from "@google/genai";
 import type { LLMProvider } from "./index";
 
 export interface ToolRegistry {
-  [name: string]: (...args: any[]) => Promise<any> | any;
+  [name: string]: (args: Record<string, unknown>) => Promise<unknown> | unknown;
 }
 
 export interface AgentOptions {
@@ -48,7 +48,9 @@ export class ChatAgent {
 
       const toolParts = await Promise.all(
         calls.map(async (part) => {
-          const call = part.functionCall!;
+          const call = part.functionCall;
+          if (!call) return null;
+
           const tool = this.registry?.[call.name];
 
           if (!tool) return null;
@@ -61,11 +63,13 @@ export class ChatAgent {
                 response: { result: response },
               },
             };
-          } catch (error: any) {
+          } catch (error: unknown) {
+            const errorMessage =
+              error instanceof Error ? error.message : "Unknown error";
             return {
               functionResponse: {
                 name: call.name,
-                response: { error: error.message || "Unknown error" },
+                response: { error: errorMessage },
               },
             };
           }
@@ -77,7 +81,7 @@ export class ChatAgent {
         return result.text || "";
       }
 
-      this.history.push({ role: "user", parts: validParts as any[] });
+      this.history.push({ role: "user", parts: validParts });
     }
   }
 

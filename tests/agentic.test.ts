@@ -22,7 +22,7 @@ describe("ChatAgent Execution Loop", () => {
               },
             },
           ],
-        } as any)
+        } as LLMResult)
         .mockResolvedValueOnce({
           text: "The weather in London is sunny.",
           candidates: [
@@ -32,7 +32,7 @@ describe("ChatAgent Execution Loop", () => {
               },
             },
           ],
-        } as any),
+        } as LLMResult),
       generateStream: mock().mockImplementation(async function* () {}),
     };
 
@@ -55,7 +55,7 @@ describe("ChatAgent Execution Loop", () => {
               },
             },
           ],
-        } as any,
+        } as Tool,
       ],
       registry,
     });
@@ -71,8 +71,11 @@ describe("ChatAgent Execution Loop", () => {
     // 3: User function response
     // 4: Model final answer
     expect(history.length).toBe(4);
-    expect((history[2].parts[0] as any).functionResponse.name).toBe(
-      "get_weather",
-    );
+    const secondPart = history[2].parts[0];
+    if ("functionResponse" in secondPart) {
+      expect(secondPart.functionResponse.name).toBe("get_weather");
+    } else {
+      throw new Error("Expected functionResponse in part");
+    }
   });
 });

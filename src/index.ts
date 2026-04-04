@@ -1,16 +1,13 @@
 import type {
   Content,
-  GenerateContentRequest,
+  GenerateContentConfig,
   GenerateContentResponse,
-  Schema,
 } from "@google/genai";
 import { GeminiProvider } from "./providers/gemini-provider";
 
-export interface LLMOptions
-  extends Partial<Omit<GenerateContentRequest, "contents">> {
+export interface LLMOptions extends GenerateContentConfig {
   history?: Content[];
-  systemInstruction?: string;
-  responseSchema?: Schema;
+  model?: string;
 }
 
 export interface LLMResult extends GenerateContentResponse {
@@ -20,13 +17,13 @@ export interface LLMResult extends GenerateContentResponse {
     completionTokens: number;
     totalTokens: number;
   };
-  raw?: any;
+  raw?: unknown;
 }
 
 export interface LLMChunk {
   text: string;
   isLast: boolean;
-  raw?: any;
+  raw?: unknown;
 }
 
 export interface LLMProvider {
@@ -81,32 +78,37 @@ export class RoundRobinKeyProvider implements LLMProvider {
   }
 }
 
-export class LLMFactory {
-  static getProvider(type?: ProviderType): LLMProvider {
-    const targetType =
-      type || (process.env.LLM_PROVIDER as ProviderType) || "gemini";
+export function getProvider(type?: ProviderType): LLMProvider {
+  const targetType =
+    type || (process.env.LLM_PROVIDER as ProviderType) || "gemini";
 
-    if (targetType !== "gemini") {
-      throw new Error(`Unsupported provider type: ${targetType}`);
-    }
-
-    const rawKeys =
-      process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || "";
-    const keys = rawKeys
-      .split(",")
-      .map((k) => k.trim())
-      .filter(Boolean);
-
-    if (keys.length === 0) {
-      throw new Error("GEMINI_API_KEYS is missing in environment variables");
-    }
-
-    const instances = keys.map((key) => new GeminiProvider(key));
-    return instances.length > 1
-      ? new RoundRobinKeyProvider(instances)
-      : instances[0];
+  if (targetType !== "gemini") {
+    throw new Error(`Unsupported provider type: ${targetType}`);
   }
+
+  const rawKeys =
+    process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || "";
+  const keys = rawKeys
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+
+  if (keys.length === 0) {
+    throw new Error("GEMINI_API_KEYS is missing in environment variables");
+  }
+
+  const instances = keys.map((key) => new GeminiProvider(key));
+  return instances.length > 1
+    ? new RoundRobinKeyProvider(instances)
+    : instances[0];
 }
+
+/**
+ * @deprecated Use getProvider instead
+ */
+export const LLMFactory = {
+  getProvider,
+};
 
 export { ChatAgent } from "./agent";
 export { GeminiProvider };
