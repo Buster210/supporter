@@ -1,58 +1,78 @@
-import { describe, test, expect, mock } from "bun:test";
-import { ChatAgent, ILLMProvider, LLMResult } from "../src/index";
-import { Content } from "@google/genai";
+import { describe, expect, mock, test } from "bun:test";
+import { ChatAgent, type LLMProvider } from "../src/index";
 
 describe("ChatAgent Execution Loop", () => {
   test("should execute tool and provide final answer", async () => {
-    const mockProvider: ILLMProvider = {
+    const mockProvider: LLMProvider = {
       getName: () => "mock-provider",
       generate: mock()
         .mockResolvedValueOnce({
           text: "",
-          candidates: [{
-            content: {
-              parts: [{
-                functionCall: {
-                  name: "get_weather",
-                  args: { location: "London" }
-                }
-              }]
-            }
-          }]
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      name: "get_weather",
+                      args: { location: "London" },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
         } as any)
         .mockResolvedValueOnce({
           text: "The weather in London is sunny.",
-          candidates: [{
-            content: {
-              parts: [{ text: "The weather in London is sunny." }]
-            }
-          }]
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "The weather in London is sunny." }],
+              },
+            },
+          ],
         } as any),
-      generateStream: mock().mockImplementation(async function* () {})
+      generateStream: mock().mockImplementation(async function* () {}),
     };
 
     const registry = {
       get_weather: async (args: { location: string }) => {
         return `Sunny in ${args.location}`;
-      }
+      },
     };
 
     const agent = new ChatAgent(mockProvider, {
-      tools: [{ functionDeclarations: [{ name: "get_weather", description: "get weather", parameters: { type: "OBJECT", properties: { location: { type: "STRING" } } } }] } as any],
-      registry
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: "get_weather",
+              description: "get weather",
+              parameters: {
+                type: "OBJECT",
+                properties: { location: { type: "STRING" } },
+              },
+            },
+          ],
+        } as any,
+      ],
+      registry,
     });
 
     const response = await agent.execute("What is the weather in London?");
 
     expect(response).toBe("The weather in London is sunny.");
     expect(mockProvider.generate).toHaveBeenCalledTimes(2);
-    
+
     const history = agent.getHistory();
     // 1: User prompt
     // 2: Model function call
     // 3: User function response
     // 4: Model final answer
     expect(history.length).toBe(4);
-    expect((history[2].parts[0] as any).functionResponse.name).toBe("get_weather");
+    expect((history[2].parts[0] as any).functionResponse.name).toBe(
+      "get_weather",
+    );
   });
 });

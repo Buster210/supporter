@@ -1,4 +1,4 @@
-import { test, expect, mock } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import { mockGenAI } from "./mocks";
 
 mock.module("@google/genai", () => ({
@@ -7,8 +7,8 @@ mock.module("@google/genai", () => ({
   },
 }));
 
-import { LLMFactory } from "../src/index";
 import * as dotenv from "dotenv";
+import { LLMFactory } from "../src/index";
 
 dotenv.config();
 
@@ -18,7 +18,7 @@ test("Provider Streaming Logic", async () => {
 
   const streamResult = provider.generateStream(prompt);
   let fullText = "";
-  
+
   for await (const chunk of streamResult) {
     fullText += chunk.text;
   }

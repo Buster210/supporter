@@ -5,7 +5,9 @@
   "scripts": {
     "build": "tsc",
     "test": "bun test",
-    "test:coverage": "bun test --coverage"
+    "test:coverage": "bun test --coverage",
+    "lint": "biome check .",
+    "prepare": "husky"
   },
   "repository": {
     "type": "git",
@@ -20,7 +22,9 @@
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.11",
     "@types/node": "^25.6.0",
+    "husky": "^9.1.7",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2"
   }

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { LLMFactory } from "../src/index";
 
 describe("LLMFactory Intelligence", () => {
@@ -25,13 +25,15 @@ describe("LLMFactory Intelligence", () => {
   });
 
   test("should throw error for unsupported provider type", () => {
-    expect(() => LLMFactory.getProvider("unsupported" as any)).toThrow(/Unsupported provider type/);
+    expect(() => LLMFactory.getProvider("unsupported" as any)).toThrow(
+      /Unsupported provider type/,
+    );
   });
 
   test("should support multiple API keys via GEMINI_API_KEYS", () => {
     delete process.env.GEMINI_API_KEY;
     process.env.GEMINI_API_KEYS = "key1, key2, key3";
     const provider = LLMFactory.getProvider();
-    expect(provider.getName()).toContain("Load Balanced x3");
+    expect(provider.getName()).toContain("Round Robin x3");
   });
 });

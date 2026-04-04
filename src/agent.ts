@@ -1,5 +1,5 @@
-import { Content, Tool, Schema } from "@google/genai";
-import { ILLMProvider, LLMResult } from "./index";
+import type { Content, Tool } from "@google/genai";
+import type { LLMProvider } from "./index";
 
 export interface ToolRegistry {
   [name: string]: (...args: any[]) => Promise<any> | any;
@@ -13,12 +13,12 @@ export interface AgentOptions {
 
 export class ChatAgent {
   private history: Content[] = [];
-  private provider: ILLMProvider;
+  private provider: LLMProvider;
   private tools?: Tool[];
   private registry?: ToolRegistry;
   private systemInstruction?: string;
 
-  constructor(provider: ILLMProvider, options?: AgentOptions) {
+  constructor(provider: LLMProvider, options?: AgentOptions) {
     this.provider = provider;
     this.tools = options?.tools;
     this.registry = options?.registry;
@@ -36,10 +36,12 @@ export class ChatAgent {
 
       this.history.push({
         role: "model",
-        parts: result.candidates?.[0]?.content?.parts || []
+        parts: result.candidates?.[0]?.content?.parts || [],
       });
 
-      const calls = result.candidates?.[0]?.content?.parts?.filter(p => p.functionCall) || [];
+      const calls =
+        result.candidates?.[0]?.content?.parts?.filter((p) => p.functionCall) ||
+        [];
       if (calls.length === 0 || !this.registry) {
         return result.text || "";
       }
@@ -47,8 +49,8 @@ export class ChatAgent {
       const toolParts = await Promise.all(
         calls.map(async (part) => {
           const call = part.functionCall!;
-          const tool = this.registry![call.name];
-          
+          const tool = this.registry?.[call.name];
+
           if (!tool) return null;
 
           try {
@@ -56,18 +58,18 @@ export class ChatAgent {
             return {
               functionResponse: {
                 name: call.name,
-                response: { result: response }
-              }
+                response: { result: response },
+              },
             };
           } catch (error: any) {
             return {
               functionResponse: {
                 name: call.name,
-                response: { error: error.message || "Unknown error" }
-              }
+                response: { error: error.message || "Unknown error" },
+              },
             };
           }
-        })
+        }),
       );
 
       const validParts = toolParts.filter(Boolean);

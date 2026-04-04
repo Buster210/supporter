@@ -9,7 +9,7 @@ export const getMockGeminiResponse = (text: string = "Mocked Response") => {
   return {
     text,
     usageMetadata,
-    usage: usageMetadata
+    usage: usageMetadata,
   };
 };
 
@@ -17,8 +17,22 @@ export const mockGenAI = {
   models: {
     generateContent: mock(async () => getMockGeminiResponse()),
     generateContentStream: mock(async function* () {
-      yield { text: "Chunk 1", usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 5, totalTokenCount: 10 } };
-      yield { text: "Chunk 2", usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 10, totalTokenCount: 15 } };
+      yield {
+        text: "Chunk 1",
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 5,
+          totalTokenCount: 10,
+        },
+      };
+      yield {
+        text: "Chunk 2",
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 10,
+          totalTokenCount: 15,
+        },
+      };
     }),
   },
 };

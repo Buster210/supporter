@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
-import { mockGenAI, getMockGeminiResponse } from "./mocks";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { getMockGeminiResponse, mockGenAI } from "./mocks";
 
 mock.module("@google/genai", () => ({
   GoogleGenAI: class {
@@ -7,8 +7,8 @@ mock.module("@google/genai", () => ({
   },
 }));
 
-import { LLMFactory } from "../src/index";
 import * as dotenv from "dotenv";
+import { LLMFactory } from "../src/index";
 
 dotenv.config();
 
@@ -33,11 +33,11 @@ describe("LLM Provider Instantiation & Logic", () => {
   test("should transform generate output correctly", async () => {
     const gemini = LLMFactory.getProvider("gemini");
     const mockResponse = getMockGeminiResponse("Mock success");
-    
+
     mockGenAI.models.generateContent.mockResolvedValueOnce(mockResponse);
 
     const result = await gemini.generate("Test prompt");
-    
+
     expect(result.text).toBe("Mock success");
     expect(result.usage?.totalTokens).toBe(30);
     expect(mockGenAI.models.generateContent).toHaveBeenCalled();
@@ -45,11 +45,11 @@ describe("LLM Provider Instantiation & Logic", () => {
 
   test("should pass options to Gemini client", async () => {
     const gemini = LLMFactory.getProvider("gemini");
-    
-    await gemini.generate("Test prompt", { 
+
+    await gemini.generate("Test prompt", {
       temperature: 0.1,
       topP: 0.9,
-      maxOutputTokens: 100
+      maxOutputTokens: 100,
     });
 
     const lastCall = mockGenAI.models.generateContent.mock.calls.at(-1)[0];
