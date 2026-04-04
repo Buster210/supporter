@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage"
   },
   "repository": {
     "type": "git",

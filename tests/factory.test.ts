@@ -27,4 +27,11 @@ describe("LLMFactory Intelligence", () => {
   test("should throw error for unsupported provider type", () => {
     expect(() => LLMFactory.getProvider("unsupported" as any)).toThrow(/Unsupported provider type/);
   });
+
+  test("should support multiple API keys via GEMINI_API_KEYS", () => {
+    delete process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEYS = "key1, key2, key3";
+    const provider = LLMFactory.getProvider();
+    expect(provider.getName()).toContain("Load Balanced x3");
+  });
 });

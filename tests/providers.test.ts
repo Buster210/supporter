@@ -1,16 +1,22 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
+import { mockGenAI, getMockGeminiResponse } from "./mocks";
+
+mock.module("@google/genai", () => ({
+  GoogleGenAI: class {
+    models = mockGenAI.models;
+  },
+}));
+
 import { LLMFactory } from "../src/index";
 import * as dotenv from "dotenv";
 
 dotenv.config();
 
-describe("LLM Provider Instantiation", () => {
+describe("LLM Provider Instantiation & Logic", () => {
   const originalEnv = { ...process.env };
 
   beforeAll(() => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
-    process.env.OPENAI_API_KEY = "test-openai-key";
-    delete process.env.OPENAI_MODEL;
     delete process.env.GEMINI_MODEL;
   });
 
@@ -24,12 +30,31 @@ describe("LLM Provider Instantiation", () => {
     expect(gemini.getName()).toContain("gemini");
   });
 
-  test("should have a functional generate method", async () => {
+  test("should transform generate output correctly", async () => {
     const gemini = LLMFactory.getProvider("gemini");
-    try {
-      await gemini.generate("Test prompt");
-    } catch (error: any) {
-      expect(error.message).toBeDefined();
-    }
+    const mockResponse = getMockGeminiResponse("Mock success");
+    
+    mockGenAI.models.generateContent.mockResolvedValueOnce(mockResponse);
+
+    const result = await gemini.generate("Test prompt");
+    
+    expect(result.text).toBe("Mock success");
+    expect(result.usage?.totalTokens).toBe(30);
+    expect(mockGenAI.models.generateContent).toHaveBeenCalled();
+  });
+
+  test("should pass options to Gemini client", async () => {
+    const gemini = LLMFactory.getProvider("gemini");
+    
+    await gemini.generate("Test prompt", { 
+      temperature: 0.1,
+      topP: 0.9,
+      maxOutputTokens: 100
+    });
+
+    const lastCall = mockGenAI.models.generateContent.mock.calls.at(-1)[0];
+    expect(lastCall.config.temperature).toBe(0.1);
+    expect(lastCall.config.topP).toBe(0.9);
+    expect(lastCall.config.maxOutputTokens).toBe(100);
   });
 });
