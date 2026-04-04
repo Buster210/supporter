@@ -1,8 +1,9 @@
 import type { Content, Tool } from "@google/genai";
 import type { LLMProvider } from "./index";
+import { logger } from "./logger";
 
 export interface ToolRegistry {
-  [name: string]: (args: Record<string, unknown>) => Promise<unknown> | unknown;
+  [name: string]: (args: any) => Promise<any> | any;
 }
 
 export interface AgentOptions {
@@ -13,6 +14,7 @@ export interface AgentOptions {
 
 export class ChatAgent {
   private history: Content[] = [];
+  private currentInteractionId?: string;
   private provider: LLMProvider;
   private tools?: Tool[];
   private registry?: ToolRegistry;
@@ -25,64 +27,37 @@ export class ChatAgent {
     this.systemInstruction = options?.systemInstruction;
   }
 
-  async execute(prompt: string): Promise<string> {
-    this.history.push({ role: "user", parts: [{ text: prompt }] });
+/**
+ * Executes a prompt against the configured provider.
+ * Manages history synchronization between automatic tool calls and simple text responses.
+ */
+  async execute(prompt: string): Promise<{ text: string; model?: string; duration?: number }> {
+    logger.debug`Executing prompt: ${prompt}`;
+    const userMessage: Content = { role: "user", parts: [{ text: prompt }] };
+    
+    const result = await this.provider.generate(prompt, {
+      history: this.history,
+      interactionId: this.currentInteractionId,
+      tools: this.tools,
+      registry: this.registry,
+      systemInstruction: this.systemInstruction,
+    });
 
-    while (true) {
-      const result = await this.provider.generate(this.history, {
-        tools: this.tools,
-        systemInstruction: this.systemInstruction,
-      });
+    this.currentInteractionId = result.interactionId;
 
+    if (result.automaticFunctionCallingHistory) {
+      logger.debug("Updating history with automatic function calling results");
+      this.history = result.automaticFunctionCallingHistory;
+    } else {
+      this.history.push(userMessage);
       this.history.push({
         role: "model",
         parts: result.candidates?.[0]?.content?.parts || [],
       });
-
-      const calls =
-        result.candidates?.[0]?.content?.parts?.filter((p) => p.functionCall) ||
-        [];
-      if (calls.length === 0 || !this.registry) {
-        return result.text || "";
-      }
-
-      const toolParts = await Promise.all(
-        calls.map(async (part) => {
-          const call = part.functionCall;
-          if (!call) return null;
-
-          const tool = this.registry?.[call.name];
-
-          if (!tool) return null;
-
-          try {
-            const response = await tool(call.args);
-            return {
-              functionResponse: {
-                name: call.name,
-                response: { result: response },
-              },
-            };
-          } catch (error: unknown) {
-            const errorMessage =
-              error instanceof Error ? error.message : "Unknown error";
-            return {
-              functionResponse: {
-                name: call.name,
-                response: { error: errorMessage },
-              },
-            };
-          }
-        }),
-      );
-
-      const validParts = toolParts.filter(Boolean);
-      if (validParts.length === 0) {
-        return result.text || "";
-      }
-
-      this.history.push({ role: "user", parts: validParts });
     }
+
+    logger.debug`Execution complete. Response length: ${result.text?.length || 0}`;
+    return { text: result.text || "", model: result.model, duration: result.duration };
   }
 
   getHistory(): Content[] {
@@ -90,6 +65,7 @@ export class ChatAgent {
   }
 
   clearHistory(): void {
+    logger.info("Clearing agent history");
     this.history = [];
   }
 }
