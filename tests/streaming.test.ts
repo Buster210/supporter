@@ -11,6 +11,7 @@ import * as dotenv from "dotenv";
 import { LLMFactory } from "../src/index";
 
 dotenv.config();
+process.env.GEMINI_API_KEY = "test-streaming-key";
 
 test("Provider Streaming Logic", async () => {
   const provider = LLMFactory.getProvider("gemini");

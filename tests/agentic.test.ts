@@ -1,38 +1,29 @@
 import { describe, expect, mock, test } from "bun:test";
-import { ChatAgent, type LLMProvider } from "../src/index";
+import { ChatAgent, type LLMProvider, type LLMResult } from "../src/index";
+import type { Tool, Content } from "@google/genai";
 
 describe("ChatAgent Execution Loop", () => {
   test("should execute tool and provide final answer", async () => {
+    const mockHistory: Content[] = [
+      { role: "user", parts: [{ text: "What is the weather in London?" }] },
+      { role: "model", parts: [{ functionCall: { name: "get_weather", args: { location: "London" } } }] },
+      { role: "user", parts: [{ functionResponse: { name: "get_weather", response: { result: "Sunny in London" } } }] },
+      { role: "model", parts: [{ text: "The weather in London is sunny." }] },
+    ];
+
     const mockProvider: LLMProvider = {
       getName: () => "mock-provider",
-      generate: mock()
-        .mockResolvedValueOnce({
-          text: "",
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    functionCall: {
-                      name: "get_weather",
-                      args: { location: "London" },
-                    },
-                  },
-                ],
-              },
+      generate: mock().mockResolvedValue({
+        text: "The weather in London is sunny.",
+        candidates: [
+          {
+            content: {
+              parts: [{ text: "The weather in London is sunny." }],
             },
-          ],
-        } as LLMResult)
-        .mockResolvedValueOnce({
-          text: "The weather in London is sunny.",
-          candidates: [
-            {
-              content: {
-                parts: [{ text: "The weather in London is sunny." }],
-              },
-            },
-          ],
-        } as LLMResult),
+          },
+        ],
+        automaticFunctionCallingHistory: mockHistory,
+      } as LLMResult),
       generateStream: mock().mockImplementation(async function* () {}),
     };
 
@@ -62,18 +53,16 @@ describe("ChatAgent Execution Loop", () => {
 
     const response = await agent.execute("What is the weather in London?");
 
-    expect(response).toBe("The weather in London is sunny.");
-    expect(mockProvider.generate).toHaveBeenCalledTimes(2);
+    expect(response.text).toBe("The weather in London is sunny.");
+    expect(mockProvider.generate).toHaveBeenCalledTimes(1);
 
     const history = agent.getHistory();
-    // 1: User prompt
-    // 2: Model function call
-    // 3: User function response
-    // 4: Model final answer
     expect(history.length).toBe(4);
-    const secondPart = history[2].parts[0];
-    if ("functionResponse" in secondPart) {
-      expect(secondPart.functionResponse.name).toBe("get_weather");
+    expect(history[3].parts[0].text).toBe("The weather in London is sunny.");
+    
+    const thirdPart = history[2].parts[0];
+    if ("functionResponse" in thirdPart) {
+      expect(thirdPart.functionResponse.name).toBe("get_weather");
     } else {
       throw new Error("Expected functionResponse in part");
     }

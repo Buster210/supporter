@@ -8,9 +8,10 @@ mock.module("@google/genai", () => ({
 }));
 
 import * as dotenv from "dotenv";
-import { LLMFactory } from "../src/index";
+import { getProvider, LLMFactory } from "../src/index";
 
 dotenv.config();
+process.env.GEMINI_API_KEY = "test-streaming-key";
 
 describe("LLM Provider Instantiation & Logic", () => {
   const originalEnv = { ...process.env };
@@ -25,13 +26,13 @@ describe("LLM Provider Instantiation & Logic", () => {
   });
 
   test("should instantiate Gemini provider", () => {
-    const gemini = LLMFactory.getProvider("gemini");
+    const gemini = getProvider("gemini");
     expect(gemini).toBeDefined();
     expect(gemini.getName()).toContain("gemini");
   });
 
   test("should transform generate output correctly", async () => {
-    const gemini = LLMFactory.getProvider("gemini");
+    const gemini = getProvider("gemini");
     const mockResponse = getMockGeminiResponse("Mock success");
 
     mockGenAI.models.generateContent.mockResolvedValueOnce(mockResponse);

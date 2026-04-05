@@ -5,6 +5,9 @@ describe("LLMFactory Intelligence", () => {
   const originalEnv = { ...process.env };
 
   beforeAll(() => {
+    delete process.env.GEMINI_FALLBACK_MODEL;
+    delete process.env.LLM_PROVIDER;
+    delete process.env.GEMINI_API_KEYS;
     process.env.GEMINI_API_KEY = "test-key";
   });
 
