@@ -65,7 +65,9 @@ export class GeminiProvider implements LLMProvider {
                   return {
                     functionResponse: {
                       name: call.name,
-                      response: { error: `Tool ${call.name} not found in registry` },
+                      response: {
+                        error: `Tool ${call.name} not found in registry`,
+                      },
                     },
                   };
                 }
@@ -80,7 +82,8 @@ export class GeminiProvider implements LLMProvider {
                     },
                   };
                 } catch (error) {
-                  const errorMsg = error instanceof Error ? error.message : String(error);
+                  const errorMsg =
+                    error instanceof Error ? error.message : String(error);
                   logger.error`Tool ${call.name} failed: ${errorMsg}`;
                   return {
                     functionResponse: {
@@ -89,7 +92,7 @@ export class GeminiProvider implements LLMProvider {
                     },
                   };
                 }
-              })
+              }),
             );
             return parts;
           },
@@ -120,7 +123,8 @@ export class GeminiProvider implements LLMProvider {
       const transformedTools = this.transformTools(options);
       logger.debug`Generating content for model: ${sdkOptions.model || this.modelName}`;
       const contents = this.prepareContents(prompt, history);
-      const systemInstructionContent = systemInstruction || this.defaultSystemInstruction;
+      const systemInstructionContent =
+        systemInstruction || this.defaultSystemInstruction;
 
       let result: any;
 
@@ -134,12 +138,17 @@ export class GeminiProvider implements LLMProvider {
             tools: transformedTools,
             config: {
               systemInstruction: systemInstructionContent,
-              automaticFunctionCalling: transformedTools ? { disable: false } : undefined,
+              automaticFunctionCalling: transformedTools
+                ? { disable: false }
+                : undefined,
               ...userConfig,
             },
           });
         } catch (err) {
-          logger.warn(`[Interaction] Failed to continue interaction ${options.interactionId}. Falling back to content generation.`, err);
+          logger.warn(
+            `[Interaction] Failed to continue interaction ${options.interactionId}. Falling back to content generation.`,
+            err,
+          );
           // Fallback to generateContent handled below by letting result be null
         }
       }
@@ -155,7 +164,9 @@ export class GeminiProvider implements LLMProvider {
             topP: topP ?? userConfig?.topP,
             topK: topK ?? userConfig?.topK,
             maxOutputTokens: maxOutputTokens ?? userConfig?.maxOutputTokens,
-            automaticFunctionCalling: transformedTools ? { disable: false } : undefined,
+            automaticFunctionCalling: transformedTools
+              ? { disable: false }
+              : undefined,
             ...userConfig,
           },
           ...sdkOptions,
@@ -177,7 +188,9 @@ export class GeminiProvider implements LLMProvider {
         raw: result,
       } as LLMResult;
     } catch (error) {
-      logger.error(`Error in generate: ${error instanceof Error ? error.stack : String(error)}`);
+      logger.error(
+        `Error in generate: ${error instanceof Error ? error.stack : String(error)}`,
+      );
       throw error;
     }
   }
@@ -212,7 +225,9 @@ export class GeminiProvider implements LLMProvider {
           topP: topP ?? userConfig?.topP,
           topK: topK ?? userConfig?.topK,
           maxOutputTokens: maxOutputTokens ?? userConfig?.maxOutputTokens,
-          automaticFunctionCalling: transformedTools ? { disable: false } : undefined,
+          automaticFunctionCalling: transformedTools
+            ? { disable: false }
+            : undefined,
           ...userConfig,
         },
         ...sdkOptions,
@@ -226,7 +241,9 @@ export class GeminiProvider implements LLMProvider {
         };
       }
     } catch (error) {
-      logger.error(`Error in generateStream: ${error instanceof Error ? error.stack : String(error)}`);
+      logger.error(
+        `Error in generateStream: ${error instanceof Error ? error.stack : String(error)}`,
+      );
       throw error;
     }
   }

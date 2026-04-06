@@ -27,14 +27,16 @@ export class ChatAgent {
     this.systemInstruction = options?.systemInstruction;
   }
 
-/**
- * Executes a prompt against the configured provider.
- * Manages history synchronization between automatic tool calls and simple text responses.
- */
-  async execute(prompt: string): Promise<{ text: string; model?: string; duration?: number }> {
+  /**
+   * Executes a prompt against the configured provider.
+   * Manages history synchronization between automatic tool calls and simple text responses.
+   */
+  async execute(
+    prompt: string,
+  ): Promise<{ text: string; model?: string; duration?: number }> {
     logger.debug`Executing prompt: ${prompt}`;
     const userMessage: Content = { role: "user", parts: [{ text: prompt }] };
-    
+
     const result = await this.provider.generate(prompt, {
       history: this.history,
       interactionId: this.currentInteractionId,
@@ -57,7 +59,11 @@ export class ChatAgent {
     }
 
     logger.debug`Execution complete. Response length: ${result.text?.length || 0}`;
-    return { text: result.text || "", model: result.model, duration: result.duration };
+    return {
+      text: result.text || "",
+      model: result.model,
+      duration: result.duration,
+    };
   }
 
   getHistory(): Content[] {

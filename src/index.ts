@@ -4,9 +4,9 @@ import type {
   GenerateContentResponse,
   Tool,
 } from "@google/genai";
-import { GeminiProvider } from "./providers/gemini-provider";
 import type { ToolRegistry } from "./agent";
 import { logger } from "./logger";
+import { GeminiProvider } from "./providers/gemini-provider";
 
 export interface LLMOptions extends GenerateContentConfig {
   history?: Content[];
@@ -228,7 +228,8 @@ export function getProvider(type?: ProviderType): LLMProvider {
       : instances[0];
   };
 
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview";
+  const primaryModel =
+    process.env.GEMINI_MODEL || "gemini-3.1-flash-lite-preview";
   const fallbackModel = process.env.GEMINI_FALLBACK_MODEL;
 
   const primary = createProvider(primaryModel);
@@ -242,7 +243,6 @@ export function getProvider(type?: ProviderType): LLMProvider {
   logger.info`Using primary model: ${primaryModel}`;
   return primary;
 }
-
 
 export const LLMFactory = {
   getProvider,

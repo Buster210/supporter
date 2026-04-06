@@ -1,13 +1,30 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { Content, Tool } from "@google/genai";
 import { ChatAgent, type LLMProvider, type LLMResult } from "../src/index";
-import type { Tool, Content } from "@google/genai";
 
 describe("ChatAgent Execution Loop", () => {
   test("should execute tool and provide final answer", async () => {
     const mockHistory: Content[] = [
       { role: "user", parts: [{ text: "What is the weather in London?" }] },
-      { role: "model", parts: [{ functionCall: { name: "get_weather", args: { location: "London" } } }] },
-      { role: "user", parts: [{ functionResponse: { name: "get_weather", response: { result: "Sunny in London" } } }] },
+      {
+        role: "model",
+        parts: [
+          {
+            functionCall: { name: "get_weather", args: { location: "London" } },
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: "get_weather",
+              response: { result: "Sunny in London" },
+            },
+          },
+        ],
+      },
       { role: "model", parts: [{ text: "The weather in London is sunny." }] },
     ];
 
@@ -59,7 +76,7 @@ describe("ChatAgent Execution Loop", () => {
     const history = agent.getHistory();
     expect(history.length).toBe(4);
     expect(history[3].parts[0].text).toBe("The weather in London is sunny.");
-    
+
     const thirdPart = history[2].parts[0];
     if ("functionResponse" in thirdPart) {
       expect(thirdPart.functionResponse.name).toBe("get_weather");

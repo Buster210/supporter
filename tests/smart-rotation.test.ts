@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
-import { RoundRobinKeyProvider, type LLMProvider, type LLMResult } from "../src/index";
+import {
+  type LLMProvider,
+  type LLMResult,
+  RoundRobinKeyProvider,
+} from "../src/index";
 
 describe("Smart RoundRobin Retries", () => {
   test("should retry on 429 (Rate Limit)", async () => {
@@ -46,12 +50,14 @@ describe("Smart RoundRobin Retries", () => {
 
     const mock2: LLMProvider = {
       getName: () => "key2",
-      generate: mock().mockImplementation(mock().mockResolvedValue({ text: "Should not be called" })),
+      generate: mock().mockImplementation(
+        mock().mockResolvedValue({ text: "Should not be called" }),
+      ),
       generateStream: mock().mockImplementation(async function* () {}),
     };
 
     const rr = new RoundRobinKeyProvider([mock1, mock2]);
-    
+
     try {
       await rr.generate("test prompt");
       throw new Error("Should have thrown");
