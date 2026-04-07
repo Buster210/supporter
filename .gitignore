@@ -1,3 +1,5 @@
 node_modules/
 .env
 Reeeee
+app.log
+.DS_Store
