@@ -3,3 +3,15 @@ node_modules/
 Reeeee
 app.log
 .DS_Store
+# Python
+__pycache__/
+*.py[cod]
+*.class
+venv/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+supporter.egg-info
