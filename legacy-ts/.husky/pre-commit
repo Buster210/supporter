@@ -1,2 +1,0 @@
-ruff check .
-python3 -m pytest python_tests
