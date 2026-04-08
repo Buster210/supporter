@@ -27,12 +27,14 @@ class TestApp(App):
         height: 3;
     }
     """
+
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="chat-view"):
             msg = Vertical(classes="msg right")
             msg.mount(Static("hi", classes="bubble"))
             yield msg
         yield Static("Input Area", id="input")
+
 
 app = TestApp()
 if __name__ == "__main__":

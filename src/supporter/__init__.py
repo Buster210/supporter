@@ -1,4 +1,4 @@
-from .agent import ChatAgent
+from .agent import ChatAgent, CrewAgent
 from .index import (
     GeminiProvider,
     LLMChunk,
@@ -6,20 +6,21 @@ from .index import (
     LLMOptions,
     LLMResult,
     get_provider,
-    is_fallback_error,
+    should_trigger_fallback,
     is_model_error,
     is_rate_limit,
 )
 
 __all__ = [
     "ChatAgent",
+    "CrewAgent",
     "GeminiProvider",
     "LLMChunk",
     "LLMFactory",
     "LLMOptions",
     "LLMResult",
     "get_provider",
-    "is_fallback_error",
+    "should_trigger_fallback",
     "is_model_error",
     "is_rate_limit",
 ]

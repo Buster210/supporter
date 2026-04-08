@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime
-
 from .config import config
 
 
@@ -19,20 +18,16 @@ logger = logging.getLogger("supporter")
 
 
 def init_logger():
-
     try:
         with open(config.log_file, "w") as f:
             f.write("")
     except Exception:
         pass
-
     log_level_str = config.log_level
     log_level = getattr(logging, log_level_str, logging.INFO)
-
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.CRITICAL)
     logger.setLevel(log_level)
-
     file_handler = logging.FileHandler(config.log_file)
     file_handler.setFormatter(SupporterFormatter())
     logger.addHandler(file_handler)

@@ -1,16 +1,17 @@
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import (
-    Any,
-    Protocol,
-    TypedDict,
-)
-
+from typing import Any, Protocol, TypedDict
 from google.genai.types import Content, GenerateContentConfig, Tool
-
 from .config import config
 from .logger import logger
 from .providers.gemini_provider import GeminiProvider
+
+HTTP_SUCCESS = 200
+HTTP_BAD_REQUEST = 400
+HTTP_NOT_FOUND = 404
+HTTP_RATE_LIMIT = 429
+HTTP_INTERNAL_ERROR = 500
+HTTP_SERVICE_UNAVAILABLE = 503
 
 
 class LLMOptions(TypedDict, total=False):
@@ -62,82 +63,73 @@ class LLMProvider(Protocol):
 
 def is_rate_limit(error: Any) -> bool:
     status = getattr(error, "status", None)
+    if status == HTTP_RATE_LIMIT:
+        return True
     message = str(error).lower()
-    return (
-        status == 429
-        or "429" in message
-        or "quota" in message
-        or "too many requests" in message
-    )
+    return any((sig in message for sig in ["quota", "too many requests", "429"]))
 
 
 def is_model_error(error: Any) -> bool:
     status = getattr(error, "status", None)
+    if status in [HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR]:
+        return True
     message = str(error).lower()
-    return (
-        status in [404, 503, 500]
-        or "unavailable" in message
-        or "overloaded" in message
-        or "503" in message
-        or "404" in message
-        or "500" in message
-        or "internal error" in message
-        or "service level" in message
-    )
+    transient_signals = ["unavailable", "overloaded", "internal error", "service level"]
+    if any((sig in message for sig in transient_signals)):
+        return True
+    return any((code in message for code in ["404", "503", "500"]))
 
 
-def is_fallback_error(error: Any) -> bool:
+def should_trigger_fallback(error: Any) -> bool:
     return is_rate_limit(error) or is_model_error(error)
 
 
 ProviderType = str
 
 
-class RoundRobinKeyProvider(LLMProvider):
-    def __init__(self, instances: list[LLMProvider]):
-        if not instances:
-            raise ValueError(
-                "RoundRobinKeyProvider requires at least one provider instance."
-            )
-        self.instances = instances
+class RoundRobinPool(LLMProvider):
+    def __init__(self, providers: list[LLMProvider]):
+        if not providers:
+            raise ValueError("RoundRobinPool requires at least one provider instance.")
+        self.providers = providers
         self.current_index = 0
 
-    def _get_next_instance(self) -> LLMProvider:
-        instance = self.instances[self.current_index]
-        self.current_index = (self.current_index + 1) % len(self.instances)
-        return instance
+    def _get_next(self) -> LLMProvider:
+        provider = self.providers[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.providers)
+        return provider
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult:
         last_error = None
-        max_retries = len(self.instances)
-
-        for _ in range(max_retries):
-            instance = self._get_next_instance()
+        for _ in range(len(self.providers)):
+            provider = self._get_next()
             try:
-                result = await instance.generate(prompt, options)
+                result = await provider.generate(prompt, options)
                 if not result.model:
-                    result.model = instance.get_name()
+                    result.model = provider.get_name()
                 return result
             except Exception as e:
                 last_error = e
-                if is_rate_limit(e):
-                    continue
-                raise e
+                if not is_rate_limit(e):
+                    raise e
+                logger.warning(
+                    f"Rate limit hit for {provider.get_name()}, trying next..."
+                )
         raise last_error
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
-        instance = self._get_next_instance()
-        async for chunk in instance.generate_stream(prompt, options):
+        provider = self._get_next()
+        async for chunk in provider.generate_stream(prompt, options):
             yield chunk
 
     def get_name(self) -> str:
-        base_name = self.instances[0].get_name()
-        if len(self.instances) > 1:
-            return f"{base_name} (Round Robin x{len(self.instances)})"
+        base_name = self.providers[0].get_name()
+        if len(self.providers) > 1:
+            return f"{base_name} (Pool x{len(self.providers)})"
         return base_name
 
 
@@ -145,9 +137,6 @@ class FallbackProvider(LLMProvider):
     def __init__(self, primary: LLMProvider, fallback: LLMProvider):
         self.primary = primary
         self.fallback = fallback
-
-    def _should_fallback(self, error: Any) -> bool:
-        return is_fallback_error(error)
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
@@ -158,13 +147,13 @@ class FallbackProvider(LLMProvider):
                 result.model = self.primary.get_name()
             return result
         except Exception as e:
-            if self._should_fallback(e):
-                logger.info(f"Fallback triggered due to error: {e}")
-                result = await self.fallback.generate(prompt, options)
-                if not result.model:
-                    result.model = self.fallback.get_name()
-                return result
-            raise e
+            if not should_trigger_fallback(e):
+                raise e
+            logger.info(f"Fallback triggered due to error: {e}")
+            result = await self.fallback.generate(prompt, options)
+            if not result.model:
+                result.model = self.fallback.get_name()
+            return result
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
@@ -173,12 +162,11 @@ class FallbackProvider(LLMProvider):
             async for chunk in self.primary.generate_stream(prompt, options):
                 yield chunk
         except Exception as e:
-            if self._should_fallback(e):
-                logger.info(f"Streaming fallback triggered due to error: {e}")
-                async for chunk in self.fallback.generate_stream(prompt, options):
-                    yield chunk
-                return
-            raise e
+            if not should_trigger_fallback(e):
+                raise e
+            logger.info(f"Streaming fallback triggered due to error: {e}")
+            async for chunk in self.fallback.generate_stream(prompt, options):
+                yield chunk
 
     def get_name(self) -> str:
         return f"{self.primary.get_name()} -> {self.fallback.get_name()}"
@@ -186,42 +174,26 @@ class FallbackProvider(LLMProvider):
 
 def get_provider(provider_type: ProviderType | None = None) -> LLMProvider:
     target_type = provider_type or config.provider
-
-    logger.debug(f"Resolving provider for type: {target_type}")
-
     if target_type != "gemini":
-        logger.error(f"Unsupported provider type: {target_type}")
         raise ValueError(f"Unsupported provider type: {target_type}")
-
     keys = config.gemini_api_keys
-
     if not keys:
-        logger.error("GEMINI_API_KEYS is missing in environment variables")
-        raise ValueError("GEMINI_API_KEYS is missing in environment variables")
+        raise ValueError("GEMINI_API_KEYS is missing/empty in environment")
 
-    def create_provider_chain(model_name: str | None = None):
-        instances = []
+    def _build_chain(model_name: str) -> LLMProvider:
+        pool = []
         for key in keys:
             p = GeminiProvider(key)
-            if model_name:
-                p.model_name = model_name
-            instances.append(p)
+            p.model_name = model_name
+            pool.append(p)
+        return RoundRobinPool(pool) if len(pool) > 1 else pool[0]
 
-        return RoundRobinKeyProvider(instances) if len(instances) > 1 else instances[0]
-
-    primary_model = config.gemini_model
-    fallback_model = config.gemini_fallback_model
-
-    primary = create_provider_chain(primary_model)
-
-    if fallback_model:
-        logger.info(
-            f"Using primary model: {primary_model} with fallback: {fallback_model}"
+    primary = _build_chain(config.gemini_model)
+    if config.gemini_fallback_model:
+        logger.debug(
+            f"Configuring fallback: {config.gemini_model} -> {config.gemini_fallback_model}"
         )
-        fallback = create_provider_chain(fallback_model)
-        return FallbackProvider(primary, fallback)
-
-    logger.info(f"Using primary model: {primary_model}")
+        return FallbackProvider(primary, _build_chain(config.gemini_fallback_model))
     return primary
 
 

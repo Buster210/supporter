@@ -8,6 +8,8 @@ dependencies = [
     "textual>=0.86.0",
     "python-dotenv>=1.0.1",
     "rich>=13.0.0",
+    "crewai>=1.14.1",
+    "langchain-google-genai>=4.2.1",
 ]
 
 [project.scripts]
