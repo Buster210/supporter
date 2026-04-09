@@ -1,0 +1,44 @@
+[project]
+name = "supporter"
+version = "0.1.0"
+description = "A TUI-based AI chat client (Python migration)"
+requires-python = ">=3.13"
+dependencies = [
+    "google-genai>=1.55.0",
+    "textual>=0.86.0",
+    "python-dotenv>=1.0.1",
+    "rich>=13.0.0",
+    "crewai>=1.14.1",
+    "langchain-google-genai>=4.2.1",
+]
+
+[project.scripts]
+supporter = "supporter.tui:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+    "pre-commit>=4.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "S", "B", "C4", "ASYNC", "PIE", "RSE", "RET", "SIM", "T20", "RUF"]
+ignore = ["S101", "B019", "T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
