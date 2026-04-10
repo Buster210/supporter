@@ -1,16 +1,18 @@
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
+
 from google.genai.types import Content, GenerateContentConfig, Tool
+
 from .config import (
-    config,
+    HTTP_INTERNAL_ERROR,
     HTTP_NOT_FOUND,
     HTTP_RATE_LIMIT,
-    HTTP_INTERNAL_ERROR,
     HTTP_SERVICE_UNAVAILABLE,
+    config,
 )
-from .logger import logger
 from .gemini_provider import GeminiProvider
+from .logger import logger
 
 
 class LLMOptions(TypedDict, total=False):
@@ -65,7 +67,7 @@ def is_rate_limit(error: Any) -> bool:
     if status == HTTP_RATE_LIMIT:
         return True
     message = str(error).lower()
-    return any((sig in message for sig in ["quota", "too many requests", "429"]))
+    return any(sig in message for sig in ["quota", "too many requests", "429"])
 
 
 def is_model_error(error: Any) -> bool:
@@ -74,9 +76,9 @@ def is_model_error(error: Any) -> bool:
         return True
     message = str(error).lower()
     transient_signals = ["unavailable", "overloaded", "internal error", "service level"]
-    if any((sig in message for sig in transient_signals)):
+    if any(sig in message for sig in transient_signals):
         return True
-    return any((code in message for code in ["404", "503", "500"]))
+    return any(code in message for code in ["404", "503", "500"])
 
 
 def should_trigger_fallback(error: Any) -> bool:
@@ -194,9 +196,3 @@ def get_provider(provider_type: ProviderType | None = None) -> LLMProvider:
         )
         return FallbackProvider(primary, _build_chain(config.gemini_fallback_model))
     return primary
-
-
-class LLMFactory:
-    @staticmethod
-    def get_provider(provider_type: ProviderType | None = None) -> LLMProvider:
-        return get_provider(provider_type)
