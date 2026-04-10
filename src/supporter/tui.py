@@ -79,6 +79,7 @@ class MessageBubble(Vertical):
         model: str | None = None,
         duration: float | None = None,
         agents: list[str] | None = None,
+        streaming: bool = False,
     ):
         super().__init__()
         self.role = role
@@ -86,26 +87,51 @@ class MessageBubble(Vertical):
         self.model = model
         self.duration = duration
         self.agents = agents
+        self.streaming = streaming
+        self._bubble_static = None
+        self._meta_label = None
         self.add_class("right" if role == "user" else "left")
 
     def compose(self) -> ComposeResult:
         is_user = self.role == "user"
         border_color = "green" if is_user else "blue"
-        yield Static(
+        self._bubble_static = Static(
             self.content, classes=f"bubble {border_color}", expand=False, markup=False
         )
-        if not is_user and (self.model or self.duration is not None):
-            meta_parts = []
-            if self.agents:
-                meta_parts.append(", ".join(self.agents))
-            model_info = self.model
-            if self.duration is not None:
-                model_info += f" in {self.duration:.2f}s"
-            if self.agents:
-                meta_text = f"({', '.join(self.agents)} via {model_info})"
-            else:
-                meta_text = f"({model_info})"
-            yield Label(meta_text, classes="message-meta")
+        yield self._bubble_static
+
+        if not is_user and not self.streaming and (self.model or self.duration is not None):
+            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
+            yield self._meta_label
+
+    def _get_meta_text(self) -> str:
+        model_info = self.model or "Unknown"
+        if self.duration is not None:
+            model_info += f" in {self.duration:.2f}s"
+        if self.agents:
+            return f"({', '.join(self.agents)} via {model_info})"
+        return f"({model_info})"
+
+    def append_token(self, token: str) -> None:
+        self.content += token
+        if self._bubble_static:
+            self._bubble_static.update(self.content)
+
+    async def finalize(
+        self,
+        model: str | None = None,
+        duration: float | None = None,
+        agents: list[str] | None = None,
+    ) -> None:
+        self.model = model or self.model
+        self.duration = duration or self.duration
+        self.agents = agents or self.agents
+        self.streaming = False
+        if not self._meta_label:
+            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
+            await self.mount(self._meta_label)
+        else:
+            self._meta_label.update(self._get_meta_text())
 
 
 class SupporterApp(App):
@@ -124,6 +150,7 @@ class SupporterApp(App):
         self.crew_mode = True
         self.is_activating_crew = False
         self.current_active_agent = ""
+        self.status_label = "Thinking"
 
     def _on_agent_active(self, agent_role: str) -> None:
         self.current_active_agent = agent_role
@@ -183,7 +210,7 @@ class SupporterApp(App):
                 label = f"[{self.current_active_agent}]"
             else:
                 label = "[AGENT]" if self.crew_mode else ""
-            status = f"{frame} {label} Thinking{dots}"
+            status = f"{frame} {label} {self.status_label}{dots}"
         self.query_one("#thinking-indicator", Static).update(status)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -231,25 +258,54 @@ class SupporterApp(App):
         chat_view.scroll_end()
         self.current_active_agent = ""
         self.is_thinking = True
+        self.status_label = "Thinking"
         self._spinner_idx = 0
         self._spinner_timer = self.set_interval(0.15, self._tick_spinner)
         start_time = time.perf_counter()
         try:
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
-            response = await self.agent.execute(text)
-            ui_duration = time.perf_counter() - start_time
-            agent_roles = response.usage.get("agents") if response.usage else None
-            await chat_view.mount(
-                MessageBubble(
-                    role="agent",
-                    content=response.text,
-                    model=response.model,
-                    duration=ui_duration,
-                    agents=agent_roles,
+
+            if isinstance(self.agent, CrewAgent):
+                response = await self.agent.execute(text)
+                ui_duration = time.perf_counter() - start_time
+                agent_roles = response.usage.get("agents") if response.usage else None
+                await chat_view.mount(
+                    MessageBubble(
+                        role="agent",
+                        content=response.text,
+                        model=response.model,
+                        duration=ui_duration,
+                        agents=agent_roles,
+                    )
                 )
-            )
-            chat_view.scroll_end()
+                chat_view.scroll_end()
+            else:
+                bubble = None
+                first_chunk = True
+                accumulated_text = ""
+                actual_model = None
+                async for chunk in self.agent.execute_stream(text):
+                    if chunk.model:
+                        actual_model = chunk.model
+                    if first_chunk:
+                        accumulated_text += chunk.text
+                        if not accumulated_text.strip():
+                            continue
+                        first_chunk = False
+                        self.status_label = "Streaming"
+                        bubble = MessageBubble(role="agent", content=accumulated_text, streaming=True)
+                        await chat_view.mount(bubble)
+                        chat_view.scroll_end()
+                    else:
+                        if bubble:
+                            bubble.append_token(chunk.text)
+                            chat_view.scroll_end()
+
+                if bubble:
+                    ui_duration = time.perf_counter() - start_time
+                    await bubble.finalize(model=actual_model, duration=ui_duration)
+                    chat_view.scroll_end()
         except Exception as e:
             logger.error(f"Error during agent execution: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
