@@ -2,16 +2,15 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 from google.genai.types import Content, GenerateContentConfig, Tool
-from .config import config
+from .config import (
+    config,
+    HTTP_NOT_FOUND,
+    HTTP_RATE_LIMIT,
+    HTTP_INTERNAL_ERROR,
+    HTTP_SERVICE_UNAVAILABLE,
+)
 from .logger import logger
-from .providers.gemini_provider import GeminiProvider
-
-HTTP_SUCCESS = 200
-HTTP_BAD_REQUEST = 400
-HTTP_NOT_FOUND = 404
-HTTP_RATE_LIMIT = 429
-HTTP_INTERNAL_ERROR = 500
-HTTP_SERVICE_UNAVAILABLE = 503
+from .gemini_provider import GeminiProvider
 
 
 class LLMOptions(TypedDict, total=False):

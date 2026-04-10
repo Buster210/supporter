@@ -1,19 +1,21 @@
 import asyncio
+import concurrent.futures
 import logging
 from typing import Any, List, Optional, Union
 from pydantic import PrivateAttr, Field
 from crewai.llms.base_llm import BaseLLM
 from .index import LLMProvider, LLMOptions
 from .logger import logger
+from .config import DEFAULT_MODEL, DEFAULT_AGENT_ROLE
 
 
 class SupporterLLM(BaseLLM):
-    model: str = Field(default="supporter-gemini")
+    model: str = Field(default=DEFAULT_MODEL)
     _supporter_provider: Any = PrivateAttr()
     _status_callback: Optional[Any] = PrivateAttr(default=None)
 
     def __init__(self, provider: Any, status_callback: Optional[Any] = None, **kwargs):
-        super().__init__(model=kwargs.get("model", "supporter-gemini"), **kwargs)
+        super().__init__(model=kwargs.get("model", DEFAULT_MODEL), **kwargs)
         self._supporter_provider = provider
         self._status_callback = status_callback
 
@@ -33,12 +35,11 @@ class SupporterLLM(BaseLLM):
         elif isinstance(messages, list) and len(messages) > 0:
             prompt = messages[-1].get("content", "")
         if self._status_callback and from_agent:
-            agent_role = getattr(from_agent, "role", "Analyzing")
+            agent_role = getattr(from_agent, "role", DEFAULT_AGENT_ROLE)
             self._status_callback(agent_role)
         try:
             try:
                 loop = asyncio.get_running_loop()
-                import concurrent.futures
 
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     result = pool.submit(
@@ -62,4 +63,4 @@ class SupporterLLM(BaseLLM):
 
     @property
     def _llm_type(self) -> str:
-        return "supporter-gemini"
+        return DEFAULT_MODEL

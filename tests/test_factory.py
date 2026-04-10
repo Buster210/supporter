@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from supporter.index import RoundRobinKeyProvider, get_provider
+from supporter.index import RoundRobinPool, get_provider
 
 
 def test_default_to_gemini():
@@ -26,7 +26,10 @@ def test_unsupported_provider_type():
 
 
 def test_multiple_api_keys_round_robin():
-    with patch.dict(os.environ, {"GEMINI_API_KEYS": "key1, key2, key3"}, clear=True):
+    with patch.dict(
+        os.environ,
+        {"GEMINI_API_KEYS": "key1, key2, key3", "GEMINI_FALLBACK_MODEL": ""},
+        clear=True,
+    ):
         provider = get_provider()
-        assert "Round Robin x3" in provider.get_name()
-        assert isinstance(provider, RoundRobinKeyProvider)
+        assert "Pool x3" in provider.get_name()

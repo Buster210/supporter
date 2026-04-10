@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 from typing import Any, TypedDict
 from google.genai.types import Content, Part, Tool
@@ -14,6 +15,8 @@ class AgentOptions(TypedDict, total=False):
     tools: list[Tool]
     registry: ToolRegistry
     system_instruction: str
+    use_search: bool
+    use_code_execution: bool
 
 
 class AgentResult(TypedDict):
@@ -32,6 +35,8 @@ class ChatAgent:
         self.tools = opts.get("tools")
         self.registry = opts.get("registry")
         self.system_instruction = opts.get("system_instruction")
+        self.use_search = opts.get("use_search", False)
+        self.use_code_execution = opts.get("use_code_execution", False)
 
     async def execute(self, prompt: str) -> AgentResult:
         logger.debug(f"Executing prompt: {prompt}")
@@ -44,6 +49,8 @@ class ChatAgent:
                 "tools": self.tools,
                 "registry": self.registry,
                 "system_instruction": self.system_instruction,
+                "use_search": self.use_search,
+                "use_code_execution": self.use_code_execution,
             },
         )
         self.current_interaction_id = result.interaction_id
@@ -84,8 +91,6 @@ class CrewAgent:
         self.manager = CrewManager(status_callback=status_callback)
 
     async def execute(self, prompt: str) -> AgentResult:
-        import time
-
         start_time = time.perf_counter()
         logger.info(f"Executing crew for prompt: {prompt}")
         (result_text, agent_roles) = await self.manager.coordinate_execution(prompt)

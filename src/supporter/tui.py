@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio
 import time
-from datetime import datetime as datetime_
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -148,32 +147,12 @@ class SupporterApp(App):
                 logger.info("CrewAgent successfully initialized")
                 return agent
             else:
-                tools = [
-                    {
-                        "function_declarations": [
-                            {
-                                "name": "get_current_time",
-                                "description": "Get the current system time",
-                                "parameters": {
-                                    "type": "OBJECT",
-                                    "properties": {},
-                                    "required": [],
-                                },
-                            }
-                        ]
-                    }
-                ]
-
-                def get_current_time() -> dict:
-                    return {"time": datetime_.now().strftime("%I:%M:%S %p")}
-
-                registry = {"get_current_time": get_current_time}
                 agent = ChatAgent(
                     provider,
                     {
-                        "tools": tools,
-                        "registry": registry,
-                        "system_instruction": "You are a helpful assistant. Be concise and professional.",
+                        "system_instruction": "You are a helpful assistant. Be concise and professional. You can use Google Search and Code Execution when needed.",
+                        "use_search": True,
+                        "use_code_execution": True,
                     },
                 )
                 logger.info("ChatAgent successfully initialized")

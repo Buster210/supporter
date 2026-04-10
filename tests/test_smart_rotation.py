@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from supporter.index import LLMResult, RoundRobinKeyProvider
+from supporter.index import LLMResult, RoundRobinPool
 
 
 @pytest.mark.asyncio
@@ -29,7 +29,7 @@ async def test_retry_on_429():
     p2.get_name.return_value = "key2"
     p2.generate = AsyncMock(side_effect=mock2_generate)
 
-    lb = RoundRobinKeyProvider([p1, p2])
+    lb = RoundRobinPool([p1, p2])
     result = await lb.generate("test")
 
     assert result.text == "Success from Key 2"
@@ -53,9 +53,9 @@ async def test_fast_fail_on_503_no_retry():
 
     p2 = MagicMock()
     p2.get_name.return_value = "key2"
-    p2.generate = AsyncMock()  # Should not be called
+    p2.generate = AsyncMock()
 
-    lb = RoundRobinKeyProvider([p1, p2])
+    lb = RoundRobinPool([p1, p2])
 
     with pytest.raises(Exception) as excinfo:
         await lb.generate("test")

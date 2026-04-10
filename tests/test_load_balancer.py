@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from supporter.index import LLMChunk, LLMResult, RoundRobinKeyProvider
+from supporter.index import LLMChunk, LLMResult, RoundRobinPool
 
 
 def create_mock_provider(name):
@@ -21,7 +21,7 @@ def create_mock_provider(name):
 async def test_round_robin_cycling():
     p1 = create_mock_provider("P1")
     p2 = create_mock_provider("P2")
-    lb = RoundRobinKeyProvider([p1, p2])
+    lb = RoundRobinPool([p1, p2])
 
     res1 = await lb.generate("test")
     assert res1.text == "Response from P1"
@@ -37,14 +37,12 @@ async def test_round_robin_cycling():
 async def test_round_robin_streaming():
     p1 = create_mock_provider("P1")
     p2 = create_mock_provider("P2")
-    lb = RoundRobinKeyProvider([p1, p2])
+    lb = RoundRobinPool([p1, p2])
 
-    # First stream
     stream1 = lb.generate_stream("test")
     chunk1 = await stream1.__anext__()
     assert chunk1.text == "Stream from P1"
 
-    # Second stream
     stream2 = lb.generate_stream("test")
     chunk2 = await stream2.__anext__()
     assert chunk2.text == "Stream from P2"
@@ -53,5 +51,5 @@ async def test_round_robin_streaming():
 def test_load_balancer_name():
     p1 = create_mock_provider("P1")
     p2 = create_mock_provider("P2")
-    lb = RoundRobinKeyProvider([p1, p2])
-    assert lb.get_name() == "P1 (Round Robin x2)"
+    lb = RoundRobinPool([p1, p2])
+    assert lb.get_name() == "P1 (Pool x2)"

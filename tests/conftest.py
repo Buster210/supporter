@@ -2,7 +2,7 @@ import os
 from unittest.mock import patch
 
 import pytest
-from python_tests.mocks import create_mock_genai_client
+from tests.mocks import create_mock_genai_client
 
 
 @pytest.fixture(autouse=True)

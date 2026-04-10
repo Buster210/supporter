@@ -1,9 +1,16 @@
 import asyncio
 from typing import Any
 from crewai import Agent, Task, Crew, Process
+from google.genai.types import Tool, GoogleSearch, ToolCodeExecution
 from .crew_adapter import SupporterLLM
 from .index import LLMFactory
 from .logger import logger
+from .config import RESEARCHER_ROLE, WRITER_ROLE
+
+DEFAULT_TOOLS = [
+    Tool(google_search=GoogleSearch()),
+    Tool(code_execution=ToolCodeExecution()),
+]
 
 
 class CrewManager:
@@ -13,18 +20,20 @@ class CrewManager:
 
     def _assemble_research_crew(self, topic: str) -> Crew:
         researcher = Agent(
-            role="Senior Research Analyst",
+            role=RESEARCHER_ROLE,
             goal="Uncover cutting-edge developments and provide deep insights on {topic}",
             backstory="You are a veteran researcher with an eye for detail. \n            You excel at finding non-obvious connections and trends.",
             llm=self.llm,
+            tools=DEFAULT_TOOLS,
             verbose=True,
             allow_delegation=False,
         )
         writer = Agent(
-            role="Technical Content Strategist",
+            role=WRITER_ROLE,
             goal="Synthesize complex information into clear, actionable, and engaging reports",
             backstory="You are an expert communicator who can take technical jargon \n            and turn it into a narrative that humans actually want to read.",
             llm=self.llm,
+            tools=DEFAULT_TOOLS,
             verbose=True,
             allow_delegation=False,
         )
