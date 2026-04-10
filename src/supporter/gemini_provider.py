@@ -3,11 +3,13 @@ import functools
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+
 from google import genai
 from google.genai import types
 from google.genai.types import Content, GenerateContentConfig, Part
-from ..config import config
-from ..logger import logger
+
+from .config import config
+from .logger import logger
 
 
 class GeminiProvider:
@@ -64,7 +66,7 @@ class GeminiProvider:
         if not options:
             return None
         tools = options.get("tools", [])
-        registry = options.get("registry", {})
+        registry = options.get("registry") or {}
         use_search = options.get("use_search", False)
         use_code_execution = options.get("use_code_execution", False)
         final_tools = list(tools) if tools else []
@@ -83,13 +85,13 @@ class GeminiProvider:
         if use_search:
             final_tools.append(types.Tool(google_search=types.GoogleSearchRetrieval()))
         if use_code_execution:
-            final_tools.append(types.Tool(code_execution=types.CodeExecution()))
+            final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
         return final_tools or None
 
     async def generate(
         self, prompt: str | list[Content], options: dict[str, Any] | None = None
     ) -> Any:
-        from ..index import LLMResult
+        from .index import LLMResult
 
         options = options or {}
         interaction_id = options.get("interaction_id")
@@ -158,7 +160,7 @@ class GeminiProvider:
     async def generate_stream(
         self, prompt: str | list[Content], options: dict[str, Any] | None = None
     ) -> AsyncIterator[Any]:
-        from ..index import LLMChunk
+        from .index import LLMChunk
 
         options = options or {}
         transformed_tools = self._transform_tools(options)

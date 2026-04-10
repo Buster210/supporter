@@ -1,58 +1,45 @@
 import time
 from collections.abc import Callable
-from typing import Any, TypedDict
+from typing import Any
+
 from google.genai.types import Content, Part, Tool
-from .index import LLMProvider
+
+from .index import LLMOptions, LLMProvider, LLMResult
 from .logger import logger
-from .crew_agent import CrewManager
-
-
-class ToolRegistry(dict[str, Callable]):
-    pass
-
-
-class AgentOptions(TypedDict, total=False):
-    tools: list[Tool]
-    registry: ToolRegistry
-    system_instruction: str
-    use_search: bool
-    use_code_execution: bool
-
-
-class AgentResult(TypedDict):
-    text: str
-    model: str | None
-    duration: float | None
-    agents: list[str] | None
 
 
 class ChatAgent:
-    def __init__(self, provider: LLMProvider, options: AgentOptions | None = None):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        tools: list[Tool] | None = None,
+        registry: dict[str, Callable] | None = None,
+        system_instruction: str | None = None,
+        use_search: bool = False,
+        use_code_execution: bool = False,
+    ):
         self.provider = provider
         self.history: list[Content] = []
         self.current_interaction_id: str | None = None
-        opts = options or {}
-        self.tools = opts.get("tools")
-        self.registry = opts.get("registry")
-        self.system_instruction = opts.get("system_instruction")
-        self.use_search = opts.get("use_search", False)
-        self.use_code_execution = opts.get("use_code_execution", False)
+        self.tools = tools
+        self.registry = registry
+        self.system_instruction = system_instruction
+        self.use_search = use_search
+        self.use_code_execution = use_code_execution
 
-    async def execute(self, prompt: str) -> AgentResult:
+    async def execute(self, prompt: str) -> LLMResult:
         logger.debug(f"Executing prompt: {prompt}")
         user_message = Content(role="user", parts=[Part(text=prompt)])
-        result = await self.provider.generate(
-            prompt,
-            {
-                "history": self.history,
-                "interaction_id": self.current_interaction_id,
-                "tools": self.tools,
-                "registry": self.registry,
-                "system_instruction": self.system_instruction,
-                "use_search": self.use_search,
-                "use_code_execution": self.use_code_execution,
-            },
-        )
+        options: LLMOptions = {
+            "history": self.history,
+            "interaction_id": self.current_interaction_id,
+            "tools": self.tools,
+            "registry": self.registry,
+            "system_instruction": self.system_instruction,
+            "use_search": self.use_search,
+            "use_code_execution": self.use_code_execution,
+        }
+        result = await self.provider.generate(prompt, options)
         self.current_interaction_id = result.interaction_id
         if result.automatic_function_calling_history:
             logger.debug("Updating history with automatic function calling results")
@@ -67,15 +54,9 @@ class ChatAgent:
                     else [],
                 )
             )
-        logger.debug(
-            f"Execution complete. Response length: {(len(result.text) if result.text else 0)}"
-        )
-        return {
-            "text": result.text or "",
-            "model": result.model,
-            "duration": result.duration,
-            "agents": None,
-        }
+        response_len = len(result.text) if result.text else 0
+        logger.debug(f"Execution complete. Response length: {response_len}")
+        return result
 
     def get_history(self) -> list[Content]:
         return self.history
@@ -87,20 +68,19 @@ class ChatAgent:
 
 
 class CrewAgent:
-    def __init__(self, status_callback: Any = None):
-        self.manager = CrewManager(status_callback=status_callback)
+    def __init__(self, provider: LLMProvider, status_callback: Any = None):
+        from .crew_agent import CrewManager
 
-    async def execute(self, prompt: str) -> AgentResult:
+        self.manager = CrewManager(provider=provider, status_callback=status_callback)
+
+    async def execute(self, prompt: str) -> LLMResult:
         start_time = time.perf_counter()
         logger.info(f"Executing crew for prompt: {prompt}")
-        (result_text, agent_roles) = await self.manager.coordinate_execution(prompt)
+        result = await self.manager.coordinate_execution(prompt)
         end_time = time.perf_counter()
-        return {
-            "text": result_text,
-            "model": "CrewAI (Multi-Agent)",
-            "duration": end_time - start_time,
-            "agents": agent_roles,
-        }
+        result.duration = end_time - start_time
+        result.model = "CrewAI (Multi-Agent)"
+        return result
 
     def get_history(self) -> list[Content]:
         return []

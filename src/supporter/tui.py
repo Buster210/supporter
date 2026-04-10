@@ -1,12 +1,14 @@
 from __future__ import annotations
-import asyncio
+
 import time
+
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
 from textual.widgets import Input, Label, Static
+
 from . import ChatAgent, CrewAgent, get_provider
 from .logger import init_logger, logger
 
@@ -139,26 +141,20 @@ class SupporterApp(App):
             self.notify(msg, severity="error")
 
     async def _setup_agent(self, use_crew: bool = False) -> None:
-
-        def _initialize():
-            provider = get_provider()
-            if use_crew:
-                agent = CrewAgent(status_callback=self._on_agent_active)
-                logger.info("CrewAgent successfully initialized")
-                return agent
-            else:
-                agent = ChatAgent(
-                    provider,
-                    {
-                        "system_instruction": "You are a helpful assistant. Be concise and professional. You can use Google Search and Code Execution when needed.",
-                        "use_search": True,
-                        "use_code_execution": True,
-                    },
-                )
-                logger.info("ChatAgent successfully initialized")
-                return agent
-
-        self.agent = await asyncio.to_thread(_initialize)
+        provider = get_provider()
+        if use_crew:
+            self.agent = CrewAgent(
+                provider=provider, status_callback=self._on_agent_active
+            )
+            logger.info("CrewAgent successfully initialized")
+        else:
+            self.agent = ChatAgent(
+                provider,
+                system_instruction="You are a helpful assistant. Be concise and professional. You can use Google Search and Code Execution when needed.",
+                use_search=True,
+                use_code_execution=True,
+            )
+            logger.info("ChatAgent successfully initialized")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-container"):
@@ -220,7 +216,7 @@ class SupporterApp(App):
                 await chat_view.mount(
                     MessageBubble(role="agent", content=f"Multi-Agent Mode {status}")
                 )
-                chat_view.scroll_end(animate=False)
+                chat_view.scroll_end()
             finally:
                 self.is_thinking = False
                 self.is_activating_crew = False
@@ -232,7 +228,7 @@ class SupporterApp(App):
     async def _process_message_cycle(self, text: str) -> None:
         chat_view = self.query_one("#chat-view")
         await chat_view.mount(MessageBubble(role="user", content=text))
-        chat_view.scroll_end(animate=False)
+        chat_view.scroll_end()
         self.current_active_agent = ""
         self.is_thinking = True
         self._spinner_idx = 0
@@ -242,21 +238,22 @@ class SupporterApp(App):
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
             response = await self.agent.execute(text)
-            duration = time.perf_counter() - start_time
+            ui_duration = time.perf_counter() - start_time
+            agent_roles = response.usage.get("agents") if response.usage else None
             await chat_view.mount(
                 MessageBubble(
                     role="agent",
-                    content=response["text"],
-                    model=response.get("model"),
-                    duration=response.get("duration"),
-                    agents=response.get("agents"),
+                    content=response.text,
+                    model=response.model,
+                    duration=ui_duration,
+                    agents=agent_roles,
                 )
             )
-            chat_view.scroll_end(animate=False)
+            chat_view.scroll_end()
         except Exception as e:
             logger.error(f"Error during agent execution: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
-            chat_view.scroll_end(animate=False)
+            chat_view.scroll_end()
         finally:
             self.is_thinking = False
             if self._spinner_timer:

@@ -54,13 +54,11 @@ async def test_tool_dispatch_to_registry():
 
     agent = ChatAgent(
         mock_provider,
-        {
-            "tools": [{"name": "get_current_time"}],
-            "registry": {"get_current_time": mock_get_time},
-        },
+        tools=[{"name": "get_current_time"}],
+        registry={"get_current_time": mock_get_time},
     )
 
     response = await agent.execute("What time is it?")
 
-    assert response["text"] == "It is 12:00 PM."
+    assert response.text == "It is 12:00 PM."
     assert agent.get_history() == mock_history
