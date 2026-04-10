@@ -23,7 +23,7 @@ def setup_env():
 @pytest.fixture
 def mock_genai_client():
     """Patches the genai.Client in the provider module."""
-    with patch("supporter.providers.gemini_provider.genai.Client") as mock_client:
+    with patch("supporter.gemini_provider.genai.Client") as mock_client:
 
         def side_effect(**kwargs):
             instance = create_mock_genai_client(**kwargs)
