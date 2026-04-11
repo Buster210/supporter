@@ -1,8 +1,20 @@
 import os
 from dataclasses import dataclass
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+HTTP_NOT_FOUND = 404
+HTTP_RATE_LIMIT = 429
+HTTP_INTERNAL_ERROR = 500
+HTTP_SERVICE_UNAVAILABLE = 503
+
+DEFAULT_MODEL = "supporter-gemini"
+DEFAULT_AGENT_ROLE = "Analyzing"
+
+RESEARCHER_ROLE = "Senior Research Analyst"
+WRITER_ROLE = "Technical Content Strategist"
 
 
 @dataclass

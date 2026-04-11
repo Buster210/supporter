@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+
 from .config import config
 
 
@@ -15,14 +16,15 @@ class SupporterFormatter(logging.Formatter):
 
 
 logger = logging.getLogger("supporter")
+logger.debug("--- Loading logger module ---")
 
 
 def init_logger():
     try:
         with open(config.log_file, "w") as f:
             f.write("")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to clear log file: {e}")
     log_level_str = config.log_level
     log_level = getattr(logging, log_level_str, logging.INFO)
     root_logger = logging.getLogger()
@@ -32,6 +34,10 @@ def init_logger():
     file_handler.setFormatter(SupporterFormatter())
     logger.addHandler(file_handler)
     logger.info(f"Logging initialized at level: {log_level_str}")
+    logger.debug(
+        f"Config loaded: model={config.gemini_model}, provider={config.provider}, log_file={config.log_file}"
+    )
+    logger.debug(f"API Keys count: {len(config.gemini_api_keys)}")
 
 
 if __name__ == "__main__":

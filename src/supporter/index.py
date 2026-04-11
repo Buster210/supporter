@@ -1,17 +1,18 @@
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
-from google.genai.types import Content, GenerateContentConfig, Tool
-from .config import config
-from .logger import logger
-from .providers.gemini_provider import GeminiProvider
 
-HTTP_SUCCESS = 200
-HTTP_BAD_REQUEST = 400
-HTTP_NOT_FOUND = 404
-HTTP_RATE_LIMIT = 429
-HTTP_INTERNAL_ERROR = 500
-HTTP_SERVICE_UNAVAILABLE = 503
+from google.genai.types import Content, GenerateContentConfig, Tool
+
+from .config import (
+    HTTP_INTERNAL_ERROR,
+    HTTP_NOT_FOUND,
+    HTTP_RATE_LIMIT,
+    HTTP_SERVICE_UNAVAILABLE,
+    config,
+)
+from .gemini_provider import GeminiProvider
+from .logger import logger
 
 
 class LLMOptions(TypedDict, total=False):
@@ -46,6 +47,7 @@ class LLMResult:
 class LLMChunk:
     text: str
     is_last: bool
+    model: str | None = None
     raw: Any = None
 
 
@@ -66,7 +68,7 @@ def is_rate_limit(error: Any) -> bool:
     if status == HTTP_RATE_LIMIT:
         return True
     message = str(error).lower()
-    return any((sig in message for sig in ["quota", "too many requests", "429"]))
+    return any(sig in message for sig in ["quota", "too many requests", "429"])
 
 
 def is_model_error(error: Any) -> bool:
@@ -75,9 +77,9 @@ def is_model_error(error: Any) -> bool:
         return True
     message = str(error).lower()
     transient_signals = ["unavailable", "overloaded", "internal error", "service level"]
-    if any((sig in message for sig in transient_signals)):
+    if any(sig in message for sig in transient_signals):
         return True
-    return any((code in message for code in ["404", "503", "500"]))
+    return any(code in message for code in ["404", "503", "500"])
 
 
 def should_trigger_fallback(error: Any) -> bool:
@@ -94,35 +96,41 @@ class RoundRobinPool(LLMProvider):
         self.providers = providers
         self.current_index = 0
 
-    def _get_next(self) -> LLMProvider:
+    def _get_next(self) -> tuple[LLMProvider, int]:
         provider = self.providers[self.current_index]
+        key_index = self.current_index
         self.current_index = (self.current_index + 1) % len(self.providers)
-        return provider
+        return provider, key_index
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult:
         last_error = None
-        for _ in range(len(self.providers)):
-            provider = self._get_next()
+        for attempt in range(len(self.providers)):
+            provider, key_index = self._get_next()
+            logger.debug(f"  ├─ Key {key_index} [attempt {attempt + 1}/{len(self.providers)}]")
             try:
                 result = await provider.generate(prompt, options)
                 if not result.model:
                     result.model = provider.get_name()
+                logger.debug(f"  ├─ Key {key_index} ✓ SUCCESS")
                 return result
             except Exception as e:
                 last_error = e
                 if not is_rate_limit(e):
+                    logger.error(f"  ├─ Key {key_index} ✗ FATAL ERROR: {type(e).__name__}: {str(e)[:60]}")
                     raise e
                 logger.warning(
-                    f"Rate limit hit for {provider.get_name()}, trying next..."
+                    f"  ├─ Key {key_index} ✗ RATE LIMIT (429) - retrying next key..."
                 )
+        logger.error(f"  └─ All {len(self.providers)} keys exhausted!")
         raise last_error
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
-        provider = self._get_next()
+        provider, key_index = self._get_next()
+        logger.debug(f"Streaming with key {key_index}")
         async for chunk in provider.generate_stream(prompt, options):
             yield chunk
 
@@ -141,32 +149,50 @@ class FallbackProvider(LLMProvider):
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult:
+        logger.info(f"[PRIMARY] Attempting with model: {self.primary.get_name()}")
         try:
             result = await self.primary.generate(prompt, options)
             if not result.model:
                 result.model = self.primary.get_name()
+            logger.info(f"[PRIMARY] Success! Response from {self.primary.get_name()}")
             return result
         except Exception as e:
             if not should_trigger_fallback(e):
+                logger.error(f"[PRIMARY] Fatal error (not triggering fallback): {e}")
                 raise e
-            logger.info(f"Fallback triggered due to error: {e}")
-            result = await self.fallback.generate(prompt, options)
-            if not result.model:
-                result.model = self.fallback.get_name()
-            return result
+            logger.warning(f"[PRIMARY] All attempts exhausted. Switching to fallback...")
+            logger.info(f"[FALLBACK] Attempting with model: {self.fallback.get_name()}")
+            try:
+                result = await self.fallback.generate(prompt, options)
+                if not result.model:
+                    result.model = self.fallback.get_name()
+                logger.info(f"[FALLBACK] Success! Response from {self.fallback.get_name()}")
+                return result
+            except Exception as fallback_error:
+                logger.error(f"[FALLBACK] Failed: {fallback_error}")
+                raise fallback_error
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
+        logger.info(f"[PRIMARY-STREAM] Attempting with model: {self.primary.get_name()}")
         try:
             async for chunk in self.primary.generate_stream(prompt, options):
                 yield chunk
+            logger.info(f"[PRIMARY-STREAM] Success!")
         except Exception as e:
             if not should_trigger_fallback(e):
+                logger.error(f"[PRIMARY-STREAM] Fatal error (not triggering fallback): {e}")
                 raise e
-            logger.info(f"Streaming fallback triggered due to error: {e}")
-            async for chunk in self.fallback.generate_stream(prompt, options):
-                yield chunk
+            logger.warning(f"[PRIMARY-STREAM] Failed. Switching to fallback...")
+            logger.info(f"[FALLBACK-STREAM] Attempting with model: {self.fallback.get_name()}")
+            try:
+                async for chunk in self.fallback.generate_stream(prompt, options):
+                    yield chunk
+                logger.info(f"[FALLBACK-STREAM] Success!")
+            except Exception as fallback_error:
+                logger.error(f"[FALLBACK-STREAM] Failed: {fallback_error}")
+                raise fallback_error
 
     def get_name(self) -> str:
         return f"{self.primary.get_name()} -> {self.fallback.get_name()}"
@@ -195,9 +221,3 @@ def get_provider(provider_type: ProviderType | None = None) -> LLMProvider:
         )
         return FallbackProvider(primary, _build_chain(config.gemini_fallback_model))
     return primary
-
-
-class LLMFactory:
-    @staticmethod
-    def get_provider(provider_type: ProviderType | None = None) -> LLMProvider:
-        return get_provider(provider_type)

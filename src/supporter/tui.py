@@ -1,13 +1,14 @@
 from __future__ import annotations
-import asyncio
+
 import time
-from datetime import datetime as datetime_
+
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
 from textual.widgets import Input, Label, Static
+
 from . import ChatAgent, CrewAgent, get_provider
 from .logger import init_logger, logger
 
@@ -78,6 +79,7 @@ class MessageBubble(Vertical):
         model: str | None = None,
         duration: float | None = None,
         agents: list[str] | None = None,
+        streaming: bool = False,
     ):
         super().__init__()
         self.role = role
@@ -85,26 +87,51 @@ class MessageBubble(Vertical):
         self.model = model
         self.duration = duration
         self.agents = agents
+        self.streaming = streaming
+        self._bubble_static = None
+        self._meta_label = None
         self.add_class("right" if role == "user" else "left")
 
     def compose(self) -> ComposeResult:
         is_user = self.role == "user"
         border_color = "green" if is_user else "blue"
-        yield Static(
+        self._bubble_static = Static(
             self.content, classes=f"bubble {border_color}", expand=False, markup=False
         )
-        if not is_user and (self.model or self.duration is not None):
-            meta_parts = []
-            if self.agents:
-                meta_parts.append(", ".join(self.agents))
-            model_info = self.model
-            if self.duration is not None:
-                model_info += f" in {self.duration:.2f}s"
-            if self.agents:
-                meta_text = f"({', '.join(self.agents)} via {model_info})"
-            else:
-                meta_text = f"({model_info})"
-            yield Label(meta_text, classes="message-meta")
+        yield self._bubble_static
+
+        if not is_user and not self.streaming and (self.model or self.duration is not None):
+            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
+            yield self._meta_label
+
+    def _get_meta_text(self) -> str:
+        model_info = self.model or "Unknown"
+        if self.duration is not None:
+            model_info += f" in {self.duration:.2f}s"
+        if self.agents:
+            return f"({', '.join(self.agents)} via {model_info})"
+        return f"({model_info})"
+
+    def append_token(self, token: str) -> None:
+        self.content += token
+        if self._bubble_static:
+            self._bubble_static.update(self.content)
+
+    async def finalize(
+        self,
+        model: str | None = None,
+        duration: float | None = None,
+        agents: list[str] | None = None,
+    ) -> None:
+        self.model = model or self.model
+        self.duration = duration or self.duration
+        self.agents = agents or self.agents
+        self.streaming = False
+        if not self._meta_label:
+            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
+            await self.mount(self._meta_label)
+        else:
+            self._meta_label.update(self._get_meta_text())
 
 
 class SupporterApp(App):
@@ -123,6 +150,7 @@ class SupporterApp(App):
         self.crew_mode = True
         self.is_activating_crew = False
         self.current_active_agent = ""
+        self.status_label = "Thinking"
 
     def _on_agent_active(self, agent_role: str) -> None:
         self.current_active_agent = agent_role
@@ -140,46 +168,20 @@ class SupporterApp(App):
             self.notify(msg, severity="error")
 
     async def _setup_agent(self, use_crew: bool = False) -> None:
-
-        def _initialize():
-            provider = get_provider()
-            if use_crew:
-                agent = CrewAgent(status_callback=self._on_agent_active)
-                logger.info("CrewAgent successfully initialized")
-                return agent
-            else:
-                tools = [
-                    {
-                        "function_declarations": [
-                            {
-                                "name": "get_current_time",
-                                "description": "Get the current system time",
-                                "parameters": {
-                                    "type": "OBJECT",
-                                    "properties": {},
-                                    "required": [],
-                                },
-                            }
-                        ]
-                    }
-                ]
-
-                def get_current_time() -> dict:
-                    return {"time": datetime_.now().strftime("%I:%M:%S %p")}
-
-                registry = {"get_current_time": get_current_time}
-                agent = ChatAgent(
-                    provider,
-                    {
-                        "tools": tools,
-                        "registry": registry,
-                        "system_instruction": "You are a helpful assistant. Be concise and professional.",
-                    },
-                )
-                logger.info("ChatAgent successfully initialized")
-                return agent
-
-        self.agent = await asyncio.to_thread(_initialize)
+        provider = get_provider()
+        if use_crew:
+            self.agent = CrewAgent(
+                provider=provider, status_callback=self._on_agent_active
+            )
+            logger.info("CrewAgent successfully initialized")
+        else:
+            self.agent = ChatAgent(
+                provider,
+                system_instruction="You are a helpful assistant. Be concise and professional. You can use Google Search and Code Execution when needed.",
+                use_search=True,
+                use_code_execution=True,
+            )
+            logger.info("ChatAgent successfully initialized")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-container"):
@@ -208,7 +210,7 @@ class SupporterApp(App):
                 label = f"[{self.current_active_agent}]"
             else:
                 label = "[AGENT]" if self.crew_mode else ""
-            status = f"{frame} {label} Thinking{dots}"
+            status = f"{frame} {label} {self.status_label}{dots}"
         self.query_one("#thinking-indicator", Static).update(status)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -241,7 +243,7 @@ class SupporterApp(App):
                 await chat_view.mount(
                     MessageBubble(role="agent", content=f"Multi-Agent Mode {status}")
                 )
-                chat_view.scroll_end(animate=False)
+                chat_view.scroll_end()
             finally:
                 self.is_thinking = False
                 self.is_activating_crew = False
@@ -253,31 +255,61 @@ class SupporterApp(App):
     async def _process_message_cycle(self, text: str) -> None:
         chat_view = self.query_one("#chat-view")
         await chat_view.mount(MessageBubble(role="user", content=text))
-        chat_view.scroll_end(animate=False)
+        chat_view.scroll_end()
         self.current_active_agent = ""
         self.is_thinking = True
+        self.status_label = "Thinking"
         self._spinner_idx = 0
         self._spinner_timer = self.set_interval(0.15, self._tick_spinner)
         start_time = time.perf_counter()
         try:
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
-            response = await self.agent.execute(text)
-            duration = time.perf_counter() - start_time
-            await chat_view.mount(
-                MessageBubble(
-                    role="agent",
-                    content=response["text"],
-                    model=response.get("model"),
-                    duration=response.get("duration"),
-                    agents=response.get("agents"),
+
+            if isinstance(self.agent, CrewAgent):
+                response = await self.agent.execute(text)
+                ui_duration = time.perf_counter() - start_time
+                agent_roles = response.usage.get("agents") if response.usage else None
+                await chat_view.mount(
+                    MessageBubble(
+                        role="agent",
+                        content=response.text,
+                        model=response.model,
+                        duration=ui_duration,
+                        agents=agent_roles,
+                    )
                 )
-            )
-            chat_view.scroll_end(animate=False)
+                chat_view.scroll_end()
+            else:
+                bubble = None
+                first_chunk = True
+                accumulated_text = ""
+                actual_model = None
+                async for chunk in self.agent.execute_stream(text):
+                    if chunk.model:
+                        actual_model = chunk.model
+                    if first_chunk:
+                        accumulated_text += chunk.text
+                        if not accumulated_text.strip():
+                            continue
+                        first_chunk = False
+                        self.status_label = "Streaming"
+                        bubble = MessageBubble(role="agent", content=accumulated_text, streaming=True)
+                        await chat_view.mount(bubble)
+                        chat_view.scroll_end()
+                    else:
+                        if bubble:
+                            bubble.append_token(chunk.text)
+                            chat_view.scroll_end()
+
+                if bubble:
+                    ui_duration = time.perf_counter() - start_time
+                    await bubble.finalize(model=actual_model, duration=ui_duration)
+                    chat_view.scroll_end()
         except Exception as e:
             logger.error(f"Error during agent execution: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
-            chat_view.scroll_end(animate=False)
+            chat_view.scroll_end()
         finally:
             self.is_thinking = False
             if self._spinner_timer:

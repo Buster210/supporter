@@ -1,19 +1,20 @@
 import asyncio
 from typing import Any
-from crewai import Agent, Task, Crew, Process
+
+from crewai import Agent, Crew, Process, Task
+
+from .config import RESEARCHER_ROLE, WRITER_ROLE
 from .crew_adapter import SupporterLLM
-from .index import LLMFactory
 from .logger import logger
 
 
 class CrewManager:
-    def __init__(self, status_callback: Any = None):
-        provider = LLMFactory.get_provider()
+    def __init__(self, provider: Any, status_callback: Any = None):
         self.llm = SupporterLLM(provider=provider, status_callback=status_callback)
 
     def _assemble_research_crew(self, topic: str) -> Crew:
         researcher = Agent(
-            role="Senior Research Analyst",
+            role=RESEARCHER_ROLE,
             goal="Uncover cutting-edge developments and provide deep insights on {topic}",
             backstory="You are a veteran researcher with an eye for detail. \n            You excel at finding non-obvious connections and trends.",
             llm=self.llm,
@@ -21,7 +22,7 @@ class CrewManager:
             allow_delegation=False,
         )
         writer = Agent(
-            role="Technical Content Strategist",
+            role=WRITER_ROLE,
             goal="Synthesize complex information into clear, actionable, and engaging reports",
             backstory="You are an expert communicator who can take technical jargon \n            and turn it into a narrative that humans actually want to read.",
             llm=self.llm,
@@ -46,7 +47,9 @@ class CrewManager:
             verbose=True,
         )
 
-    async def coordinate_execution(self, prompt: str) -> tuple[str, list[str]]:
+    async def coordinate_execution(self, prompt: str) -> Any:
+        from .index import LLMResult
+
         try:
             crew = self._assemble_research_crew(prompt)
             result = await asyncio.to_thread(crew.kickoff, inputs={"topic": prompt})
@@ -57,7 +60,12 @@ class CrewManager:
                 ]
             if not agent_roles:
                 agent_roles = [a.role for a in crew.agents]
-            return (str(result), list(set(agent_roles)))
+            result_text = str(result)
+            return LLMResult(
+                text=result_text,
+                model="CrewAI (Multi-Agent)",
+                usage={"agents": list(set(agent_roles))},
+            )
         except Exception as e:
             logger.error(f"Crew execution failed: {e}")
-            return (f"Error executing crew: {e}", [])
+            return LLMResult(text=f"Error executing crew: {e}")
