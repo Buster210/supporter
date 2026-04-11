@@ -3,11 +3,14 @@
 A Python-based TUI AI chat client using the Google Gemini model.
 
 ## Features
+
 - **Multi-Agent Execution**: CrewAI-powered multi-agent collaboration with researcher and writer roles.
 - **Round-Robin Load Balancing**: Support for multiple Gemini API keys.
 - **Model Fallback**: Automatically switches to a fallback model if the primary model fails.
+- **Real-time Streaming**: Asynchronous response streaming for immediate feedback.
 - **TUI Interface**: A beautiful terminal user interface built with Textual.
 - **Tool Support**: Integrated tool registry for agentic capabilities.
+- **Observability**: Detailed lifecycle logging and diagnostic tracing.
 
 ## Installation
 
@@ -19,6 +22,7 @@ uv sync
 ```
 
 For development:
+
 ```bash
 uv sync --extra dev
 ```
@@ -27,6 +31,7 @@ uv sync --extra dev
 
 1. Configure your environment:
    Create a `.env` file with:
+
    ```bash
    GEMINI_API_KEYS=your_key_1,your_key_2
    GEMINI_MODEL=gemini-flash-lite-latest
@@ -35,10 +40,13 @@ uv sync --extra dev
    ```
 
 2. Run the TUI:
+
    ```bash
    supporter
    ```
+
    Or directly:
+
    ```bash
    uv run python src/supporter/tui.py
    ```

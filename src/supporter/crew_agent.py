@@ -7,36 +7,60 @@ from .config import RESEARCHER_ROLE, WRITER_ROLE
 from .crew_adapter import SupporterLLM
 from .logger import logger
 
+logger.debug("--- Loading crew_agent module ---")
+
 
 class CrewManager:
     def __init__(self, provider: Any, status_callback: Any = None):
+        logger.debug("Initializing CrewManager")
         self.llm = SupporterLLM(provider=provider, status_callback=status_callback)
 
     def _assemble_research_crew(self, topic: str) -> Crew:
+        logger.debug(f"Entering _assemble_research_crew (topic: {topic})")
         researcher = Agent(
             role=RESEARCHER_ROLE,
-            goal="Uncover cutting-edge developments and provide deep insights on {topic}",
-            backstory="You are a veteran researcher with an eye for detail. \n            You excel at finding non-obvious connections and trends.",
+            goal=(
+                "Uncover cutting-edge developments and provide deep insights on {topic}"
+            ),
+            backstory=(
+                "You are a veteran researcher with an eye for detail. \n"
+                "You excel at finding non-obvious connections and trends."
+            ),
             llm=self.llm,
             verbose=True,
             allow_delegation=False,
         )
         writer = Agent(
             role=WRITER_ROLE,
-            goal="Synthesize complex information into clear, actionable, and engaging reports",
-            backstory="You are an expert communicator who can take technical jargon \n            and turn it into a narrative that humans actually want to read.",
+            goal=(
+                "Synthesize complex information into clear, actionable, "
+                "and engaging reports"
+            ),
+            backstory=(
+                "You are an expert communicator who can take technical jargon \n"
+                "and turn it into a narrative that humans actually want to read."
+            ),
             llm=self.llm,
             verbose=True,
             allow_delegation=False,
         )
         research_task = Task(
-            description=f"Conduct a comprehensive research on: {topic}. Focus on accuracy and depth.",
-            expected_output="A detailed bulleted list of key findings and supporting data.",
+            description=(
+                f"Conduct a comprehensive research on: {topic}. "
+                "Focus on accuracy and depth."
+            ),
+            expected_output=(
+                "A detailed bulleted list of key findings and supporting data."
+            ),
             agent=researcher,
         )
         write_task = Task(
-            description=f"Synthesize the research findings into a coherent report for: {topic}",
-            expected_output="Professional markdown report addressing the research objective.",
+            description=(
+                f"Synthesize the research findings into a coherent report for: {topic}"
+            ),
+            expected_output=(
+                "Professional markdown report addressing the research objective."
+            ),
             agent=writer,
             context=[research_task],
         )
@@ -48,6 +72,7 @@ class CrewManager:
         )
 
     async def coordinate_execution(self, prompt: str) -> Any:
+        logger.debug(f"Entering coordinate_execution (prompt: {prompt[:50]}...)")
         from .index import LLMResult
 
         try:
@@ -69,3 +94,5 @@ class CrewManager:
         except Exception as e:
             logger.error(f"Crew execution failed: {e}")
             return LLMResult(text=f"Error executing crew: {e}")
+        finally:
+            logger.debug("Exiting coordinate_execution")

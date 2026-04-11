@@ -8,6 +8,8 @@ from pydantic import Field, PrivateAttr
 from .config import DEFAULT_AGENT_ROLE, DEFAULT_MODEL
 from .logger import logger
 
+logger.debug("--- Loading crew_adapter module ---")
+
 
 class SupporterLLM(BaseLLM):
     model: str = Field(default=DEFAULT_MODEL)
@@ -15,6 +17,9 @@ class SupporterLLM(BaseLLM):
     _status_callback: Any | None = PrivateAttr(default=None)
 
     def __init__(self, provider: Any, status_callback: Any | None = None, **kwargs):
+        logger.debug(
+            f"Initializing SupporterLLM (model: {kwargs.get('model', DEFAULT_MODEL)})"
+        )
         super().__init__(model=kwargs.get("model", DEFAULT_MODEL), **kwargs)
         self._supporter_provider = provider
         self._status_callback = status_callback
@@ -29,6 +34,7 @@ class SupporterLLM(BaseLLM):
         from_agent: Any | None = None,
         response_model: type | None = None,
     ) -> str:
+        logger.debug("Entering SupporterLLM.call (sync bridge)")
         prompt = ""
         if isinstance(messages, str):
             prompt = messages
@@ -58,8 +64,11 @@ class SupporterLLM(BaseLLM):
         except Exception as e:
             logger.error(f"SupporterLLM call failed: {e}")
             return f"Error executing model: {e}"
+        finally:
+            logger.debug("Exiting SupporterLLM.call")
 
     async def acall(self, messages: str | list[dict[str, str]], **kwargs: Any) -> str:
+        logger.debug("Entering SupporterLLM.acall (async)")
         prompt = (
             messages if isinstance(messages, str) else messages[-1].get("content", "")
         )
@@ -68,6 +77,7 @@ class SupporterLLM(BaseLLM):
         if available_functions:
             options["registry"] = available_functions
         result = await self._supporter_provider.generate(prompt, options)
+        logger.debug("Exiting SupporterLLM.acall")
         return result.text
 
     @property

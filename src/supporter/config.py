@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -21,9 +22,9 @@ WRITER_ROLE = "Technical Content Strategist"
 class AppConfig:
     log_level: str
     provider: str
-    gemini_api_keys: list[str]
+    gemini_api_keys: List[str]
     gemini_model: str
-    gemini_fallback_model: str | None
+    gemini_fallback_model: Optional[str]
     log_file: str
     default_system_instruction: str
 
@@ -40,7 +41,10 @@ def load_config() -> AppConfig:
         log_file=os.getenv("LOG_FILE", "app.log"),
         default_system_instruction=os.getenv(
             "DEFAULT_SYSTEM_INSTRUCTION",
-            "You are a helpful assistant. Prioritize quality and clarity in every response.",
+            (
+                "You are a helpful assistant. "
+                "Prioritize quality and clarity in every response."
+            ),
         ),
     )
 
