@@ -374,13 +374,17 @@ class SupporterApp(App):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         user_text = event.value.strip()
-        if not user_text or self.active_queries > 0:
+        if not user_text:
             return
         self.query_one("#user-input", Input).value = ""
+        self.query_one("#user-input").focus()
         if user_text.startswith("/"):
             await self._handle_command(user_text.lower())
             return
-        await self._process_message_cycle(user_text)
+        chat_view = self.query_one("#chat-view")
+        chat_view.mount(MessageBubble(role="user", content=user_text))
+        chat_view.scroll_end()
+        self.run_worker(self._process_message_cycle(user_text, mount_user=False))
 
     async def _handle_command(self, command: str) -> None:
         logger.debug(f"Handling TUI command: {command}")
@@ -406,11 +410,13 @@ class SupporterApp(App):
                 self.is_activating_crew = False
                 self._stop_thinking()
 
-    async def _process_message_cycle(self, text: str) -> None:
+    async def _process_message_cycle(self, text: str, mount_user: bool = True) -> None:
         logger.debug("Entering _process_message_cycle")
         chat_view = self.query_one("#chat-view")
-        await chat_view.mount(MessageBubble(role="user", content=text))
-        chat_view.scroll_end()
+        if mount_user:
+            await chat_view.mount(MessageBubble(role="user", content=text))
+            chat_view.scroll_end()
+            self.query_one("#user-input").focus()
         self.current_active_agent = ""
         self.status_label = "Thinking"
         self._start_thinking()
