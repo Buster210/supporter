@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import ClassVar, List, Optional
+from typing import ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -79,9 +79,9 @@ class MessageBubble(Vertical):
         self,
         role: str,
         content: str,
-        model: Optional[str] = None,
-        duration: Optional[float] = None,
-        agents: Optional[List[str]] = None,
+        model: str | None = None,
+        duration: float | None = None,
+        agents: list[str] | None = None,
         streaming: bool = False,
     ):
         super().__init__()
@@ -126,9 +126,9 @@ class MessageBubble(Vertical):
 
     async def finalize(
         self,
-        model: Optional[str] = None,
-        duration: Optional[float] = None,
-        agents: Optional[List[str]] = None,
+        model: str | None = None,
+        duration: float | None = None,
+        agents: list[str] | None = None,
     ) -> None:
         self.model = model or self.model
         self.duration = duration or self.duration
@@ -296,7 +296,7 @@ class SupporterApp(App):
             msg = f"Failed to initialize agent: {e}"
             logger.error(msg)
             self.notify(msg, severity="error")
- 
+
     async def on_unmount(self) -> None:
         logger.debug("SupporterApp unmounting")
         if self._spinner_timer:
@@ -341,7 +341,7 @@ class SupporterApp(App):
 
     def action_clear_screen(self) -> None:
         self.action_clear()
- 
+
     def _start_thinking(self) -> None:
         self.active_queries += 1
         if self.active_queries == 1:
@@ -349,7 +349,7 @@ class SupporterApp(App):
             if self._spinner_timer:
                 self._spinner_timer.stop()
             self._spinner_timer = self.set_interval(0.15, self._tick_spinner)
- 
+
     def _stop_thinking(self) -> None:
         self.active_queries = max(0, self.active_queries - 1)
         if self.active_queries == 0:
