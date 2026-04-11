@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import asyncio
+from datetime import datetime, timedelta
 from typing import (
     Any,
     AsyncIterator,
@@ -98,6 +99,27 @@ def should_trigger_fallback(error: Any) -> bool:
     return is_rate_limit(error) or is_model_error(error)
 
 
+_model_cooldowns: Dict[str, datetime] = {}
+
+
+def _is_model_in_cooldown(model_name: str) -> bool:
+    if model_name not in _model_cooldowns:
+        return False
+    if datetime.now() > _model_cooldowns[model_name]:
+        del _model_cooldowns[model_name]
+        logger.info(f"Model '{model_name}' cooldown expired, re-enabling")
+        return False
+    return True
+
+
+def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
+    expiry = datetime.now() + timedelta(minutes=minutes)
+    _model_cooldowns[model_name] = expiry
+    logger.warning(
+        f"Model '{model_name}' in cooldown until {expiry.strftime('%Y-%m-%d %H:%M:%S')} due to 5XX error"
+    )
+
+
 ProviderType = str
 
 
@@ -159,6 +181,12 @@ class DynamicPool(LLMProvider):
         self, prompt: Union[str, List[Content]], options: Optional[LLMOptions] = None
     ) -> LLMResult:
         logger.debug(f"Entering DynamicPool.generate ({self.model_name})")
+
+        if _is_model_in_cooldown(self.model_name):
+            raise Exception(
+                f"Model '{self.model_name}' is in cooldown due to repeated 5XX errors. Please try again later."
+            )
+
         last_error = None
         for attempt in range(len(self.keys)):
             while not self.active_slots:
@@ -173,6 +201,9 @@ class DynamicPool(LLMProvider):
             except Exception as e:
                 last_error = e
                 if should_trigger_fallback(e):
+                    if is_model_error(e):
+                        _mark_model_cooldown(self.model_name)
+
                     self._replace_instance(provider)
                     await asyncio.sleep(0.2 * (attempt + 1))
                     continue
@@ -183,6 +214,12 @@ class DynamicPool(LLMProvider):
         self, prompt: Union[str, List[Content]], options: Optional[LLMOptions] = None
     ) -> AsyncIterator[LLMChunk]:
         logger.debug(f"Entering DynamicPool.generate_stream ({self.model_name})")
+
+        if _is_model_in_cooldown(self.model_name):
+            raise Exception(
+                f"Model '{self.model_name}' is in cooldown due to repeated 5XX errors. Please try again later."
+            )
+
         last_error = None
         for attempt in range(len(self.keys)):
             while not self.active_slots:
@@ -198,6 +235,9 @@ class DynamicPool(LLMProvider):
             except Exception as e:
                 last_error = e
                 if should_trigger_fallback(e):
+                    if is_model_error(e):
+                        _mark_model_cooldown(self.model_name)
+
                     self._replace_instance(provider)
                     if not yielded_any:
                         logger.warning(
