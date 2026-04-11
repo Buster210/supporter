@@ -20,7 +20,10 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.3.0",
-    "pre-commit>=4.0.0",
+    "prek>=0.3.8",
+    "mypy>=1.15.0",
+    "bandit>=1.8.0",
+    "detect-secrets>=1.5.0",
 ]
 
 [build-system]
@@ -42,3 +45,15 @@ indent-style = "space"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B101"]

@@ -18,7 +18,7 @@
 ## Environment Stack
 
 - **Tech**: Python 3.13+, `google-genai`, `crewai`, `textual`, `rich`, `python-dotenv`.
-- **Config Variables**: 
+- **Config Variables**:
   - `GEMINI_API_KEYS` (CSV for balancing)
   - `LLM_PROVIDER`, `LOG_LEVEL`, `LOG_FILE`
   - `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`
