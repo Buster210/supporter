@@ -8,12 +8,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
+from textual.timer import Timer
 from textual.widgets import Input, Label, Static
 
 from . import ChatAgent, CrewAgent, get_provider
 from .logger import init_logger, logger
-
-logger.debug("--- Loading tui module ---")
 
 THEME = {
     "background": "#121212",
@@ -91,25 +90,26 @@ class MessageBubble(Vertical):
         self.duration = duration
         self.agents = agents
         self.streaming = streaming
-        self._bubble_static = None
-        self._meta_label = None
+        self._bubble_static: Static | None = None
+        self._meta_label: Label | None = None
         self.add_class("right" if role == "user" else "left")
 
     def compose(self) -> ComposeResult:
         is_user = self.role == "user"
         border_color = "green" if is_user else "blue"
-        self._bubble_static = Static(
+        static_widget = Static(
             self.content, classes=f"bubble {border_color}", expand=False, markup=False
         )
-        yield self._bubble_static
+        self._bubble_static = static_widget
+        yield static_widget
 
-        if (
-            not is_user
-            and not self.streaming
-            and (self.model or self.duration is not None)
-        ):
-            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
-            yield self._meta_label
+        meta_label = Label("", classes="message-meta")
+        self._meta_label = meta_label
+        if is_user or self.streaming or (not self.model and self.duration is None):
+            meta_label.display = False
+        else:
+            meta_label.update(self._get_meta_text())
+        yield meta_label
 
     def _get_meta_text(self) -> str:
         model_info = self.model or "Unknown"
@@ -124,7 +124,7 @@ class MessageBubble(Vertical):
         if self._bubble_static:
             self._bubble_static.update(self.content)
 
-    async def finalize(
+    def finalize(
         self,
         model: str | None = None,
         duration: float | None = None,
@@ -134,14 +134,12 @@ class MessageBubble(Vertical):
         self.duration = duration or self.duration
         self.agents = agents or self.agents
         self.streaming = False
-        if not self._meta_label:
-            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
-            await self.mount(self._meta_label)
-        else:
+        if self._meta_label:
             self._meta_label.update(self._get_meta_text())
+            self._meta_label.display = True
 
 
-class SupporterApp(App):
+class SupporterApp(App[None]):
     CSS = f"""
     Screen {{
         background: {THEME["background"]};
@@ -264,7 +262,7 @@ class SupporterApp(App):
         border: solid {THEME["magenta"]};
     }}
     """
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+c", "quit", "Quit", show=True),
         Binding("ctrl+l", "clear_screen", "Clear", show=True),
     ]
@@ -272,9 +270,9 @@ class SupporterApp(App):
     def __init__(self) -> None:
         logger.debug("Initializing SupporterApp")
         super().__init__()
-        self.agent = None
+        self.agent: ChatAgent | CrewAgent | None = None
         self.active_queries = 0
-        self._spinner_timer = None
+        self._spinner_timer: Timer | None = None
         self._spinner_idx: int = 0
         self.crew_mode = True
         self.is_activating_crew = False
@@ -340,7 +338,10 @@ class SupporterApp(App):
                 )
 
     def action_clear_screen(self) -> None:
-        self.action_clear()
+        """Clear the chat view and agent history."""
+        if self.agent:
+            self.agent.clear_history()
+        self.query_one("#chat-view").query("*").remove()
 
     def _start_thinking(self) -> None:
         self.active_queries += 1
@@ -391,9 +392,7 @@ class SupporterApp(App):
         if command == "/exit":
             self.exit()
         elif command == "/clear":
-            if self.agent:
-                self.agent.clear_history()
-            self.query_one("#chat-view").query("*").remove()
+            self.action_clear_screen()
         elif command == "/crew":
             self.crew_mode = not self.crew_mode
             status = "ENABLED" if self.crew_mode else "DISABLED"
@@ -428,7 +427,9 @@ class SupporterApp(App):
             if isinstance(self.agent, CrewAgent):
                 response = await self.agent.execute(text)
                 ui_duration = time.perf_counter() - start_time
-                agent_roles = response.usage.get("agents") if response.usage else None
+                agent_roles: list[str] | None = (
+                    response.usage.get("agents") if response.usage else None
+                )
                 await chat_view.mount(
                     MessageBubble(
                         role="agent",
@@ -465,7 +466,7 @@ class SupporterApp(App):
 
                 if bubble:
                     ui_duration = time.perf_counter() - start_time
-                    await bubble.finalize(model=actual_model, duration=ui_duration)
+                    bubble.finalize(model=actual_model, duration=ui_duration)
                     chat_view.scroll_end()
         except Exception as e:
             logger.error(f"Error during agent execution: {e}")
@@ -476,7 +477,7 @@ class SupporterApp(App):
         logger.debug("Exiting _process_message_cycle")
 
 
-def main():
+def main() -> None:
     app = SupporterApp()
     app.run()
 

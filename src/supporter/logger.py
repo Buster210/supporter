@@ -5,7 +5,7 @@ from .config import config
 
 
 class SupporterFormatter(logging.Formatter):
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.fromtimestamp(record.created).strftime(
             "%m/%d/%Y, %I:%M:%S %p"
         )
@@ -19,7 +19,7 @@ logger = logging.getLogger("supporter")
 logger.debug("--- Loading logger module ---")
 
 
-def init_logger():
+def init_logger() -> None:
     try:
         with open(config.log_file, "w") as f:
             f.write("")

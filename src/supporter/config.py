@@ -1,6 +1,5 @@
 import os
 from dataclasses import dataclass
-from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -22,9 +21,9 @@ WRITER_ROLE = "Technical Content Strategist"
 class AppConfig:
     log_level: str
     provider: str
-    gemini_api_keys: List[str]
+    gemini_api_keys: list[str]
     gemini_model: str
-    gemini_fallback_model: Optional[str]
+    gemini_fallback_model: str | None
     log_file: str
     default_system_instruction: str
 
@@ -36,7 +35,7 @@ def load_config() -> AppConfig:
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         provider=os.getenv("LLM_PROVIDER", "gemini"),
         gemini_api_keys=keys,
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemma-4-31b-it"),
         gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL"),
         log_file=os.getenv("LOG_FILE", "app.log"),
         default_system_instruction=os.getenv(

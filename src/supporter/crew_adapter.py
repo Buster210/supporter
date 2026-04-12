@@ -1,5 +1,5 @@
 import asyncio
-import concurrent.futures
+import threading
 from typing import Any
 
 from crewai.llms.base_llm import BaseLLM
@@ -8,21 +8,34 @@ from pydantic import Field, PrivateAttr
 from .config import DEFAULT_AGENT_ROLE, DEFAULT_MODEL
 from .logger import logger
 
-logger.debug("--- Loading crew_adapter module ---")
+_LOOP: asyncio.AbstractEventLoop | None = None
+_LOOP_THREAD: threading.Thread | None = None
 
 
-class SupporterLLM(BaseLLM):
+def _start_background_loop() -> asyncio.AbstractEventLoop:
+    global _LOOP, _LOOP_THREAD
+    if _LOOP is None:
+        _LOOP = asyncio.new_event_loop()
+        _LOOP_THREAD = threading.Thread(
+            target=_LOOP.run_forever, name="SupporterAsyncBridge", daemon=True
+        )
+        _LOOP_THREAD.start()
+        logger.debug("Background event loop started for sync-to-async bridging")
+    return _LOOP
+
+
+class SupporterLLM(BaseLLM):  # type: ignore[misc]
     model: str = Field(default=DEFAULT_MODEL)
     _supporter_provider: Any = PrivateAttr()
     _status_callback: Any | None = PrivateAttr(default=None)
 
-    def __init__(self, provider: Any, status_callback: Any | None = None, **kwargs):
-        logger.debug(
-            f"Initializing SupporterLLM (model: {kwargs.get('model', DEFAULT_MODEL)})"
-        )
+    def __init__(
+        self, provider: Any, status_callback: Any | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(model=kwargs.get("model", DEFAULT_MODEL), **kwargs)
         self._supporter_provider = provider
         self._status_callback = status_callback
+        _start_background_loop()
 
     def call(
         self,
@@ -34,51 +47,43 @@ class SupporterLLM(BaseLLM):
         from_agent: Any | None = None,
         response_model: type | None = None,
     ) -> str:
-        logger.debug("Entering SupporterLLM.call (sync bridge)")
         prompt = ""
         if isinstance(messages, str):
             prompt = messages
         elif isinstance(messages, list) and len(messages) > 0:
             prompt = messages[-1].get("content", "")
+
         if self._status_callback and from_agent:
             agent_role = getattr(from_agent, "role", DEFAULT_AGENT_ROLE)
             self._status_callback(agent_role)
-        options = {"use_search": True, "use_code_execution": True}
+
+        options: dict[str, Any] = {"use_search": True, "use_code_execution": True}
         if available_functions:
             options["registry"] = available_functions
-        try:
-            try:
-                asyncio.get_running_loop()
 
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(
-                        lambda: asyncio.run(
-                            self._supporter_provider.generate(prompt, options)
-                        )
-                    ).result()
-                return result.text
-            except RuntimeError:
-                return asyncio.run(
-                    self._supporter_provider.generate(prompt, options)
-                ).text
+        loop = _start_background_loop()
+        future = asyncio.run_coroutine_threadsafe(
+            self._supporter_provider.generate(prompt, options), loop
+        )
+        try:
+            result = future.result()
+            return str(result.text)
         except Exception as e:
             logger.error(f"SupporterLLM call failed: {e}")
             return f"Error executing model: {e}"
-        finally:
-            logger.debug("Exiting SupporterLLM.call")
 
     async def acall(self, messages: str | list[dict[str, str]], **kwargs: Any) -> str:
         logger.debug("Entering SupporterLLM.acall (async)")
         prompt = (
             messages if isinstance(messages, str) else messages[-1].get("content", "")
         )
-        options = {"use_search": True, "use_code_execution": True}
+        options: dict[str, Any] = {"use_search": True, "use_code_execution": True}
         available_functions = kwargs.get("available_functions")
         if available_functions:
             options["registry"] = available_functions
         result = await self._supporter_provider.generate(prompt, options)
         logger.debug("Exiting SupporterLLM.acall")
-        return result.text
+        return str(result.text)
 
     @property
     def _llm_type(self) -> str:

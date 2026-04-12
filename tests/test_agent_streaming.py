@@ -7,13 +7,13 @@ from supporter.index import LLMChunk
 
 
 @pytest.mark.asyncio
-async def test_chat_agent_execute_stream():
+async def test_chat_agent_execute_stream() -> None:
     mock_chunks = [
         LLMChunk(text="Hello", is_last=False),
         LLMChunk(text=" world", is_last=False),
     ]
 
-    async def mock_generator(*args, **kwargs):
+    async def mock_generator(*args: object, **kwargs: object) -> object:
         for chunk in mock_chunks:
             yield chunk
 
@@ -36,8 +36,8 @@ async def test_chat_agent_execute_stream():
 
 
 @pytest.mark.asyncio
-async def test_chat_agent_execute_stream_empty():
-    async def mock_empty_generator(*args, **kwargs):
+async def test_chat_agent_execute_stream_empty() -> None:
+    async def mock_empty_generator(*args: object, **kwargs: object) -> object:
         if False:
             yield
 

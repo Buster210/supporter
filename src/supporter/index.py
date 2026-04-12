@@ -1,12 +1,9 @@
 import asyncio
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import (
-    Any,
-    Protocol,
-    TypedDict,
-)
+from typing import Any, Protocol, TypedDict
 
 from google.genai.types import Content, GenerateContentConfig, Tool
 
@@ -20,18 +17,31 @@ from .config import (
 from .gemini_provider import GeminiProvider
 from .logger import logger
 
-logger.debug("--- Loading index module ---")
+__all__ = [
+    "DynamicPool",
+    "GeminiProvider",
+    "LLMChunk",
+    "LLMOptions",
+    "LLMProvider",
+    "LLMResult",
+    "LazyFallbackProvider",
+    "config",
+    "get_provider",
+    "is_model_error",
+    "is_rate_limit",
+    "should_trigger_fallback",
+]
 
 
 class LLMOptions(TypedDict, total=False):
     history: list[Content]
     model: str
     tools: list[Tool]
-    registry: dict[str, Callable]
-    interaction_id: str
+    registry: dict[str, Callable[..., Any]]
+    interaction_id: str | None
     use_search: bool
     use_code_execution: bool
-    system_instruction: str
+    system_instruction: str | None
     temperature: float
     top_p: float
     top_k: int
@@ -45,7 +55,7 @@ class LLMResult:
     model: str | None = None
     duration: float | None = None
     interaction_id: str | None = None
-    usage: dict[str, int] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
     raw: Any = None
     automatic_function_calling_history: list[Content] | None = None
     candidates: list[Any] = field(default_factory=list)
@@ -64,67 +74,48 @@ class LLMProvider(Protocol):
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult: ...
 
-    async def generate_stream(
+    def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> AsyncIterator[LLMChunk]: ...
 
     def get_name(self) -> str: ...
 
 
+GOOGLE_5XX_ERRORS = {
+    "InternalServerError",
+    "ServiceUnavailable",
+    "NotFound",
+    "BadGateway",
+    "GatewayTimeout",
+    "APIError",
+}
+
+TRANSIENT_SIGNALS = {"unavailable", "overloaded", "internal error", "service level"}
+HTTP_ERRORS_5XX = {HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR}
+RATE_LIMIT_SIGNALS = {"quota", "too many requests", "429"}
+
+
 def is_rate_limit(error: Any) -> bool:
-    status = getattr(error, "status", None)
-    if status == HTTP_RATE_LIMIT:
+    if getattr(error, "status", None) == HTTP_RATE_LIMIT:
         return True
     message = str(error).lower()
-    return any(sig in message for sig in ["quota", "too many requests", "429"])
+    return any(sig in message for sig in RATE_LIMIT_SIGNALS)
 
 
 def is_model_error(error: Any, model_name: str | None = None) -> bool:
-    # Check for Google SDK 5XX exceptions by class name
     error_class_name = error.__class__.__name__
-    error_module = error.__class__.__module__
-    model_prefix = f"[{model_name}] " if model_name else ""
-    logger.debug(
-        f"{model_prefix}Checking error: {error_class_name} from {error_module}, "
-        f"message: {str(error)[:100]}"
-    )
-
-    google_5xx_errors = {
-        "InternalServerError",  # 500
-        "ServiceUnavailable",  # 503
-        "NotFound",  # 404
-        "BadGateway",  # 502
-        "GatewayTimeout",  # 504
-        "APIError",  # Generic API error
-    }
-    if error_class_name in google_5xx_errors:
-        logger.debug(
-            f"{model_prefix}Matched Google 5XX error by class name: {error_class_name}"
-        )
+    if error_class_name in GOOGLE_5XX_ERRORS:
         return True
 
-    # Check status attribute for other error types
     status = getattr(error, "status", None)
-    logger.debug(f"{model_prefix}Error status attribute: {status}")
-    if status in [HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR]:
-        logger.debug(f"{model_prefix}Matched error by status code: {status}")
+    if status in HTTP_ERRORS_5XX:
         return True
 
-    # Fallback to message matching
     message = str(error).lower()
-    transient_signals = ["unavailable", "overloaded", "internal error", "service level"]
-    if any(sig in message for sig in transient_signals):
-        logger.debug(f"{model_prefix}Matched error by transient signal in message")
+    if any(sig in message for sig in TRANSIENT_SIGNALS):
         return True
 
-    if any(code in message for code in ["404", "503", "500"]):
-        logger.debug(f"{model_prefix}Matched error by code in message")
-        return True
-
-    logger.debug(
-        f"{model_prefix}Error did not match any 5XX patterns: {error_class_name}"
-    )
-    return False
+    return any(code in message for code in ("404", "503", "500"))
 
 
 def should_trigger_fallback(error: Any) -> bool:
@@ -162,9 +153,9 @@ class DynamicPool(LLMProvider):
         self.model_name = model_name
         self.pool_size = min(pool_size, len(keys))
         self.next_key_index = 0
-        self.active_slots: list[GeminiProvider] = []
+        self.active_slots: deque[GeminiProvider] = deque()
         self.slot_available = asyncio.Event()
-        self.background_tasks: set[asyncio.Task] = set()
+        self.background_tasks: set[asyncio.Task[None]] = set()
 
         logger.debug(
             f"Initializing DynamicPool (size: {self.pool_size}) for {self.model_name}"
@@ -188,12 +179,8 @@ class DynamicPool(LLMProvider):
             logger.debug("Both active slots empty. Filling synchronously.")
             self._fill_slot()
 
-        provider = self.active_slots.pop(0)
-        if not self.active_slots:
-            self.slot_available.clear()
-        self.active_slots.append(provider)
-        self.slot_available.set()
-        return provider
+        self.active_slots.rotate(-1)
+        return self.active_slots[-1]
 
     def _replace_instance(self, provider: GeminiProvider) -> None:
         try:
@@ -205,7 +192,7 @@ class DynamicPool(LLMProvider):
                 "Destroying and replacing in background..."
             )
 
-            async def _bg_replace():
+            async def _bg_replace() -> None:
                 await asyncio.sleep(0)
                 logger.debug(f"Background task: Refilling slot for {self.model_name}")
                 self._fill_slot()
@@ -226,19 +213,21 @@ class DynamicPool(LLMProvider):
         logger.debug(f"Entering DynamicPool.generate ({self.model_name})")
 
         if _is_model_in_cooldown(self.model_name):
-            raise Exception(
+            raise RuntimeError(
                 f"Model '{self.model_name}' is in cooldown due to repeated "
                 "5XX errors. Please try again later."
             )
 
-        last_error = None
+        last_error: BaseException | None = None
         for attempt in range(len(self.keys)):
             while not self.active_slots:
                 await self.slot_available.wait()
 
             provider = self._rotate_and_get()
             try:
-                result = await provider.generate(prompt, options)
+                # Cast or convert LLMOptions to dict for GeminiProvider
+                provider_options = dict(options) if options else None
+                result: LLMResult = await provider.generate(prompt, provider_options)
                 if not result.model:
                     result.model = provider.get_name()
                 return result
@@ -265,7 +254,9 @@ class DynamicPool(LLMProvider):
                     await asyncio.sleep(0.2 * (attempt + 1))
                     continue
                 raise e
-        raise last_error
+        if last_error:
+            raise last_error
+        return None  # type: ignore[return-value]
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
@@ -273,12 +264,12 @@ class DynamicPool(LLMProvider):
         logger.debug(f"Entering DynamicPool.generate_stream ({self.model_name})")
 
         if _is_model_in_cooldown(self.model_name):
-            raise Exception(
+            raise RuntimeError(
                 f"Model '{self.model_name}' is in cooldown due to repeated "
                 "5XX errors. Please try again later."
             )
 
-        last_error = None
+        last_error: BaseException | None = None
         for attempt in range(len(self.keys)):
             while not self.active_slots:
                 await self.slot_available.wait()
@@ -286,7 +277,9 @@ class DynamicPool(LLMProvider):
             provider = self._rotate_and_get()
             yielded_any = False
             try:
-                async for chunk in provider.generate_stream(prompt, options):
+                # Cast or convert LLMOptions to dict for GeminiProvider
+                provider_options = dict(options) if options else None
+                async for chunk in provider.generate_stream(prompt, provider_options):
                     yielded_any = True
                     yield chunk
                 return
@@ -319,7 +312,8 @@ class DynamicPool(LLMProvider):
                         await asyncio.sleep(0.2 * (attempt + 1))
                         continue
                 raise e
-        raise last_error
+        if last_error:
+            raise last_error
 
     def get_name(self) -> str:
         return f"{self.model_name} (Dynamic Pool x{len(self.active_slots)})"

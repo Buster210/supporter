@@ -5,6 +5,7 @@ from crewai import Agent, Crew, Process, Task
 
 from .config import RESEARCHER_ROLE, WRITER_ROLE
 from .crew_adapter import SupporterLLM
+from .index import LLMResult
 from .logger import logger
 
 logger.debug("--- Loading crew_agent module ---")
@@ -71,9 +72,8 @@ class CrewManager:
             verbose=True,
         )
 
-    async def coordinate_execution(self, prompt: str) -> Any:
+    async def coordinate_execution(self, prompt: str) -> LLMResult:
         logger.debug(f"Entering coordinate_execution (prompt: {prompt[:50]}...)")
-        from .index import LLMResult
 
         try:
             crew = self._assemble_research_crew(prompt)

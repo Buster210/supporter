@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from supporter.index import LLMChunk
@@ -21,7 +23,7 @@ def get_mock_gemini_response(text: str = "Mocked Response") -> MagicMock:
     return response
 
 
-def create_mock_genai_client(**kwargs):
+def create_mock_genai_client(**kwargs: Any) -> MagicMock:
 
     client = MagicMock()
     client.models = MagicMock()
@@ -33,20 +35,20 @@ def create_mock_genai_client(**kwargs):
 
     res = get_mock_gemini_response("Mocked Response")
 
-    async def mock_generate(**kwargs):
+    async def mock_generate(**kwargs: Any) -> MagicMock:
         return res
 
-    async def mock_interaction(**kwargs):
+    async def mock_interaction(**kwargs: Any) -> None:
         return None
 
-    async def mock_stream(**kwargs):
-        async def internal_gen():
+    async def mock_stream(**kwargs: Any) -> AsyncIterator[LLMChunk]:
+        async def internal_gen() -> AsyncIterator[LLMChunk]:
             yield LLMChunk(text="Chunk 1", is_last=False)
             yield LLMChunk(text="Chunk 2", is_last=True)
 
         return internal_gen()
 
-    def mock_stream_sync(**kwargs):
+    def mock_stream_sync(**kwargs: Any) -> Iterator[LLMChunk]:
         yield from [
             LLMChunk(text="Chunk 1", is_last=False),
             LLMChunk(text="Chunk 2", is_last=True),

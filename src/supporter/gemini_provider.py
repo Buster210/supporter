@@ -2,7 +2,7 @@ import asyncio
 import functools
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from google import genai
 from google.genai import types
@@ -18,8 +18,8 @@ class GeminiProvider:
     def __init__(
         self,
         api_key: str,
-        model_name: Optional[str] = None,
-        system_instruction: Optional[str] = None,
+        model_name: str | None = None,
+        system_instruction: str | None = None,
     ):
         target_model = model_name or config.gemini_model
         logger.debug(f"Initializing GeminiProvider (model: {target_model})")
@@ -34,9 +34,9 @@ class GeminiProvider:
 
     def _prepare_contents(
         self,
-        prompt: Union[str, List[Content]],
-        history: Optional[List[Content]] = None,
-    ) -> List[Content]:
+        prompt: str | list[Content],
+        history: list[Content] | None = None,
+    ) -> list[Content]:
         history = history or []
         fresh_content = (
             [Content(role="user", parts=[Part(text=prompt)])]
@@ -45,10 +45,10 @@ class GeminiProvider:
         )
         return history + fresh_content
 
-    def _wrap_tool(self, name: str, func: Callable) -> Callable:
+    def _wrap_tool(self, name: str, func: Callable[..., Any]) -> Callable[..., Any]:
 
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
             try:
                 result = await func(*args, **kwargs)
@@ -59,7 +59,7 @@ class GeminiProvider:
                 raise
 
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
             try:
                 result = func(*args, **kwargs)
@@ -72,8 +72,8 @@ class GeminiProvider:
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
 
     def _transform_tools(
-        self, options: Optional[Dict[str, Any]] = None
-    ) -> Optional[List[Any]]:
+        self, options: dict[str, Any] | None = None
+    ) -> list[Any] | None:
         logger.debug("Entering GeminiProvider._transform_tools")
         if not options:
             return None
@@ -103,8 +103,8 @@ class GeminiProvider:
 
     async def generate(
         self,
-        prompt: Union[str, List[Content]],
-        options: Optional[Dict[str, Any]] = None,
+        prompt: str | list[Content],
+        options: dict[str, Any] | None = None,
     ) -> Any:
         logger.debug("Entering GeminiProvider.generate")
         from .index import LLMResult
@@ -177,8 +177,8 @@ class GeminiProvider:
 
     async def generate_stream(
         self,
-        prompt: Union[str, List[Content]],
-        options: Optional[Dict[str, Any]] = None,
+        prompt: str | list[Content],
+        options: dict[str, Any] | None = None,
     ) -> AsyncIterator[Any]:
         logger.debug("Entering GeminiProvider.generate_stream")
         from .index import LLMChunk

@@ -1,4 +1,5 @@
 import os
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -9,7 +10,7 @@ from supporter.index import get_provider
 
 
 @pytest.mark.asyncio
-async def test_gemini_provider_generate(mock_genai_client):
+async def test_gemini_provider_generate(mock_genai_client: Any) -> None:
     with patch.dict(
         os.environ,
         {
@@ -30,7 +31,7 @@ async def test_gemini_provider_generate(mock_genai_client):
 
 
 @pytest.mark.asyncio
-async def test_provider_streaming(mock_genai_client):
+async def test_provider_streaming(mock_genai_client: Any) -> None:
     with patch.dict(
         os.environ,
         {
@@ -55,7 +56,7 @@ async def test_provider_streaming(mock_genai_client):
 
 
 @pytest.mark.asyncio
-async def test_provider_options_propagation(mock_genai_client):
+async def test_provider_options_propagation(mock_genai_client: Any) -> None:
     with patch.dict(
         os.environ,
         {

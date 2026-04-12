@@ -1,6 +1,6 @@
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from google.genai.types import Content, Part, Tool
 
@@ -14,16 +14,16 @@ class ChatAgent:
     def __init__(
         self,
         provider: LLMProvider,
-        tools: Optional[List[Tool]] = None,
-        registry: Optional[Dict[str, Callable]] = None,
-        system_instruction: Optional[str] = None,
+        tools: list[Tool] | None = None,
+        registry: dict[str, Callable[..., Any]] | None = None,
+        system_instruction: str | None = None,
         use_search: bool = False,
         use_code_execution: bool = False,
     ):
         logger.debug("Initializing ChatAgent")
         self.provider = provider
-        self.history: List[Content] = []
-        self.current_interaction_id: Optional[str] = None
+        self.history: list[Content] = []
+        self.current_interaction_id: str | None = None
         self.tools = tools
         self.registry = registry
         self.system_instruction = system_instruction
@@ -37,8 +37,8 @@ class ChatAgent:
         options: LLMOptions = {
             "history": self.history,
             "interaction_id": self.current_interaction_id,
-            "tools": self.tools,
-            "registry": self.registry,
+            "tools": self.tools or [],
+            "registry": self.registry or {},
             "system_instruction": self.system_instruction,
             "use_search": self.use_search,
             "use_code_execution": self.use_code_execution,
@@ -75,8 +75,8 @@ class ChatAgent:
         options: LLMOptions = {
             "history": self.history,
             "interaction_id": self.current_interaction_id,
-            "tools": self.tools,
-            "registry": self.registry,
+            "tools": self.tools or [],
+            "registry": self.registry or {},
             "system_instruction": self.system_instruction,
             "use_search": self.use_search,
             "use_code_execution": self.use_code_execution,
@@ -91,7 +91,7 @@ class ChatAgent:
         logger.debug(f"Streaming complete. Accumulated length: {len(full_text)}")
         logger.debug("Exiting ChatAgent.execute_stream")
 
-    def get_history(self) -> List[Content]:
+    def get_history(self) -> list[Content]:
         return self.history
 
     def clear_history(self) -> None:
@@ -121,7 +121,7 @@ class CrewAgent:
     async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
         raise NotImplementedError("Streaming is not supported for CrewAgent")
 
-    def get_history(self) -> List[Content]:
+    def get_history(self) -> list[Content]:
         return []
 
     def clear_history(self) -> None:
