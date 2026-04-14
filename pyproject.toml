@@ -20,7 +20,10 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.3.0",
-    "pre-commit>=4.0.0",
+    "prek>=0.3.8",
+    "mypy>=1.15.0",
+    "bandit>=1.8.0",
+    "detect-secrets>=1.5.0",
 ]
 
 [build-system]
@@ -33,7 +36,7 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "S", "B", "C4", "ASYNC", "PIE", "RSE", "RET", "SIM", "T20", "RUF"]
-ignore = ["S101", "B019", "T201"]
+ignore = ["S101", "B019", "T201", "UP043"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -42,3 +45,20 @@ indent-style = "space"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B101"]

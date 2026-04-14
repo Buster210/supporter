@@ -7,8 +7,7 @@ from supporter.index import LLMResult
 
 
 @pytest.mark.asyncio
-async def test_tool_dispatch_to_registry():
-    # Setup a provider with a mocked automatic call loop
+async def test_tool_dispatch_to_registry() -> None:
     from google.genai import types
 
     mock_history = [
@@ -47,7 +46,7 @@ async def test_tool_dispatch_to_registry():
     # Setup agent with registry
     time_called = False
 
-    def mock_get_time():
+    def mock_get_time() -> dict[str, str]:
         nonlocal time_called
         time_called = True
         return {"time": "12:00 PM"}

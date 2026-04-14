@@ -1,13 +1,15 @@
 import os
-from unittest.mock import patch
+from collections.abc import Generator
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
+
 from tests.mocks import create_mock_genai_client
 
 
 @pytest.fixture(autouse=True)
-def setup_env():
-    """Sets up default environment variables for tests."""
+def setup_env() -> Generator[None, None, None]:
     with patch.dict(
         os.environ,
         {
@@ -21,11 +23,11 @@ def setup_env():
 
 
 @pytest.fixture
-def mock_genai_client():
+def mock_genai_client() -> Generator[MagicMock, None, None]:
     """Patches the genai.Client in the provider module."""
     with patch("supporter.gemini_provider.genai.Client") as mock_client:
 
-        def side_effect(**kwargs):
+        def side_effect(**kwargs: dict[str, Any]) -> MagicMock:
             instance = create_mock_genai_client(**kwargs)
             mock_client.return_value = instance
             return instance

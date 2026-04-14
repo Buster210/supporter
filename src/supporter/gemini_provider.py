@@ -11,20 +11,31 @@ from google.genai.types import Content, GenerateContentConfig, Part
 from .config import config
 from .logger import logger
 
+logger.debug("--- Loading gemini_provider module ---")
+
 
 class GeminiProvider:
-    def __init__(self, api_key: str, system_instruction: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        model_name: str | None = None,
+        system_instruction: str | None = None,
+    ):
+        target_model = model_name or config.gemini_model
+        logger.debug(f"Initializing GeminiProvider (model: {target_model})")
         retry_options = types.HttpRetryOptions(attempts=2)
         self.client = genai.Client(
             api_key=api_key, http_options=types.HttpOptions(retry_options=retry_options)
         )
-        self.model_name = config.gemini_model
+        self.model_name = target_model
         self.default_system_instruction = (
             system_instruction or config.default_system_instruction
         )
 
     def _prepare_contents(
-        self, prompt: str | list[Content], history: list[Content] = None
+        self,
+        prompt: str | list[Content],
+        history: list[Content] | None = None,
     ) -> list[Content]:
         history = history or []
         fresh_content = (
@@ -34,25 +45,25 @@ class GeminiProvider:
         )
         return history + fresh_content
 
-    def _wrap_tool(self, name: str, func: Callable) -> Callable:
+    def _wrap_tool(self, name: str, func: Callable[..., Any]) -> Callable[..., Any]:
 
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            logger.debug(f"Calling tool: {name}")
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
             try:
                 result = await func(*args, **kwargs)
-                logger.debug(f"Tool {name} success")
+                logger.debug(f"Tool {name} success: {result}")
                 return result
             except Exception as e:
                 logger.error(f"Tool {name} failed: {e!s}")
                 raise
 
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
-            logger.debug(f"Calling tool: {name}")
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
             try:
                 result = func(*args, **kwargs)
-                logger.debug(f"Tool {name} success")
+                logger.debug(f"Tool {name} success: {result}")
                 return result
             except Exception as e:
                 logger.error(f"Tool {name} failed: {e!s}")
@@ -63,6 +74,7 @@ class GeminiProvider:
     def _transform_tools(
         self, options: dict[str, Any] | None = None
     ) -> list[Any] | None:
+        logger.debug("Entering GeminiProvider._transform_tools")
         if not options:
             return None
         tools = options.get("tools", [])
@@ -86,17 +98,21 @@ class GeminiProvider:
             final_tools.append(types.Tool(google_search=types.GoogleSearchRetrieval()))
         if use_code_execution:
             final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+        logger.debug(f"Exiting _transform_tools (Final counts: {len(final_tools)})")
         return final_tools or None
 
     async def generate(
-        self, prompt: str | list[Content], options: dict[str, Any] | None = None
+        self,
+        prompt: str | list[Content],
+        options: dict[str, Any] | None = None,
     ) -> Any:
+        logger.debug("Entering GeminiProvider.generate")
         from .index import LLMResult
 
         options = options or {}
         interaction_id = options.get("interaction_id")
         transformed_tools = self._transform_tools(options)
-        config = GenerateContentConfig(
+        config_inst = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
             or self.default_system_instruction,
             temperature=options.get("temperature"),
@@ -116,17 +132,18 @@ class GeminiProvider:
                     model=self.model_name,
                     input=prompt if isinstance(prompt, str) else str(prompt),
                     previous_interaction_id=interaction_id,
-                    config=config,
+                    config=config_inst,
                 )
             except Exception as e:
                 logger.warning(
-                    f"Failed to continue interaction {interaction_id}. Falling back. Error: {e}"
+                    f"Failed to continue interaction {interaction_id}. "
+                    f"Falling back. Error: {e}"
                 )
         if not result:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=self._prepare_contents(prompt, options.get("history")),
-                config=config,
+                config=config_inst,
             )
         end_time = time.perf_counter()
         history = getattr(result, "automatic_function_calling_history", None)
@@ -146,6 +163,7 @@ class GeminiProvider:
             if usage_meta
             else {}
         )
+        logger.debug("Exiting GeminiProvider.generate with success")
         return LLMResult(
             text=result.text or "",
             model=self.model_name,
@@ -158,13 +176,16 @@ class GeminiProvider:
         )
 
     async def generate_stream(
-        self, prompt: str | list[Content], options: dict[str, Any] | None = None
+        self,
+        prompt: str | list[Content],
+        options: dict[str, Any] | None = None,
     ) -> AsyncIterator[Any]:
+        logger.debug("Entering GeminiProvider.generate_stream")
         from .index import LLMChunk
 
         options = options or {}
         transformed_tools = self._transform_tools(options)
-        config = GenerateContentConfig(
+        config_inst = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
             or self.default_system_instruction,
             tools=transformed_tools,
@@ -172,12 +193,15 @@ class GeminiProvider:
             if transformed_tools
             else None,
         )
-        async for chunk in self.client.aio.models.generate_content_stream(
+        stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
             contents=self._prepare_contents(prompt, options.get("history")),
-            config=config,
-        ):
-            yield LLMChunk(text=chunk.text or "", is_last=False, raw=chunk)
+            config=config_inst,
+        )
+        async for chunk in stream:
+            yield LLMChunk(
+                text=chunk.text or "", is_last=False, model=self.model_name, raw=chunk
+            )
 
     def get_name(self) -> str:
         return self.model_name

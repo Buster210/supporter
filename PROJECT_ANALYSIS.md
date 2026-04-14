@@ -1,57 +1,29 @@
-# Project Analysis: Supporter
+# Master Context: Supporter
 
-## Overview
+**Supporter** is a Python Textual TUI chat client powered by Google Gemini, designed for rapid terminal interaction with CrewAI multi-agent support and dynamic API key load balancing.
 
-**Supporter** is a Python-based Terminal User Interface (TUI) AI chat client powered by the Google Gemini model. It is designed to be a lightweight yet powerful tool for interacting with AI agents directly from the terminal.
+## Architecture & Components
 
-## Core Purpose
+1. **UI (`tui.py`)**: Manages app state, commands, and non-blocking worker orchestration. Employs concurrent query tracking for real-time indicators.
+2. **Agent Orchestration (`agent.py`)**:
+    - `ChatAgent`: Handles interactions, tools, and `interaction_id` continuity for single-agent flows.
+    - `CrewAgent` (`crew_agent.py`): Assembles a sequential Crew (Researcher/Writer).
+3. **DynamicPool (`index.py`)**: Manages model instances across multiple API keys using `collections.deque` for O(1) rotation and load balancing. Employs centralized error classification (`is_model_error`) to trigger background replacements on transient 5XX signals.
+4. **LazyFallbackProvider**: Coordinates failover logic (e.g. from `gemma-4-31b-it` to `gemini-2.5-flash-lite`).
+5. **Provider (`gemini_provider.py`)**: `google-genai` wrapper with lazy client initialization and `_tool_cache` to minimize tool transformation overhead. Handles dynamic `_transform_tools` injection and `interactions.create`.
+6. **Adapter (`crew_adapter.py`)**: Bridges `LLMProvider` with CrewAI's `BaseLLM` using a dedicated background event loop thread (`SupporterAsyncBridge`) for efficient sync-to-async execution via `run_coroutine_threadsafe`.
+7. **Observability (`logger.py`)**: `SupporterFormatter` provides high-fidelity lifecycle tracking and initialization.
 
-The project serves as a migration/implementation of an AI chat client that supports advanced features like multi-agent collaboration, load balancing across multiple API keys, and robust error handling through model fallbacks.
+## Environment Stack
 
-## Key Features
+- **Tech**: Python 3.13+, `google-genai`, `crewai`, `textual`, `rich`, `python-dotenv`.
+- **Config Variables**:
+  - `GEMINI_API_KEYS` (CSV for balancing)
+  - `LLM_PROVIDER`, `LOG_LEVEL`, `LOG_FILE`
+  - `GEMINI_MODEL` (Default: `gemma-4-31b-it`), `GEMINI_FALLBACK_MODEL`
 
-- **TUI Interface**: Built with [Textual](https://github.com/Textualize/textual), providing a modern and interactive terminal experience with real-time thinking indicators and gradient headers.
-- **Multi-Agent Collaboration**: Integrated with [CrewAI](https://github.com/joaomdmoraes/crewai), supporting a "Crew" mode with specialized Researcher and Writer agents.
-- **Advanced Load Balancing**: Implements a `RoundRobinPool` to cycle through multiple `GEMINI_API_KEYS`, effectively multiplying the available rate limits.
-- **Resilient Fallback**: The `FallbackProvider` automatically switches from the primary model (e.g., `gemini-flash-lite-latest`) to a fallback (e.g., `gemini-2.5-flash-lite`) on transient errors or rate limits.
-- **Unified Tool Registry**: Wraps both sync and async Python functions into a format compatible with Gemini's automatic function calling.
+## Technical Health & Roadmap
 
-## System Architecture
-
-### Component Relationships
-
-The project follows a layered architecture:
-
-1. **UI Layer (`tui.py`)**: Manages the Textual application state, input processing, and command execution (`/crew`, `/clear`, `/exit`).
-2. **Agent Orchestration Layer**:
-    - `ChatAgent`: Handles single-agent interactions with Google Search and Code Execution.
-    - `CrewAgent` (`crew_agent.py`): Managed by `CrewManager`, assembles a sequential Crew of Researcher and Writer roles.
-3. **LLM Abstraction Layer (`index.py`)**:
-    - Defines the `LLMProvider` protocol.
-    - `RoundRobinPool`: Distributes calls across API keys.
-    - `FallbackProvider`: Handles model-level failover.
-4. **Provider Layer (`gemini_provider.py`)**: Low-level wrapper for the `google-genai` SDK, handling prompt preparation, tool wrapping, and response parsing.
-5. **Adapter Layer (`crew_adapter.py`)**: Bridges the custom `LLMProvider` protocol with CrewAI's `BaseLLM`, handling complex threading requirements (running async provider logic inside CrewAI's execution context).
-
-### Logic Flows
-
-- **Message Cycle**: `Input.Submitted` -> `_process_message_cycle` -> `Agent.execute` -> `LLMProvider.generate` -> UI update.
-- **Load Balancing**: `generate` call -> `RoundRobinPool` picks next key -> `GeminiProvider` calls API -> On failure (429), `RoundRobinPool` retries with next key.
-- **Fallback**: If all keys in the primary model pool fail, `FallbackProvider` catches the exception and routes the request to the secondary model pool.
-
-## Technical Stack
-
-- **Languages**: Python 3.13+ (using `uv` for lightning-fast dependency management)
-- **AI Frameworks**: `google-genai` (Official SDK), `crewai` (Agentic framework)
-- **UI Framework**: `textual` (TUI framework), `rich` (Styling)
-- **Environment Management**: `python-dotenv`, `pydantic` (for configuration)
-
-## Project Structure
-
-- `src/supporter/`: Core logic
-  - `tui.py`: Main entry point for the Textual application.
-  - `gemini_provider.py`: Handles interaction with Google Gemini API.
-  - `crew_adapter.py` & `crew_agent.py`: Integration with CrewAI.
-  - `config.py`: Configuration and environment variable management.
-- `tests/`: Automated test suite.
-- `pyproject.toml`: Dependency and build configuration.
+- **Status**: [✅ Approve] Performant streaming, secure environment handling, and optimized resource rotation.
+- **Sync/Async Bridge**: Optimized via persistent background loop thread (`SupporterAsyncBridge`), eliminating the overhead of per-call `ThreadPoolExecutor` management.
+- **State/Persistence**: History is currently ephemeral. Roadmap includes SQLite (`aiosqlite`) persistence and multimodal input processing.

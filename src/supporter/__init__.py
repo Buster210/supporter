@@ -13,10 +13,12 @@ from .index import (
 __all__ = [
     "ChatAgent",
     "CrewAgent",
+    "DynamicPool",
     "GeminiProvider",
     "LLMChunk",
     "LLMOptions",
     "LLMResult",
+    "LazyFallbackProvider",
     "get_provider",
     "is_model_error",
     "is_rate_limit",

@@ -5,7 +5,7 @@ from .config import config
 
 
 class SupporterFormatter(logging.Formatter):
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.fromtimestamp(record.created).strftime(
             "%m/%d/%Y, %I:%M:%S %p"
         )
@@ -19,7 +19,7 @@ logger = logging.getLogger("supporter")
 logger.debug("--- Loading logger module ---")
 
 
-def init_logger():
+def init_logger() -> None:
     try:
         with open(config.log_file, "w") as f:
             f.write("")
@@ -35,7 +35,8 @@ def init_logger():
     logger.addHandler(file_handler)
     logger.info(f"Logging initialized at level: {log_level_str}")
     logger.debug(
-        f"Config loaded: model={config.gemini_model}, provider={config.provider}, log_file={config.log_file}"
+        f"Config loaded: model={config.gemini_model}, "
+        f"provider={config.provider}, log_file={config.log_file}"
     )
     logger.debug(f"API Keys count: {len(config.gemini_api_keys)}")
 

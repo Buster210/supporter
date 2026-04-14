@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+from typing import ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.events import MouseScrollDown, MouseScrollUp
+from textual.timer import Timer
 from textual.widgets import Input, Label, Static
 
 from . import ChatAgent, CrewAgent, get_provider
@@ -88,21 +90,26 @@ class MessageBubble(Vertical):
         self.duration = duration
         self.agents = agents
         self.streaming = streaming
-        self._bubble_static = None
-        self._meta_label = None
+        self._bubble_static: Static | None = None
+        self._meta_label: Label | None = None
         self.add_class("right" if role == "user" else "left")
 
     def compose(self) -> ComposeResult:
         is_user = self.role == "user"
         border_color = "green" if is_user else "blue"
-        self._bubble_static = Static(
+        static_widget = Static(
             self.content, classes=f"bubble {border_color}", expand=False, markup=False
         )
-        yield self._bubble_static
+        self._bubble_static = static_widget
+        yield static_widget
 
-        if not is_user and not self.streaming and (self.model or self.duration is not None):
-            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
-            yield self._meta_label
+        meta_label = Label("", classes="message-meta")
+        self._meta_label = meta_label
+        if is_user or self.streaming or (not self.model and self.duration is None):
+            meta_label.display = False
+        else:
+            meta_label.update(self._get_meta_text())
+        yield meta_label
 
     def _get_meta_text(self) -> str:
         model_info = self.model or "Unknown"
@@ -117,7 +124,7 @@ class MessageBubble(Vertical):
         if self._bubble_static:
             self._bubble_static.update(self.content)
 
-    async def finalize(
+    def finalize(
         self,
         model: str | None = None,
         duration: float | None = None,
@@ -127,25 +134,145 @@ class MessageBubble(Vertical):
         self.duration = duration or self.duration
         self.agents = agents or self.agents
         self.streaming = False
-        if not self._meta_label:
-            self._meta_label = Label(self._get_meta_text(), classes="message-meta")
-            await self.mount(self._meta_label)
-        else:
+        if self._meta_label:
             self._meta_label.update(self._get_meta_text())
+            self._meta_label.display = True
 
 
-class SupporterApp(App):
-    CSS = f"\n    Screen {{\n        background: {THEME['background']};\n        width: 100%;\n        height: 100%;\n        padding: 0;\n        margin: 0;\n    }}\n\n\n    #main-container {{\n        width: 100%;\n        height: 100%;\n        layout: vertical;\n        background: transparent;\n        overflow-y: scroll;\n        scrollbar-size: 0 0;\n    }}\n\n    SupporterHeader {{\n        height: 5;\n        content-align: center middle;\n        background: transparent;\n        margin-top: 1;\n        color: {THEME['header_teal']};\n        text-style: bold;\n    }}\n\n    #chat-view {{\n        width: 100%;\n        height: 1fr;\n        padding: 0;\n        margin: 0;\n        background: transparent;\n        layout: vertical;\n        overflow-y: scroll;\n        scrollbar-size: 0 0;\n    }}\n\n    MessageBubble {{\n        width: 1fr;\n        height: auto;\n        margin: 0;\n        padding: 0;\n        overflow: hidden;\n    }}\n\n    MessageBubble.left  {{ align-horizontal: left; }}\n    MessageBubble.right {{ align-horizontal: right; }}\n\n    .bubble {{\n        width: auto;\n        max-width: 60%;\n        height: auto;\n        padding: 0 1;\n        margin: 0;\n        background: {THEME['bubble_bg']};\n        border: round #444;\n    }}\n\n    .bubble.green {{\n        border: round {THEME['magenta']};\n        color: {THEME['magenta']};\n    }}\n\n    .bubble.blue {{\n        border: round {THEME['header_teal']};\n        color: {THEME['header_teal']};\n    }}\n\n    .message-meta {{\n        color: {THEME['yellow']};\n        text-style: italic;\n        margin: 0 0 0 1;\n        width: auto;\n    }}\n\n    #input-area {{\n        height: 3;\n        border: solid {THEME['magenta']};\n        margin: 0;\n        padding: 0 1;\n        background: transparent;\n    }}\n\n    #prompt-row {{\n        height: 100%;\n    }}\n\n    #prompt-row {{\n        height: 1;\n        align: left middle;\n    }}\n\n    #prompt-symbol {{\n        color: {THEME['green']};\n        text-style: bold;\n        width: 2;\n    }}\n\n    Input {{\n        background: transparent !important;\n        border: none !important;\n        padding: 0 !important;\n        margin: 0 !important;\n        height: 1 !important;\n        color: {THEME['green']};\n    }}\n\n    #user-input {{\n        width: 1fr;\n    }}\n\n    #thinking-indicator {{\n        color: {THEME['yellow']};\n        text-style: italic;\n        margin-left: 2;\n        height: 1;\n    }}\n    "
-    BINDINGS = [
+class SupporterApp(App[None]):
+    CSS = f"""
+    Screen {{
+        background: {THEME["background"]};
+        width: 100%;
+        height: 100%;
+        padding: 0;
+        margin: 0;
+    }}
+
+    #main-container {{
+        width: 100%;
+        height: 100%;
+        layout: vertical;
+        background: transparent;
+        overflow-y: scroll;
+        scrollbar-size: 0 0;
+    }}
+
+    SupporterHeader {{
+        height: 5;
+        content-align: center middle;
+        background: transparent;
+        margin-top: 1;
+        color: {THEME["header_teal"]};
+        text-style: bold;
+    }}
+
+    #chat-view {{
+        width: 100%;
+        height: 1fr;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        layout: vertical;
+        overflow-y: scroll;
+        scrollbar-size: 0 0;
+    }}
+
+    MessageBubble {{
+        width: 1fr;
+        height: auto;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+    }}
+
+    MessageBubble.left  {{ align-horizontal: left; }}
+    MessageBubble.right {{ align-horizontal: right; }}
+
+    .bubble {{
+        width: auto;
+        max-width: 60%;
+        height: auto;
+        padding: 0 1;
+        margin: 0;
+        background: {THEME["bubble_bg"]};
+        border: round #444;
+    }}
+
+    .bubble.green {{
+        border: round {THEME["magenta"]};
+        color: {THEME["magenta"]};
+    }}
+
+    .bubble.blue {{
+        border: round {THEME["header_teal"]};
+        color: {THEME["header_teal"]};
+    }}
+
+    .message-meta {{
+        color: {THEME["yellow"]};
+        text-style: italic;
+        margin: 0 0 0 1;
+        width: auto;
+    }}
+
+    #input-area {{
+        height: 3;
+        border: solid {THEME["magenta"]};
+        margin: 0;
+        padding: 0 1;
+        background: transparent;
+    }}
+
+    #prompt-row {{
+        height: 100%;
+    }}
+
+    #prompt-row {{
+        height: 1;
+        align: left middle;
+    }}
+
+    #prompt-symbol {{
+        color: {THEME["green"]};
+        text-style: bold;
+        width: 2;
+    }}
+
+    Input {{
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        height: 1 !important;
+        color: {THEME["green"]};
+    }}
+
+    #user-input {{
+        width: 1fr;
+    }}
+
+    #thinking-indicator {{
+        color: {THEME["yellow"]};
+        text-style: italic;
+        margin-left: 2;
+        height: 1;
+    }}
+    #user-input:focus {{
+        border: solid {THEME["magenta"]};
+    }}
+    """
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+c", "quit", "Quit", show=True),
         Binding("ctrl+l", "clear_screen", "Clear", show=True),
     ]
 
     def __init__(self) -> None:
+        logger.debug("Initializing SupporterApp")
         super().__init__()
-        self.agent = None
-        self.is_thinking = False
-        self._spinner_timer = None
+        self.agent: ChatAgent | CrewAgent | None = None
+        self.active_queries = 0
+        self._spinner_timer: Timer | None = None
         self._spinner_idx: int = 0
         self.crew_mode = True
         self.is_activating_crew = False
@@ -157,6 +284,7 @@ class SupporterApp(App):
         self.call_from_thread(self._tick_spinner)
 
     async def on_mount(self) -> None:
+        logger.debug("Entering SupporterApp.on_mount")
         init_logger()
         logger.info("Starting Supporter TUI")
         try:
@@ -167,7 +295,14 @@ class SupporterApp(App):
             logger.error(msg)
             self.notify(msg, severity="error")
 
+    async def on_unmount(self) -> None:
+        logger.debug("SupporterApp unmounting")
+        if self._spinner_timer:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+
     async def _setup_agent(self, use_crew: bool = False) -> None:
+        logger.debug(f"Entering _setup_agent (use_crew={use_crew})")
         provider = get_provider()
         if use_crew:
             self.agent = CrewAgent(
@@ -177,7 +312,10 @@ class SupporterApp(App):
         else:
             self.agent = ChatAgent(
                 provider,
-                system_instruction="You are a helpful assistant. Be concise and professional. You can use Google Search and Code Execution when needed.",
+                system_instruction=(
+                    "You are a helpful assistant. Be concise and professional. "
+                    "You can use Google Search and Code Execution when needed."
+                ),
                 use_search=True,
                 use_code_execution=True,
             )
@@ -190,14 +328,36 @@ class SupporterApp(App):
                 pass
             yield Static("", id="thinking-indicator", markup=False)
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
-                yield Label("❯", id="prompt-symbol")
+                yield Label(">", id="prompt-symbol")
                 yield Input(
-                    placeholder="Type a message... (/crew to toggle, /clear to reset, /exit to quit)",
+                    placeholder=(
+                        "Type a message... (/crew to toggle, /clear to reset, "
+                        "/exit to quit)"
+                    ),
                     id="user-input",
                 )
 
     def action_clear_screen(self) -> None:
-        self.action_clear()
+        """Clear the chat view and agent history."""
+        if self.agent:
+            self.agent.clear_history()
+        self.query_one("#chat-view").query("*").remove()
+
+    def _start_thinking(self) -> None:
+        self.active_queries += 1
+        if self.active_queries == 1:
+            self._spinner_idx = 0
+            if self._spinner_timer:
+                self._spinner_timer.stop()
+            self._spinner_timer = self.set_interval(0.15, self._tick_spinner)
+
+    def _stop_thinking(self) -> None:
+        self.active_queries = max(0, self.active_queries - 1)
+        if self.active_queries == 0:
+            if self._spinner_timer:
+                self._spinner_timer.stop()
+                self._spinner_timer = None
+            self.query_one("#thinking-indicator", Static).update("")
 
     def _tick_spinner(self) -> None:
         frame = SPINNER_FRAMES[self._spinner_idx % len(SPINNER_FRAMES)]
@@ -215,28 +375,29 @@ class SupporterApp(App):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         user_text = event.value.strip()
-        if not user_text or self.is_thinking:
+        if not user_text:
             return
         self.query_one("#user-input", Input).value = ""
+        self.query_one("#user-input").focus()
         if user_text.startswith("/"):
             await self._handle_command(user_text.lower())
             return
-        await self._process_message_cycle(user_text)
+        chat_view = self.query_one("#chat-view")
+        chat_view.mount(MessageBubble(role="user", content=user_text))
+        chat_view.scroll_end()
+        self.run_worker(self._process_message_cycle(user_text, mount_user=False))
 
     async def _handle_command(self, command: str) -> None:
+        logger.debug(f"Handling TUI command: {command}")
         if command == "/exit":
             self.exit()
         elif command == "/clear":
-            if self.agent:
-                self.agent.clear_history()
-            self.query_one("#chat-view").query("*").remove()
+            self.action_clear_screen()
         elif command == "/crew":
             self.crew_mode = not self.crew_mode
             status = "ENABLED" if self.crew_mode else "DISABLED"
-            self.is_thinking = True
+            self._start_thinking()
             self.is_activating_crew = True
-            self._spinner_idx = 0
-            self._spinner_timer = self.set_interval(0.15, self._tick_spinner)
             try:
                 await self._setup_agent(use_crew=self.crew_mode)
                 chat_view = self.query_one("#chat-view")
@@ -245,22 +406,19 @@ class SupporterApp(App):
                 )
                 chat_view.scroll_end()
             finally:
-                self.is_thinking = False
                 self.is_activating_crew = False
-                if self._spinner_timer:
-                    self._spinner_timer.stop()
-                    self._spinner_timer = None
-                self.query_one("#thinking-indicator", Static).update("")
+                self._stop_thinking()
 
-    async def _process_message_cycle(self, text: str) -> None:
+    async def _process_message_cycle(self, text: str, mount_user: bool = True) -> None:
+        logger.debug("Entering _process_message_cycle")
         chat_view = self.query_one("#chat-view")
-        await chat_view.mount(MessageBubble(role="user", content=text))
-        chat_view.scroll_end()
+        if mount_user:
+            await chat_view.mount(MessageBubble(role="user", content=text))
+            chat_view.scroll_end()
+            self.query_one("#user-input").focus()
         self.current_active_agent = ""
-        self.is_thinking = True
         self.status_label = "Thinking"
-        self._spinner_idx = 0
-        self._spinner_timer = self.set_interval(0.15, self._tick_spinner)
+        self._start_thinking()
         start_time = time.perf_counter()
         try:
             if not self.agent:
@@ -269,7 +427,9 @@ class SupporterApp(App):
             if isinstance(self.agent, CrewAgent):
                 response = await self.agent.execute(text)
                 ui_duration = time.perf_counter() - start_time
-                agent_roles = response.usage.get("agents") if response.usage else None
+                agent_roles: list[str] | None = (
+                    response.usage.get("agents") if response.usage else None
+                )
                 await chat_view.mount(
                     MessageBubble(
                         role="agent",
@@ -294,7 +454,9 @@ class SupporterApp(App):
                             continue
                         first_chunk = False
                         self.status_label = "Streaming"
-                        bubble = MessageBubble(role="agent", content=accumulated_text, streaming=True)
+                        bubble = MessageBubble(
+                            role="agent", content=accumulated_text, streaming=True
+                        )
                         await chat_view.mount(bubble)
                         chat_view.scroll_end()
                     else:
@@ -304,21 +466,18 @@ class SupporterApp(App):
 
                 if bubble:
                     ui_duration = time.perf_counter() - start_time
-                    await bubble.finalize(model=actual_model, duration=ui_duration)
+                    bubble.finalize(model=actual_model, duration=ui_duration)
                     chat_view.scroll_end()
         except Exception as e:
             logger.error(f"Error during agent execution: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
             chat_view.scroll_end()
         finally:
-            self.is_thinking = False
-            if self._spinner_timer:
-                self._spinner_timer.stop()
-                self._spinner_timer = None
-            self.query_one("#thinking-indicator", Static).update("")
+            self._stop_thinking()
+        logger.debug("Exiting _process_message_cycle")
 
 
-def main():
+def main() -> None:
     app = SupporterApp()
     app.run()
 
