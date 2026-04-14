@@ -31,6 +31,8 @@ class GeminiProvider:
         self.default_system_instruction = (
             system_instruction or config.default_system_instruction
         )
+        self._tool_cache: list[Any] | None = None
+        self._last_tool_key: Any = None
 
     def _prepare_contents(
         self,
@@ -74,13 +76,27 @@ class GeminiProvider:
     def _transform_tools(
         self, options: dict[str, Any] | None = None
     ) -> list[Any] | None:
-        logger.debug("Entering GeminiProvider._transform_tools")
         if not options:
             return None
+
         tools = options.get("tools", [])
         registry = options.get("registry") or {}
         use_search = options.get("use_search", False)
         use_code_execution = options.get("use_code_execution", False)
+
+        # Stable key for caching: identities for complex objects, values for simple ones
+        current_key = (
+            tuple(id(t) for t in tools),
+            tuple(sorted((name, id(func)) for name, func in registry.items())),
+            use_search,
+            use_code_execution,
+        )
+
+        if self._last_tool_key == current_key:
+            logger.debug("Using cached tool transformations")
+            return self._tool_cache
+
+        logger.debug("Entering GeminiProvider._transform_tools (Cache Miss)")
         final_tools = list(tools) if tools else []
         declared_names = set()
         for t in final_tools:
@@ -98,8 +114,11 @@ class GeminiProvider:
             final_tools.append(types.Tool(google_search=types.GoogleSearchRetrieval()))
         if use_code_execution:
             final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+
+        self._tool_cache = final_tools or None
+        self._last_tool_key = current_key
         logger.debug(f"Exiting _transform_tools (Final counts: {len(final_tools)})")
-        return final_tools or None
+        return self._tool_cache
 
     async def generate(
         self,
