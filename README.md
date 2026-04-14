@@ -34,8 +34,8 @@ uv sync --extra dev
 
    ```bash
    GEMINI_API_KEYS=your_key_1,your_key_2
-   GEMINI_MODEL=gemini-flash-lite-latest
-   GEMINI_FALLBACK_MODEL=gemini-2.0-flash
+   GEMINI_MODEL=gemma-4-31b-it
+   GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
    LOG_LEVEL=info
    ```
 

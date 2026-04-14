@@ -8,12 +8,11 @@
 2. **Agent Orchestration (`agent.py`)**:
     - `ChatAgent`: Handles interactions, tools, and `interaction_id` continuity for single-agent flows.
     - `CrewAgent` (`crew_agent.py`): Assembles a sequential Crew (Researcher/Writer).
-3. **LLM Abstraction (`index.py`)**:
-    - `DynamicPool`: Lazily manages/rotates instances across multiple keys to multiply rate limits. Triggers background `asyncio.create_task` replacements on 429/500 errors.
-    - `LazyFallbackProvider`: Coordinates failover logic (e.g. from `gemini-flash-lite` to `gemini-2.0-flash`).
-4. **Provider (`gemini_provider.py`)**: `google-genai` wrapper handling `interactions.create` (aio) continuity and dynamic `_transform_tools` injection (wraps sync/async functions into Gemini tools).
-5. **Adapter (`crew_adapter.py`)**: Bridges `LLMProvider` with CrewAI's `BaseLLM` using an `asyncio.run` ThreadPool executor to bridge async provider logic into CrewAI's sequential execution.
-6. **Observability (`logger.py`)**: `SupporterFormatter` provides high-fidelity lifecycle tracking and initialization.
+3. **DynamicPool (`index.py`)**: Manages model instances across multiple API keys using `collections.deque` for O(1) rotation and load balancing. Employs centralized error classification (`is_model_error`) to trigger background replacements on transient 5XX signals.
+4. **LazyFallbackProvider**: Coordinates failover logic (e.g. from `gemma-4-31b-it` to `gemini-2.5-flash-lite`).
+5. **Provider (`gemini_provider.py`)**: `google-genai` wrapper with lazy client initialization and `_tool_cache` to minimize tool transformation overhead. Handles dynamic `_transform_tools` injection and `interactions.create`.
+6. **Adapter (`crew_adapter.py`)**: Bridges `LLMProvider` with CrewAI's `BaseLLM` using a dedicated background event loop thread (`SupporterAsyncBridge`) for efficient sync-to-async execution via `run_coroutine_threadsafe`.
+7. **Observability (`logger.py`)**: `SupporterFormatter` provides high-fidelity lifecycle tracking and initialization.
 
 ## Environment Stack
 
@@ -21,10 +20,10 @@
 - **Config Variables**:
   - `GEMINI_API_KEYS` (CSV for balancing)
   - `LLM_PROVIDER`, `LOG_LEVEL`, `LOG_FILE`
-  - `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`
+  - `GEMINI_MODEL` (Default: `gemma-4-31b-it`), `GEMINI_FALLBACK_MODEL`
 
 ## Technical Health & Roadmap
 
-- **Status**: [✅ Approve] Clean separation, secure environment handling, and performant streaming/balancing.
-- **Sync/Async Bridge**: CrewAI integration relies on `ThreadPoolExecutor` and `asyncio.run` overhead, acting as a structural constraint.
+- **Status**: [✅ Approve] Performant streaming, secure environment handling, and optimized resource rotation.
+- **Sync/Async Bridge**: Optimized via persistent background loop thread (`SupporterAsyncBridge`), eliminating the overhead of per-call `ThreadPoolExecutor` management.
 - **State/Persistence**: History is currently ephemeral. Roadmap includes SQLite (`aiosqlite`) persistence and multimodal input processing.
