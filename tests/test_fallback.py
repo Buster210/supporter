@@ -20,7 +20,6 @@ async def test_fallback_on_503() -> None:
     fallback_result.text = "Success from fallback"
     fallback_provider.generate = AsyncMock(return_value=fallback_result)
 
-    # LazyFallbackProvider takes factories
     provider = LazyFallbackProvider(lambda: primary, lambda: fallback_provider)
     result = await provider.generate("test")
 

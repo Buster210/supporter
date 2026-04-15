@@ -5,7 +5,7 @@ from crewai import Agent, Crew, Process, Task
 
 from .config import RESEARCHER_ROLE, WRITER_ROLE
 from .crew_adapter import SupporterLLM
-from .index import LLMResult
+from .llm_types import LLMResult
 from .logger import logger
 
 logger.debug("--- Loading crew_agent module ---")

@@ -38,5 +38,4 @@ def test_multiple_api_keys_round_robin() -> None:
     ):
         index.config = load_config()
         provider = get_provider()
-        # DynamicPool defaults to pool_size=2 for efficiency
         assert "Dynamic Pool x2" in provider.get_name()

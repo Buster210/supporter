@@ -23,6 +23,7 @@ class AppConfig:
     provider: str
     gemini_api_keys: list[str]
     gemini_model: str
+    gemini_live_model: str
     gemini_fallback_model: str | None
     log_file: str
     default_system_instruction: str
@@ -36,6 +37,9 @@ def load_config() -> AppConfig:
         provider=os.getenv("LLM_PROVIDER", "gemini"),
         gemini_api_keys=keys,
         gemini_model=os.getenv("GEMINI_MODEL", "gemma-4-31b-it"),
+        gemini_live_model=os.getenv(
+            "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"
+        ),
         gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL"),
         log_file=os.getenv("LOG_FILE", "app.log"),
         default_system_instruction=os.getenv(

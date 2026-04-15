@@ -3,7 +3,7 @@ import threading
 from typing import Any
 
 from crewai.llms.base_llm import BaseLLM
-from pydantic import Field, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from .config import DEFAULT_AGENT_ROLE, DEFAULT_MODEL
 from .logger import logger
@@ -24,7 +24,8 @@ def _start_background_loop() -> asyncio.AbstractEventLoop:
     return _LOOP
 
 
-class SupporterLLM(BaseLLM):  # type: ignore[misc]
+class SupporterLLM(BaseLLM):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     model: str = Field(default=DEFAULT_MODEL)
     _supporter_provider: Any = PrivateAttr()
     _status_callback: Any | None = PrivateAttr(default=None)
@@ -39,13 +40,14 @@ class SupporterLLM(BaseLLM):  # type: ignore[misc]
 
     def call(
         self,
-        messages: str | list[dict[str, str]],
+        messages: Any,
         tools: list[Any] | None = None,
         callbacks: list[Any] | None = None,
         available_functions: dict[str, Any] | None = None,
         from_task: Any | None = None,
         from_agent: Any | None = None,
-        response_model: type | None = None,
+        response_model: Any | None = None,
+        **kwargs: Any,
     ) -> str:
         prompt = ""
         if isinstance(messages, str):
@@ -72,7 +74,17 @@ class SupporterLLM(BaseLLM):  # type: ignore[misc]
             logger.error(f"SupporterLLM call failed: {e}")
             return f"Error executing model: {e}"
 
-    async def acall(self, messages: str | list[dict[str, str]], **kwargs: Any) -> str:
+    async def acall(
+        self,
+        messages: Any,
+        tools: list[Any] | None = None,
+        callbacks: list[Any] | None = None,
+        available_functions: dict[str, Any] | None = None,
+        from_task: Any | None = None,
+        from_agent: Any | None = None,
+        response_model: Any | None = None,
+        **kwargs: Any,
+    ) -> str:
         logger.debug("Entering SupporterLLM.acall (async)")
         prompt = (
             messages if isinstance(messages, str) else messages[-1].get("content", "")

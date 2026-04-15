@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import re
 import time
-from typing import ClassVar
+from typing import Any, ClassVar
 
+from rich.console import Group
+from rich.markdown import Markdown as RichMarkdown
+from rich.style import Style
+from rich.styled import Styled
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -12,6 +18,7 @@ from textual.timer import Timer
 from textual.widgets import Input, Label, Static
 
 from . import ChatAgent, CrewAgent, get_provider
+from .config import config
 from .logger import init_logger, logger
 
 THEME = {
@@ -22,30 +29,36 @@ THEME = {
     "green": "#00ff00",
     "blue": "#0080ff",
     "yellow": "#ffeb3b",
-    "meta_gray": "#666",
+    "meta_gray": "#666666",
 }
+
 CRISTAL_STOPS: list[tuple[int, int, int]] = [
     (0, 255, 255),
     (0, 255, 180),
     (0, 180, 255),
     (100, 200, 255),
 ]
+
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 def _apply_cristal_gradient(text: str) -> Text:
+
     rich_text = Text(justify="center")
     n = len(text)
     stops = len(CRISTAL_STOPS) - 1
+
     for i, ch in enumerate(text):
         t = i / max(n - 1, 1)
         seg = min(int(t * stops), stops - 1)
         local_t = t * stops - seg
         (r1, g1, b1) = CRISTAL_STOPS[seg]
         (r2, g2, b2) = CRISTAL_STOPS[seg + 1]
+
         r = int(r1 + (r2 - r1) * local_t)
         g = int(g1 + (g2 - g1) * local_t)
         b = int(b1 + (b2 - b1) * local_t)
+
         rich_text.append(ch, style=f"bold rgb({r},{g},{b})")
     return rich_text
 
@@ -90,26 +103,31 @@ class MessageBubble(Vertical):
         self.duration = duration
         self.agents = agents
         self.streaming = streaming
+        self.thoughts = ""
         self._bubble_static: Static | None = None
         self._meta_label: Label | None = None
         self.add_class("right" if role == "user" else "left")
 
     def compose(self) -> ComposeResult:
         is_user = self.role == "user"
-        border_color = "green" if is_user else "blue"
-        static_widget = Static(
-            self.content, classes=f"bubble {border_color}", expand=False, markup=False
-        )
-        self._bubble_static = static_widget
-        yield static_widget
+        border_class = "green" if is_user else "blue"
 
-        meta_label = Label("", classes="message-meta")
-        self._meta_label = meta_label
+        bubble = Static("", classes=f"bubble {border_class}", expand=False)
+        self._bubble_static = bubble
+
+        if self.thoughts or self.content:
+            self._update_bubble_content()
+
+        yield bubble
+
+        meta = Label("", classes="message-meta")
+        self._meta_label = meta
+
         if is_user or self.streaming or (not self.model and self.duration is None):
-            meta_label.display = False
+            meta.display = False
         else:
-            meta_label.update(self._get_meta_text())
-        yield meta_label
+            meta.update(self._get_meta_text())
+        yield meta
 
     def _get_meta_text(self) -> str:
         model_info = self.model or "Unknown"
@@ -119,10 +137,41 @@ class MessageBubble(Vertical):
             return f"({', '.join(self.agents)} via {model_info})"
         return f"({model_info})"
 
-    def append_token(self, token: str) -> None:
-        self.content += token
-        if self._bubble_static:
-            self._bubble_static.update(self.content)
+    def _preprocess_thoughts(self, text: str) -> str:
+
+        return re.sub(r"(\*\*.*?\*\*[:]?)\s*[\n]{2,}", r"\1  \n", text)
+
+    def _update_bubble_content(self) -> None:
+        if not self._bubble_static:
+            return
+
+        from rich.console import RenderableType
+
+        renderables: list[RenderableType] = []
+
+        if self.thoughts:
+            clean_thoughts = self._preprocess_thoughts(self.thoughts)
+            renderables.append(
+                Styled(
+                    RichMarkdown(clean_thoughts),
+                    Style(italic=True, color=THEME["meta_gray"]),
+                )
+            )
+
+        if self.content:
+            if self.thoughts:
+                renderables.append(Text(""))
+            renderables.append(Text(self.content))
+
+        if renderables:
+            self._bubble_static.update(Group(*renderables))
+
+    def append_token(self, token: str, is_thought: bool = False) -> None:
+        if is_thought:
+            self.thoughts += token
+        else:
+            self.content += token
+        self._update_bubble_content()
 
     def finalize(
         self,
@@ -130,6 +179,7 @@ class MessageBubble(Vertical):
         duration: float | None = None,
         agents: list[str] | None = None,
     ) -> None:
+
         self.model = model or self.model
         self.duration = duration or self.duration
         self.agents = agents or self.agents
@@ -191,7 +241,7 @@ class SupporterApp(App[None]):
 
     .bubble {{
         width: auto;
-        max-width: 60%;
+        max-width: 50%;
         height: auto;
         padding: 0 1;
         margin: 0;
@@ -225,10 +275,6 @@ class SupporterApp(App[None]):
     }}
 
     #prompt-row {{
-        height: 100%;
-    }}
-
-    #prompt-row {{
         height: 1;
         align: left middle;
     }}
@@ -258,68 +304,84 @@ class SupporterApp(App[None]):
         margin-left: 2;
         height: 1;
     }}
+
     #user-input:focus {{
         border: solid {THEME["magenta"]};
     }}
     """
+
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+c", "quit", "Quit", show=True),
         Binding("ctrl+l", "clear_screen", "Clear", show=True),
     ]
 
     def __init__(self) -> None:
-        logger.debug("Initializing SupporterApp")
         super().__init__()
         self.agent: ChatAgent | CrewAgent | None = None
         self.active_queries = 0
         self._spinner_timer: Timer | None = None
         self._spinner_idx: int = 0
-        self.crew_mode = True
-        self.is_activating_crew = False
-        self.current_active_agent = ""
+        self.crew_mode = False
+        self.live_mode = True
+        self.is_activating_mode = False
         self.status_label = "Thinking"
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     def _on_agent_active(self, agent_role: str) -> None:
         self.current_active_agent = agent_role
         self.call_from_thread(self._tick_spinner)
 
     async def on_mount(self) -> None:
-        logger.debug("Entering SupporterApp.on_mount")
         init_logger()
-        logger.info("Starting Supporter TUI")
+        logger.info("Supporter TUI dashboard active")
         try:
-            await self._setup_agent(use_crew=True)
+            await self._setup_agent(use_live=True)
             self.query_one("#user-input").focus()
         except Exception as e:
-            msg = f"Failed to initialize agent: {e}"
+            msg = f"Startup failure: {e}"
             logger.error(msg)
             self.notify(msg, severity="error")
 
     async def on_unmount(self) -> None:
-        logger.debug("SupporterApp unmounting")
         if self._spinner_timer:
             self._spinner_timer.stop()
             self._spinner_timer = None
 
-    async def _setup_agent(self, use_crew: bool = False) -> None:
-        logger.debug(f"Entering _setup_agent (use_crew={use_crew})")
-        provider = get_provider()
+        if (
+            self.agent
+            and hasattr(self.agent, "provider")
+            and hasattr(self.agent.provider, "close")
+        ):
+            await self.agent.provider.close()
+
+    async def _setup_agent(
+        self, use_crew: bool = False, use_live: bool = False
+    ) -> None:
+
+        provider = get_provider(live=use_live)
         if use_crew:
             self.agent = CrewAgent(
                 provider=provider, status_callback=self._on_agent_active
             )
-            logger.info("CrewAgent successfully initialized")
-        else:
-            self.agent = ChatAgent(
-                provider,
-                system_instruction=(
-                    "You are a helpful assistant. Be concise and professional. "
-                    "You can use Google Search and Code Execution when needed."
-                ),
-                use_search=True,
-                use_code_execution=True,
-            )
-            logger.info("ChatAgent successfully initialized")
+            logger.info("Switched to multi-agent crew mode")
+            return
+
+        self.agent = ChatAgent(
+            provider,
+            system_instruction=(
+                "You are a high-level technical strategist and software architect. "
+                "Provide rigorous, thorough, and architecturally sound advice. "
+                "Before answering, consider edge cases and performance implications."
+            ),
+            use_search=True,
+            use_code_execution=True,
+        )
+        logger.info(f"Switched to standard chat agent (Live: {use_live})")
+
+        if use_live and hasattr(provider, "_ensure_session"):
+            task = asyncio.create_task(provider._ensure_session())
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-container"):
@@ -330,15 +392,11 @@ class SupporterApp(App[None]):
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
                 yield Label(">", id="prompt-symbol")
                 yield Input(
-                    placeholder=(
-                        "Type a message... (/crew to toggle, /clear to reset, "
-                        "/exit to quit)"
-                    ),
+                    placeholder="Type a message... (/live, /crew, /clear, /exit)",
                     id="user-input",
                 )
 
     def action_clear_screen(self) -> None:
-        """Clear the chat view and agent history."""
         if self.agent:
             self.agent.clear_history()
         self.query_one("#chat-view").query("*").remove()
@@ -357,19 +415,26 @@ class SupporterApp(App[None]):
             if self._spinner_timer:
                 self._spinner_timer.stop()
                 self._spinner_timer = None
-            self.query_one("#thinking-indicator", Static).update("")
+            indicator = self.query_one("#thinking-indicator", Static)
+            indicator.update("")
+            indicator.refresh()
 
     def _tick_spinner(self) -> None:
         frame = SPINNER_FRAMES[self._spinner_idx % len(SPINNER_FRAMES)]
         dots = "." * (self._spinner_idx % 4)
         self._spinner_idx += 1
-        if self.is_activating_crew:
-            status = f"Activating CrewAI{dots}"
+
+        if self.is_activating_mode:
+            status = f"Activating Mode{dots}"
         else:
+            label = ""
             if self.crew_mode and self.current_active_agent:
                 label = f"[{self.current_active_agent}]"
-            else:
-                label = "[AGENT]" if self.crew_mode else ""
+            elif self.live_mode:
+                label = "[LIVE]"
+            elif self.crew_mode:
+                label = "[AGENT]"
+
             status = f"{frame} {label} {self.status_label}{dots}"
         self.query_one("#thinking-indicator", Static).update(status)
 
@@ -377,104 +442,161 @@ class SupporterApp(App[None]):
         user_text = event.value.strip()
         if not user_text:
             return
-        self.query_one("#user-input", Input).value = ""
-        self.query_one("#user-input").focus()
+
+        input_widget = self.query_one("#user-input", Input)
+        input_widget.value = ""
+        input_widget.focus()
+
         if user_text.startswith("/"):
             await self._handle_command(user_text.lower())
             return
-        chat_view = self.query_one("#chat-view")
+
+        chat_view = self.query_one("#chat-view", Vertical)
         chat_view.mount(MessageBubble(role="user", content=user_text))
         chat_view.scroll_end()
+
         self.run_worker(self._process_message_cycle(user_text, mount_user=False))
 
     async def _handle_command(self, command: str) -> None:
-        logger.debug(f"Handling TUI command: {command}")
         if command == "/exit":
             self.exit()
-        elif command == "/clear":
+            return
+
+        if command == "/clear":
             self.action_clear_screen()
-        elif command == "/crew":
+            return
+
+        if command == "/crew":
+            await self._toggle_mode(crew=True)
+            return
+
+        if command == "/live":
+            await self._toggle_mode(live=True)
+            return
+
+    async def _toggle_mode(self, crew: bool = False, live: bool = False) -> None:
+
+        if crew:
             self.crew_mode = not self.crew_mode
-            status = "ENABLED" if self.crew_mode else "DISABLED"
-            self._start_thinking()
-            self.is_activating_crew = True
-            try:
-                await self._setup_agent(use_crew=self.crew_mode)
-                chat_view = self.query_one("#chat-view")
-                await chat_view.mount(
-                    MessageBubble(role="agent", content=f"Multi-Agent Mode {status}")
-                )
-                chat_view.scroll_end()
-            finally:
-                self.is_activating_crew = False
-                self._stop_thinking()
+            if self.crew_mode:
+                self.live_mode = False
+        if live:
+            self.live_mode = not self.live_mode
+            if self.live_mode:
+                self.crew_mode = False
+
+        status = "ENABLED" if (self.crew_mode or self.live_mode) else "DISABLED"
+        mode_name = (
+            "Multi-Agent Crew"
+            if crew
+            else (
+                f"Single Agent Live "
+                f"({config.gemini_live_model if self.live_mode else 'Standard'})"
+            )
+        )
+
+        self._start_thinking()
+        self.is_activating_mode = True
+        try:
+            await self._setup_agent(use_crew=self.crew_mode, use_live=self.live_mode)
+            chat_view = self.query_one("#chat-view", Vertical)
+            await chat_view.mount(
+                MessageBubble(role="agent", content=f"{mode_name} {status}")
+            )
+            chat_view.scroll_end()
+        finally:
+            self.is_activating_mode = False
+            self._stop_thinking()
 
     async def _process_message_cycle(self, text: str, mount_user: bool = True) -> None:
-        logger.debug("Entering _process_message_cycle")
-        chat_view = self.query_one("#chat-view")
+        chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
             await chat_view.mount(MessageBubble(role="user", content=text))
             chat_view.scroll_end()
             self.query_one("#user-input").focus()
+
         self.current_active_agent = ""
         self.status_label = "Thinking"
         self._start_thinking()
         start_time = time.perf_counter()
+
         try:
-            if not self.agent:
+            agent = self.agent
+            if not agent:
                 raise RuntimeError("Agent is not initialized")
 
-            if isinstance(self.agent, CrewAgent):
-                response = await self.agent.execute(text)
-                ui_duration = time.perf_counter() - start_time
-                agent_roles: list[str] | None = (
-                    response.usage.get("agents") if response.usage else None
-                )
-                await chat_view.mount(
-                    MessageBubble(
-                        role="agent",
-                        content=response.text,
-                        model=response.model,
-                        duration=ui_duration,
-                        agents=agent_roles,
-                    )
-                )
-                chat_view.scroll_end()
+            if isinstance(agent, CrewAgent):
+                await self._process_crew_execution(text, chat_view, start_time)
             else:
-                bubble = None
-                first_chunk = True
-                accumulated_text = ""
-                actual_model = None
-                async for chunk in self.agent.execute_stream(text):
-                    if chunk.model:
-                        actual_model = chunk.model
-                    if first_chunk:
-                        accumulated_text += chunk.text
-                        if not accumulated_text.strip():
-                            continue
-                        first_chunk = False
-                        self.status_label = "Streaming"
-                        bubble = MessageBubble(
-                            role="agent", content=accumulated_text, streaming=True
-                        )
-                        await chat_view.mount(bubble)
-                        chat_view.scroll_end()
-                    else:
-                        if bubble:
-                            bubble.append_token(chunk.text)
-                            chat_view.scroll_end()
-
-                if bubble:
-                    ui_duration = time.perf_counter() - start_time
-                    bubble.finalize(model=actual_model, duration=ui_duration)
-                    chat_view.scroll_end()
+                await self._process_streaming_execution(
+                    text, chat_view, start_time, agent
+                )
         except Exception as e:
-            logger.error(f"Error during agent execution: {e}")
+            logger.error(f"Execution error: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
             chat_view.scroll_end()
         finally:
             self._stop_thinking()
-        logger.debug("Exiting _process_message_cycle")
+
+    async def _process_crew_execution(
+        self, text: str, chat_view: Vertical, start_time: float
+    ) -> None:
+        if not isinstance(self.agent, CrewAgent):
+            return
+
+        response = await self.agent.execute(text)
+        agent_roles = response.usage.get("agents") if response.usage else None
+
+        await chat_view.mount(
+            MessageBubble(
+                role="agent",
+                content=response.text,
+                model=response.model,
+                duration=time.perf_counter() - start_time,
+                agents=agent_roles,
+            )
+        )
+        chat_view.scroll_end()
+
+    async def _process_streaming_execution(
+        self, text: str, chat_view: Vertical, start_time: float, agent: ChatAgent
+    ) -> None:
+        bubble = None
+        first_chunk = True
+        actual_model = None
+
+        async for chunk in agent.execute_stream(text):
+            if chunk.is_last:
+                self.status_label = "Thinking"
+                self._tick_spinner()
+
+            if chunk.model:
+                actual_model = chunk.model
+
+            if first_chunk:
+                if not chunk.text.strip() and not chunk.is_thought:
+                    continue
+
+                first_chunk = False
+                self.status_label = "Streaming"
+                bubble = MessageBubble(role="agent", content="", streaming=True)
+                if chunk.is_thought:
+                    bubble.thoughts = chunk.text
+                else:
+                    bubble.content = chunk.text
+
+                await chat_view.mount(bubble)
+                chat_view.scroll_end()
+            else:
+                if bubble:
+                    bubble.append_token(chunk.text, is_thought=chunk.is_thought)
+                    chat_view.scroll_end()
+
+        if bubble:
+            bubble.finalize(
+                model=actual_model, duration=time.perf_counter() - start_time
+            )
+            chat_view.scroll_end()
 
 
 def main() -> None:

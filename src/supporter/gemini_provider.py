@@ -9,9 +9,8 @@ from google.genai import types
 from google.genai.types import Content, GenerateContentConfig, Part
 
 from .config import config
+from .llm_types import LLMChunk, LLMResult
 from .logger import logger
-
-logger.debug("--- Loading gemini_provider module ---")
 
 
 class GeminiProvider:
@@ -22,8 +21,8 @@ class GeminiProvider:
         system_instruction: str | None = None,
     ):
         target_model = model_name or config.gemini_model
-        logger.debug(f"Initializing GeminiProvider (model: {target_model})")
         retry_options = types.HttpRetryOptions(attempts=2)
+
         self.client = genai.Client(
             api_key=api_key, http_options=types.HttpOptions(retry_options=retry_options)
         )
@@ -31,8 +30,10 @@ class GeminiProvider:
         self.default_system_instruction = (
             system_instruction or config.default_system_instruction
         )
+
         self._tool_cache: list[Any] | None = None
         self._last_tool_key: Any = None
+        logger.debug(f"GeminiProvider initialized (model: {target_model})")
 
     def _prepare_contents(
         self,
@@ -51,24 +52,20 @@ class GeminiProvider:
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
+            logger.debug(f"Executing tool: {name}")
             try:
-                result = await func(*args, **kwargs)
-                logger.debug(f"Tool {name} success: {result}")
-                return result
+                return await func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Tool {name} failed: {e!s}")
+                logger.error(f"Async tool '{name}' failed: {e}")
                 raise
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
+            logger.debug(f"Executing tool: {name}")
             try:
-                result = func(*args, **kwargs)
-                logger.debug(f"Tool {name} success: {result}")
-                return result
+                return func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Tool {name} failed: {e!s}")
+                logger.error(f"Sync tool '{name}' failed: {e}")
                 raise
 
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
@@ -76,6 +73,7 @@ class GeminiProvider:
     def _transform_tools(
         self, options: dict[str, Any] | None = None
     ) -> list[Any] | None:
+
         if not options:
             return None
 
@@ -84,7 +82,6 @@ class GeminiProvider:
         use_search = options.get("use_search", False)
         use_code_execution = options.get("use_code_execution", False)
 
-        # Stable key for caching: identities for complex objects, values for simple ones
         current_key = (
             tuple(id(t) for t in tools),
             tuple(sorted((name, id(func)) for name, func in registry.items())),
@@ -93,31 +90,36 @@ class GeminiProvider:
         )
 
         if self._last_tool_key == current_key:
-            logger.debug("Using cached tool transformations")
             return self._tool_cache
 
-        logger.debug("Entering GeminiProvider._transform_tools (Cache Miss)")
         final_tools = list(tools) if tools else []
         declared_names = set()
+
         for t in final_tools:
-            if isinstance(t, dict) and "function_declarations" in t:
-                for fd in t["function_declarations"]:
-                    if isinstance(fd, dict) and "name" in fd:
-                        declared_names.add(fd["name"])
-            elif hasattr(t, "function_declarations"):
-                for fd in t.function_declarations:
-                    declared_names.add(fd.name)
+            decls = getattr(t, "function_declarations", [])
+            if isinstance(t, dict):
+                decls = t.get("function_declarations", [])
+
+            for fd in decls:
+                name = (
+                    fd.get("name")
+                    if isinstance(fd, dict)
+                    else getattr(fd, "name", None)
+                )
+                if name:
+                    declared_names.add(name)
+
         for name, func in registry.items():
             if name not in declared_names:
                 final_tools.append(self._wrap_tool(name, func))
+
         if use_search:
-            final_tools.append(types.Tool(google_search=types.GoogleSearchRetrieval()))
+            final_tools.append(types.Tool(google_search=types.GoogleSearch()))
         if use_code_execution:
             final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
 
         self._tool_cache = final_tools or None
         self._last_tool_key = current_key
-        logger.debug(f"Exiting _transform_tools (Final counts: {len(final_tools)})")
         return self._tool_cache
 
     async def generate(
@@ -125,12 +127,10 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: dict[str, Any] | None = None,
     ) -> Any:
-        logger.debug("Entering GeminiProvider.generate")
-        from .index import LLMResult
-
         options = options or {}
         interaction_id = options.get("interaction_id")
         transformed_tools = self._transform_tools(options)
+
         config_inst = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
             or self.default_system_instruction,
@@ -138,39 +138,47 @@ class GeminiProvider:
             top_p=options.get("top_p"),
             top_k=options.get("top_k"),
             max_output_tokens=options.get("max_output_tokens"),
-            automatic_function_calling={"disable": False}
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            )
             if transformed_tools
             else None,
             tools=transformed_tools,
         )
+
         start_time = time.perf_counter()
         result = None
+
         if interaction_id:
             try:
                 result = await self.client.aio.interactions.create(
                     model=self.model_name,
                     input=prompt if isinstance(prompt, str) else str(prompt),
                     previous_interaction_id=interaction_id,
-                    config=config_inst,
-                )
+                    generation_config=config_inst,
+                )  # type: ignore[call-overload]
             except Exception as e:
                 logger.warning(
                     f"Failed to continue interaction {interaction_id}. "
                     f"Falling back. Error: {e}"
                 )
+
         if not result:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=self._prepare_contents(prompt, options.get("history")),
+                contents=list(self._prepare_contents(prompt, options.get("history"))),  # type: ignore[arg-type]
                 config=config_inst,
             )
+
         end_time = time.perf_counter()
+
         history = getattr(result, "automatic_function_calling_history", None)
         if not history and interaction_id:
             response = getattr(result, "response", None)
             history = getattr(
                 response, "automatic_function_calling_history", None
             ) or getattr(result, "history", None)
+
         usage_meta = getattr(result, "usage_metadata", None)
         usage = (
             {
@@ -182,7 +190,7 @@ class GeminiProvider:
             if usage_meta
             else {}
         )
-        logger.debug("Exiting GeminiProvider.generate with success")
+
         return LLMResult(
             text=result.text or "",
             model=self.model_name,
@@ -199,22 +207,22 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: dict[str, Any] | None = None,
     ) -> AsyncIterator[Any]:
-        logger.debug("Entering GeminiProvider.generate_stream")
-        from .index import LLMChunk
-
         options = options or {}
         transformed_tools = self._transform_tools(options)
         config_inst = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
             or self.default_system_instruction,
             tools=transformed_tools,
-            automatic_function_calling={"disable": False}
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            )
             if transformed_tools
             else None,
         )
+
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=self._prepare_contents(prompt, options.get("history")),
+            contents=list(self._prepare_contents(prompt, options.get("history"))),  # type: ignore[arg-type]
             config=config_inst,
         )
         async for chunk in stream:
