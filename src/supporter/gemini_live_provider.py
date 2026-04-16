@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from google import genai
@@ -10,6 +10,7 @@ from google.genai.types import Content
 from .config import config
 from .llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
 from .logger import logger
+from .tools import google_search
 
 
 class GeminiLiveProvider:
@@ -18,6 +19,8 @@ class GeminiLiveProvider:
         api_keys: list[str],
         model_name: str | None = None,
         system_instruction: str | None = None,
+        tools: list[Any] | None = None,
+        registry: dict[str, Callable[..., Any]] | None = None,
     ):
         self.api_keys = api_keys
         self.model_name = model_name or config.gemini_live_model
@@ -30,6 +33,16 @@ class GeminiLiveProvider:
         self._turn_lock = asyncio.Lock()
 
         self.system_instruction = system_instruction or DEFAULT_SYSTEM_INSTRUCTION
+        self.tools = list(tools) if tools else []
+        self.registry = dict(registry) if registry else {}
+
+        if "3.1" in self.model_name and "google_search" not in self.registry:
+            logger.info(
+                "Registering enhanced 2.5-powered google_search tool for "
+                f"{self.model_name}"
+            )
+            self.registry["google_search"] = google_search
+
         logger.debug(
             f"GeminiLive initialized (model: {self.model_name}, keys: "
             f"{len(self.api_keys)})"
@@ -49,15 +62,32 @@ class GeminiLiveProvider:
             if self._session is not None:
                 return self._session
 
+            final_tools = list(self.tools)
+            for _name, func in self.registry.items():
+                final_tools.append(func)
+
+            if (
+                "2.5" in self.model_name or "fallback" in self.model_name.lower()
+            ) and not any(hasattr(t, "google_search") for t in final_tools):
+                final_tools.append(types.Tool(google_search=types.GoogleSearch()))
+
             session_config = types.LiveConnectConfig(
                 response_modalities=[types.Modality.AUDIO],
                 system_instruction=types.Content(
                     parts=[types.Part(text=self.system_instruction)]
                 ),
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=config.voice_name,
+                        )
+                    )
+                ),
                 thinking_config=types.ThinkingConfig(
                     include_thoughts=True,
                     thinking_level=types.ThinkingLevel.HIGH,
                 ),
+                tools=final_tools,
             )
 
             max_attempts = len(self.api_keys)
@@ -101,6 +131,52 @@ class GeminiLiveProvider:
                 "Failed to establish Gemini Live session after multiple attempts"
             )
 
+    async def _handle_tool_call(self, session: Any, tool_call: Any) -> None:
+        function_responses = []
+        for call in tool_call.function_calls:
+            name = call.name
+            args = call.args or {}
+            call_id = call.id
+
+            logger.info(f"Model requested tool: {name}({args})")
+
+            if name in self.registry:
+                func = self.registry[name]
+                try:
+                    if asyncio.iscoroutinefunction(func):
+                        result = await func(**args)
+                    else:
+                        result = func(**args)
+
+                    if not isinstance(result, dict):
+                        result = {"result": result}
+
+                    function_responses.append(
+                        types.FunctionResponse(name=name, id=call_id, response=result)
+                    )
+                except Exception as e:
+                    logger.error(f"Error executing tool {name}: {e}")
+                    function_responses.append(
+                        types.FunctionResponse(
+                            name=name, id=call_id, response={"error": str(e)}
+                        )
+                    )
+            else:
+                logger.warning(f"Tool {name} not found in registry")
+                function_responses.append(
+                    types.FunctionResponse(
+                        name=name,
+                        id=call_id,
+                        response={"error": f"Tool {name} not found"},
+                    )
+                )
+
+        if function_responses:
+            logger.debug(
+                f"Sending {len(function_responses)} tool responses back to session"
+            )
+            await session.send_tool_response(function_responses=function_responses)
+
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult:
@@ -115,6 +191,10 @@ class GeminiLiveProvider:
             thought_parts = []
             try:
                 async for response in session.receive():
+                    if response.tool_call:
+                        await self._handle_tool_call(session, response.tool_call)
+                        continue
+
                     server_content = response.server_content
                     if not server_content:
                         continue
@@ -157,6 +237,20 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
+                    if response.tool_call:
+                        # Handle multiple function calls in one turn by yielding them
+                        for fc in response.tool_call.function_calls:
+                            yield LLMChunk(
+                                text="",
+                                is_last=False,
+                                is_tool_call=True,
+                                tool_name=fc.name,
+                                tool_args=fc.args or {},
+                                model=self.model_name,
+                            )
+                        await self._handle_tool_call(session, response.tool_call)
+                        continue
+
                     server_content = response.server_content
                     if not server_content:
                         continue

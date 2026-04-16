@@ -45,14 +45,14 @@ def create_mock_genai_client(**kwargs: Any) -> MagicMock:
             content_chunk_1 = MagicMock()
             content_chunk_1.candidates = [MagicMock()]
             content_chunk_1.candidates[0].content.parts = [
-                MagicMock(text="Chunk 1", thought=False)
+                MagicMock(text="Chunk 1", thought=False, function_call=None)
             ]
             yield content_chunk_1
 
             content_chunk_2 = MagicMock()
             content_chunk_2.candidates = [MagicMock()]
             content_chunk_2.candidates[0].content.parts = [
-                MagicMock(text="Chunk 2", thought=False)
+                MagicMock(text="Chunk 2", thought=False, function_call=None)
             ]
             yield content_chunk_2
 
@@ -62,14 +62,14 @@ def create_mock_genai_client(**kwargs: Any) -> MagicMock:
         content_chunk_1 = MagicMock()
         content_chunk_1.candidates = [MagicMock()]
         content_chunk_1.candidates[0].content.parts = [
-            MagicMock(text="Chunk 1", thought=False)
+            MagicMock(text="Chunk 1", thought=False, function_call=None)
         ]
         yield content_chunk_1
 
         content_chunk_2 = MagicMock()
         content_chunk_2.candidates = [MagicMock()]
         content_chunk_2.candidates[0].content.parts = [
-            MagicMock(text="Chunk 2", thought=False)
+            MagicMock(text="Chunk 2", thought=False, function_call=None)
         ]
         yield content_chunk_2
 

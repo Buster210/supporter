@@ -264,6 +264,17 @@ class GeminiProvider:
                         model=self.model_name,
                         raw=chunk,
                     )
+                elif part.function_call:
+                    yield LLMChunk(
+                        text="",
+                        is_thought=False,
+                        is_last=False,
+                        is_tool_call=True,
+                        tool_name=part.function_call.name,
+                        tool_args=part.function_call.args or {},
+                        model=self.model_name,
+                        raw=chunk,
+                    )
                 elif part.text:
                     yield LLMChunk(
                         text=part.text,
