@@ -4,6 +4,15 @@ from typing import Any, Protocol, TypedDict
 
 from google.genai.types import Content, GenerateContentConfig, Tool
 
+DEFAULT_SYSTEM_INSTRUCTION = (
+    "You are an elite technical strategist and principal software architect. "
+    "Your objective is to provide rigorous, high-fidelity, and "
+    "architecturally sound guidance. Analyze complex problems through "
+    "the lens of scalability, maintainability, and efficiency. Always "
+    "anticipate edge cases and performance bottlenecks before "
+    "formulating a response."
+)
+
 
 class LLMOptions(TypedDict, total=False):
     history: list[Content]
