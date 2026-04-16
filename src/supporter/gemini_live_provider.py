@@ -8,14 +8,8 @@ from google.genai import types
 from google.genai.types import Content
 
 from .config import config
-from .llm_types import LLMChunk, LLMOptions, LLMResult
+from .llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
 from .logger import logger
-
-DEFAULT_SYSTEM_INSTRUCTION = (
-    "You are a high-level technical strategist and expert software architect. "
-    "Provide rigorous, thorough, and architecturally sound advice. "
-    "Before answering, consider all edge cases and performance implications."
-)
 
 
 class GeminiLiveProvider:
@@ -55,7 +49,7 @@ class GeminiLiveProvider:
             if self._session is not None:
                 return self._session
 
-            live_config = types.LiveConnectConfig(
+            session_config = types.LiveConnectConfig(
                 response_modalities=[types.Modality.AUDIO],
                 system_instruction=types.Content(
                     parts=[types.Part(text=self.system_instruction)]
@@ -66,31 +60,42 @@ class GeminiLiveProvider:
                 ),
             )
 
-            max_retries = len(self.api_keys)
-            for attempt in range(max_retries):
+            max_attempts = len(self.api_keys)
+            for attempt in range(max_attempts):
                 try:
                     logger.info(
-                        f"Connecting to Gemini Live (Attempt "
-                        f"{attempt + 1}/{max_retries})"
+                        f"Establishing Gemini Live connection (Attempt "
+                        f"{attempt + 1}/{max_attempts})"
                     )
                     self._session_manager = self.client.aio.live.connect(
-                        model=self.model_name, config=live_config
+                        model=self.model_name, config=session_config
                     )
                     assert self._session_manager is not None
                     self._session = await self._session_manager.__aenter__()
                     return self._session
-                except Exception as e:
-                    err_msg = str(e).lower()
-                    retriable_codes = ("1011", "1007", "1008", "429", "quota")
-                    if any(code in err_msg for code in retriable_codes):
+
+                except Exception as error:
+                    error_detail = str(error).lower()
+                    retriable_codes = {
+                        "1011",
+                        "1007",
+                        "1008",
+                        "429",
+                        "quota",
+                        "exhausted",
+                    }
+
+                    is_retriable = any(code in error_detail for code in retriable_codes)
+                    if is_retriable and attempt < max_attempts - 1:
                         logger.warning(
-                            f"Connection failed: {e}. Retrying with key rotation..."
+                            f"Retriable connection failure: {error}. "
+                            "Rotating credentials..."
                         )
                         self._rotate_key()
                         continue
 
-                    logger.error(f"Critical connection error: {e}")
-                    raise e
+                    logger.error(f"Fatal connection error encountered: {error}")
+                    raise error
 
             raise RuntimeError(
                 "Failed to establish Gemini Live session after multiple attempts"
