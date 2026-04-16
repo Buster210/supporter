@@ -59,20 +59,23 @@ class SupporterLLM(BaseLLM):
             agent_role = getattr(from_agent, "role", DEFAULT_AGENT_ROLE)
             self._status_callback(agent_role)
 
-        options: dict[str, Any] = {"use_search": True, "use_code_execution": True}
+        execution_options: dict[str, Any] = {
+            "use_search": True,
+            "use_code_execution": True,
+        }
         if available_functions:
-            options["registry"] = available_functions
+            execution_options["registry"] = available_functions
 
         loop = _start_background_loop()
         future = asyncio.run_coroutine_threadsafe(
-            self._supporter_provider.generate(prompt, options), loop
+            self._supporter_provider.generate(prompt, execution_options), loop
         )
         try:
             result = future.result()
             return str(result.text)
-        except Exception as e:
-            logger.error(f"SupporterLLM call failed: {e}")
-            return f"Error executing model: {e}"
+        except Exception as error:
+            logger.error(f"SupporterLLM synchronous call failed: {error}")
+            return f"Error executing model: {error}"
 
     async def acall(
         self,
@@ -89,11 +92,16 @@ class SupporterLLM(BaseLLM):
         prompt = (
             messages if isinstance(messages, str) else messages[-1].get("content", "")
         )
-        options: dict[str, Any] = {"use_search": True, "use_code_execution": True}
+
+        execution_options: dict[str, Any] = {
+            "use_search": True,
+            "use_code_execution": True,
+        }
         available_functions = kwargs.get("available_functions")
         if available_functions:
-            options["registry"] = available_functions
-        result = await self._supporter_provider.generate(prompt, options)
+            execution_options["registry"] = available_functions
+
+        result = await self._supporter_provider.generate(prompt, execution_options)
         logger.debug("Exiting SupporterLLM.acall")
         return str(result.text)
 

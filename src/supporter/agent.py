@@ -28,10 +28,8 @@ class ChatAgent:
         self.use_code_execution = use_code_execution
         logger.debug(f"ChatAgent initialized with provider: {provider.get_name()}")
 
-    async def execute(self, prompt: str) -> LLMResult:
-
-        user_message = Content(role="user", parts=[Part(text=prompt)])
-        options: LLMOptions = {
+    def _get_execution_options(self) -> LLMOptions:
+        return {
             "history": self.history,
             "interaction_id": self.current_interaction_id,
             "tools": self.tools or [],
@@ -41,7 +39,10 @@ class ChatAgent:
             "use_code_execution": self.use_code_execution,
         }
 
-        result = await self.provider.generate(prompt, options)
+    async def execute(self, prompt: str) -> LLMResult:
+        user_message = Content(role="user", parts=[Part(text=prompt)])
+        result = await self.provider.generate(prompt, self._get_execution_options())
+
         self.current_interaction_id = result.interaction_id
 
         if result.automatic_function_calling_history:
@@ -56,25 +57,17 @@ class ChatAgent:
         return result
 
     async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
-
         user_message = Content(role="user", parts=[Part(text=prompt)])
-        options: LLMOptions = {
-            "history": self.history,
-            "interaction_id": self.current_interaction_id,
-            "tools": self.tools or [],
-            "registry": self.registry or {},
-            "system_instruction": self.system_instruction,
-            "use_search": self.use_search,
-            "use_code_execution": self.use_code_execution,
-        }
+        accumulated_text = ""
 
-        full_text = ""
-        async for chunk in self.provider.generate_stream(prompt, options):
-            full_text += chunk.text
+        async for chunk in self.provider.generate_stream(
+            prompt, self._get_execution_options()
+        ):
+            accumulated_text += chunk.text
             yield chunk
 
         self.history.append(user_message)
-        self.history.append(Content(role="model", parts=[Part(text=full_text)]))
+        self.history.append(Content(role="model", parts=[Part(text=accumulated_text)]))
 
     def get_history(self) -> list[Content]:
         return self.history
