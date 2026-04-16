@@ -49,6 +49,9 @@ class LLMChunk:
     text: str
     is_last: bool
     is_thought: bool = False
+    is_tool_call: bool = False
+    tool_name: str | None = None
+    tool_args: dict[str, Any] | None = None
     model: str | None = None
     raw: Any = None
 
