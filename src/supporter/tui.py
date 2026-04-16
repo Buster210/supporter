@@ -13,12 +13,13 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.events import MouseScrollDown, MouseScrollUp
+from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.timer import Timer
 from textual.widgets import Input, Label, Static
 
 from . import ChatAgent, CrewAgent, get_provider
 from .config import config
+from .llm_types import DEFAULT_SYSTEM_INSTRUCTION
 from .logger import init_logger, logger
 
 THEME = {
@@ -32,34 +33,34 @@ THEME = {
     "meta_gray": "#666666",
 }
 
-CRISTAL_STOPS: list[tuple[int, int, int]] = [
-    (0, 255, 255),
-    (0, 255, 180),
-    (0, 180, 255),
-    (100, 200, 255),
+CRYSTAL_GRADIENT_STOPS: list[tuple[int, int, int]] = [
+    (0, 255, 255),  # Cyan
+    (0, 255, 180),  # Teal
+    (0, 180, 255),  # Sky Blue
+    (100, 200, 255),  # Soft Blue
 ]
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
-def _apply_cristal_gradient(text: str) -> Text:
-
+def _apply_crystal_gradient(text: str) -> Text:
     rich_text = Text(justify="center")
-    n = len(text)
-    stops = len(CRISTAL_STOPS) - 1
+    char_count = len(text)
+    num_stops = len(CRYSTAL_GRADIENT_STOPS) - 1
 
-    for i, ch in enumerate(text):
-        t = i / max(n - 1, 1)
-        seg = min(int(t * stops), stops - 1)
-        local_t = t * stops - seg
-        (r1, g1, b1) = CRISTAL_STOPS[seg]
-        (r2, g2, b2) = CRISTAL_STOPS[seg + 1]
+    for i, char in enumerate(text):
+        progress = i / max(char_count - 1, 1)
+        segment = min(int(progress * num_stops), num_stops - 1)
+        local_progress = progress * num_stops - segment
 
-        r = int(r1 + (r2 - r1) * local_t)
-        g = int(g1 + (g2 - g1) * local_t)
-        b = int(b1 + (b2 - b1) * local_t)
+        start_rgb = CRYSTAL_GRADIENT_STOPS[segment]
+        end_rgb = CRYSTAL_GRADIENT_STOPS[segment + 1]
 
-        rich_text.append(ch, style=f"bold rgb({r},{g},{b})")
+        r = int(start_rgb[0] + (end_rgb[0] - start_rgb[0]) * local_progress)
+        g = int(start_rgb[1] + (end_rgb[1] - start_rgb[1]) * local_progress)
+        b = int(start_rgb[2] + (end_rgb[2] - start_rgb[2]) * local_progress)
+
+        rich_text.append(char, style=f"bold rgb({r},{g},{b})")
     return rich_text
 
 
@@ -71,7 +72,7 @@ class SupporterHeader(Static):
     )
 
     def render(self) -> Text:
-        return _apply_cristal_gradient(self._ART)
+        return _apply_crystal_gradient(self._ART)
 
 
 class ChatContainer(Vertical):
@@ -104,19 +105,20 @@ class MessageBubble(Vertical):
         self.agents = agents
         self.streaming = streaming
         self.thoughts = ""
-        self._bubble_static: Static | None = None
+        self.thoughts_expanded = True
+        self._message_view: Static | None = None
         self._meta_label: Label | None = None
         self.add_class("right" if role == "user" else "left")
 
     def compose(self) -> ComposeResult:
         is_user = self.role == "user"
-        border_class = "green" if is_user else "blue"
+        border_class = "user-border" if is_user else "agent-border"
 
         bubble = Static("", classes=f"bubble {border_class}", expand=False)
-        self._bubble_static = bubble
+        self._message_view = bubble
 
         if self.thoughts or self.content:
-            self._update_bubble_content()
+            self._update_ui_content()
 
         yield bubble
 
@@ -137,41 +139,80 @@ class MessageBubble(Vertical):
             return f"({', '.join(self.agents)} via {model_info})"
         return f"({model_info})"
 
-    def _preprocess_thoughts(self, text: str) -> str:
+    def _preprocess_markdown(self, text: str) -> str:
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        block_pats = r"(?:[*+-]\s|\d+\.\s|#+|>\s)"
+        return re.sub(r"([^\n])\n(" + block_pats + ")", r"\1\n\n\2", text)
 
-        return re.sub(r"(\*\*.*?\*\*[:]?)\s*[\n]{2,}", r"\1  \n", text)
+    def _should_use_markdown(self, text: str) -> bool:
+        syntax_markers = [
+            r"\n[*+-]\s",
+            r"^[*+-]\s",  # Unordered list
+            r"\n\d+\.\s",
+            r"^\d+\.\s",  # Ordered list
+            r"#+\s",  # Headers
+            r"\*\*.*?\*\*",  # Bold
+            r"\*.*?\*",  # Italic
+            r"`.*?`",  # Inline code
+            r"\[.*?\]\(.*?\)",  # Links
+            r"\n>\s",
+            r"^>\s",  # Quotes
+        ]
+        return any(re.search(m, text, re.MULTILINE) for m in syntax_markers)
 
-    def _update_bubble_content(self) -> None:
-        if not self._bubble_static:
+    def _update_ui_content(self) -> None:
+        if not self._message_view:
             return
 
         from rich.console import RenderableType
 
-        renderables: list[RenderableType] = []
+        elements: list[RenderableType] = []
 
         if self.thoughts:
-            clean_thoughts = self._preprocess_thoughts(self.thoughts)
-            renderables.append(
-                Styled(
-                    RichMarkdown(clean_thoughts),
-                    Style(italic=True, color=THEME["meta_gray"]),
-                )
+            expanded_symbol = "▼" if self.thoughts_expanded else "▶"
+            is_thinking = self.streaming and not self.content
+            label_text = "Thinking..." if is_thinking else "Thoughts"
+
+            thought_header = Text(
+                f"{expanded_symbol} {label_text}",
+                style=Style(color=THEME["yellow"]),
             )
+            elements.append(thought_header)
+
+            if self.thoughts_expanded:
+                elements.append(Text(""))
+                clean_thoughts = self._preprocess_markdown(self.thoughts)
+                elements.append(
+                    Styled(
+                        RichMarkdown(clean_thoughts),
+                        Style(italic=True, color=THEME["meta_gray"]),
+                    )
+                )
+
+            if self.content:
+                elements.append(Text(""))
 
         if self.content:
-            if self.thoughts:
-                renderables.append(Text(""))
-            renderables.append(Text(self.content))
+            clean_content = self._preprocess_markdown(self.content)
+            if self._should_use_markdown(clean_content):
+                elements.append(RichMarkdown(clean_content))
+            else:
+                elements.append(Text(clean_content))
 
-        if renderables:
-            self._bubble_static.update(Group(*renderables))
+        if elements:
+            self._message_view.update(Group(*elements))
 
     def append_token(self, token: str, is_thought: bool = False) -> None:
         if is_thought:
             self.thoughts += token
         else:
+            if self.thoughts and not self.content:
+                if self.thoughts_expanded and self._message_view:
+                    self._message_view.styles.min_width = self._message_view.size.width
+                self.thoughts_expanded = False
             self.content += token
-        self._update_bubble_content()
+
+        self._update_ui_content()
 
     def finalize(
         self,
@@ -179,14 +220,26 @@ class MessageBubble(Vertical):
         duration: float | None = None,
         agents: list[str] | None = None,
     ) -> None:
-
         self.model = model or self.model
         self.duration = duration or self.duration
         self.agents = agents or self.agents
         self.streaming = False
+
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
             self._meta_label.display = True
+
+        if self._message_view:
+            final_width = self._message_view.size.width
+            if final_width > 0:
+                self._message_view.styles.width = final_width
+            self._message_view.styles.min_width = None
+
+    def on_click(self, event: Click) -> None:
+        if not self.thoughts or self.role == "user":
+            return
+        self.thoughts_expanded = not self.thoughts_expanded
+        self._update_ui_content()
 
 
 class SupporterApp(App[None]):
@@ -241,7 +294,7 @@ class SupporterApp(App[None]):
 
     .bubble {{
         width: auto;
-        max-width: 50%;
+        max-width: 60%;
         height: auto;
         padding: 0 1;
         margin: 0;
@@ -249,12 +302,12 @@ class SupporterApp(App[None]):
         border: round #444;
     }}
 
-    .bubble.green {{
+    .bubble.user-border {{
         border: round {THEME["magenta"]};
         color: {THEME["magenta"]};
     }}
 
-    .bubble.blue {{
+    .bubble.agent-border {{
         border: round {THEME["header_teal"]};
         color: {THEME["header_teal"]};
     }}
@@ -326,6 +379,7 @@ class SupporterApp(App[None]):
         self.is_activating_mode = False
         self.status_label = "Thinking"
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self.current_active_agent: str = ""
 
     def _on_agent_active(self, agent_role: str) -> None:
         self.current_active_agent = agent_role
@@ -357,7 +411,6 @@ class SupporterApp(App[None]):
     async def _setup_agent(
         self, use_crew: bool = False, use_live: bool = False
     ) -> None:
-
         provider = get_provider(live=use_live)
         if use_crew:
             self.agent = CrewAgent(
@@ -368,11 +421,7 @@ class SupporterApp(App[None]):
 
         self.agent = ChatAgent(
             provider,
-            system_instruction=(
-                "You are a high-level technical strategist and software architect. "
-                "Provide rigorous, thorough, and architecturally sound advice. "
-                "Before answering, consider edge cases and performance implications."
-            ),
+            system_instruction=DEFAULT_SYSTEM_INSTRUCTION,
             use_search=True,
             use_code_execution=True,
         )
@@ -458,24 +507,22 @@ class SupporterApp(App[None]):
         self.run_worker(self._process_message_cycle(user_text, mount_user=False))
 
     async def _handle_command(self, command: str) -> None:
-        if command == "/exit":
-            self.exit()
-            return
+        from collections.abc import Callable
 
-        if command == "/clear":
-            self.action_clear_screen()
-            return
+        command_map: dict[str, Callable[[], Any]] = {
+            "/exit": self.exit,
+            "/clear": self.action_clear_screen,
+            "/crew": lambda: self._toggle_mode(crew=True),
+            "/live": lambda: self._toggle_mode(live=True),
+        }
 
-        if command == "/crew":
-            await self._toggle_mode(crew=True)
-            return
-
-        if command == "/live":
-            await self._toggle_mode(live=True)
-            return
+        handler = command_map.get(command)
+        if handler:
+            result = handler()
+            if asyncio.iscoroutine(result):
+                await result
 
     async def _toggle_mode(self, crew: bool = False, live: bool = False) -> None:
-
         if crew:
             self.crew_mode = not self.crew_mode
             if self.crew_mode:
@@ -485,8 +532,8 @@ class SupporterApp(App[None]):
             if self.live_mode:
                 self.crew_mode = False
 
-        status = "ENABLED" if (self.crew_mode or self.live_mode) else "DISABLED"
-        mode_name = (
+        status_msg = "ENABLED" if (self.crew_mode or self.live_mode) else "DISABLED"
+        mode_label = (
             "Multi-Agent Crew"
             if crew
             else (
@@ -501,7 +548,7 @@ class SupporterApp(App[None]):
             await self._setup_agent(use_crew=self.crew_mode, use_live=self.live_mode)
             chat_view = self.query_one("#chat-view", Vertical)
             await chat_view.mount(
-                MessageBubble(role="agent", content=f"{mode_name} {status}")
+                MessageBubble(role="agent", content=f"{mode_label} {status_msg}")
             )
             chat_view.scroll_end()
         finally:
@@ -562,7 +609,7 @@ class SupporterApp(App[None]):
         self, text: str, chat_view: Vertical, start_time: float, agent: ChatAgent
     ) -> None:
         bubble = None
-        first_chunk = True
+        is_first_chunk = True
         actual_model = None
 
         async for chunk in agent.execute_stream(text):
@@ -573,13 +620,14 @@ class SupporterApp(App[None]):
             if chunk.model:
                 actual_model = chunk.model
 
-            if first_chunk:
+            if is_first_chunk:
                 if not chunk.text.strip() and not chunk.is_thought:
                     continue
 
-                first_chunk = False
+                is_first_chunk = False
                 self.status_label = "Streaming"
                 bubble = MessageBubble(role="agent", content="", streaming=True)
+
                 if chunk.is_thought:
                     bubble.thoughts = chunk.text
                 else:
