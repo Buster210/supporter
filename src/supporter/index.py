@@ -343,8 +343,22 @@ def get_provider(
         raise ValueError("GEMINI_API_KEYS is missing/empty in environment")
 
     if live:
-        logger.info(f"Creating Live Provider for {config.gemini_live_model}")
-        return GeminiLiveProvider(keys, model_name=config.gemini_live_model)
+
+        def live_primary_factory() -> LLMProvider:
+            logger.info(f"Creating Live Primary Provider: {config.gemini_live_model}")
+            return GeminiLiveProvider(keys, model_name=config.gemini_live_model)
+
+        def live_fallback_factory() -> LLMProvider | None:
+            if not config.gemini_live_fallback_model:
+                return None
+            logger.info(
+                f"Creating Live Fallback Provider: {config.gemini_live_fallback_model}"
+            )
+            return GeminiLiveProvider(
+                keys, model_name=config.gemini_live_fallback_model
+            )
+
+        return LazyFallbackProvider(live_primary_factory, live_fallback_factory)
 
     def primary_factory() -> LLMProvider:
         return DynamicPool(keys, config.gemini_model, pool_size=2)
