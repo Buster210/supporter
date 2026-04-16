@@ -5,10 +5,7 @@ import re
 import time
 from typing import Any, ClassVar
 
-from rich.console import Group
 from rich.markdown import Markdown as RichMarkdown
-from rich.style import Style
-from rich.styled import Styled
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -30,7 +27,7 @@ THEME = {
     "green": "#00ff00",
     "blue": "#0080ff",
     "yellow": "#ffeb3b",
-    "meta_gray": "#666666",
+    "meta_gray": "#999999",
 }
 
 CRYSTAL_GRADIENT_STOPS: list[tuple[int, int, int]] = [
@@ -87,6 +84,30 @@ class ChatContainer(Vertical):
         event.prevent_default()
 
 
+class SectionHeader(Static):
+    def __init__(self, label: str, **kwargs):
+        super().__init__(**kwargs)
+        self.label = label
+
+    def update_label(self, label: str, is_collapsed: bool, is_collapsible: bool):
+        self.label = label
+        self.set_class(is_collapsed, "collapsed")
+        self.set_class(is_collapsible, "collapsible")
+
+        hint = ""
+        if is_collapsible:
+            hint = f" [{THEME['meta_gray']} italic](Click to expand/collapse)[/]"
+        self.update(f"{self.label}{hint}")
+
+    def on_click(self, event: Click) -> None:
+        parent = self.parent
+        while parent and not isinstance(parent, MessageBubble):
+            parent = parent.parent
+        if parent and parent.collapsible:
+            event.stop()
+            parent.toggle_section(self.id)
+
+
 class MessageBubble(Vertical):
     def __init__(
         self,
@@ -105,7 +126,11 @@ class MessageBubble(Vertical):
         self.agents = agents
         self.streaming = streaming
         self.thoughts = ""
-        self.thoughts_expanded = True
+        self.tool_calls: list[dict[str, Any]] = []
+        self.collapsed = False
+        self.collapsible = False
+        self.thoughts_collapsed = False
+        self.tools_collapsed = False
         self._message_view: Static | None = None
         self._meta_label: Label | None = None
         self.add_class("right" if role == "user" else "left")
@@ -114,22 +139,42 @@ class MessageBubble(Vertical):
         is_user = self.role == "user"
         border_class = "user-border" if is_user else "agent-border"
 
-        bubble = Static("", classes=f"bubble {border_class}", expand=False)
-        self._message_view = bubble
+        with Vertical(classes=f"bubble {border_class}", id="bubble-container"):
+            self._thought_header = SectionHeader(
+                "", classes="section-header", id="thoughts-header"
+            )
+            self._thought_view = Static(
+                "", classes="section-content", id="thoughts-content"
+            )
+            self._thought_header.display = False
+            self._thought_view.display = False
 
-        if self.thoughts or self.content:
-            self._update_ui_content()
+            self._tool_header = SectionHeader(
+                "", classes="section-header", id="tools-header"
+            )
+            self._tool_view = Static("", classes="section-content", id="tools-content")
+            self._tool_header.display = False
+            self._tool_view.display = False
 
-        yield bubble
+            self._message_view = Static(self.content, id="main-content")
 
-        meta = Label("", classes="message-meta")
-        self._meta_label = meta
+            yield self._thought_header
+            yield self._thought_view
+            yield self._tool_header
+            yield self._tool_view
+            yield self._message_view
 
-        if is_user or self.streaming or (not self.model and self.duration is None):
-            meta.display = False
-        else:
-            meta.update(self._get_meta_text())
-        yield meta
+            if not is_user:
+                self._update_ui_content()
+
+            meta = Label("", classes="message-meta")
+            self._meta_label = meta
+
+            if is_user or self.streaming or (not self.model and self.duration is None):
+                meta.display = False
+            else:
+                meta.update(self._get_meta_text())
+            yield meta
 
     def _get_meta_text(self) -> str:
         model_info = self.model or "Unknown"
@@ -140,79 +185,146 @@ class MessageBubble(Vertical):
         return f"({model_info})"
 
     def _preprocess_markdown(self, text: str) -> str:
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        block_pats = r"(?:[*+-]\s|\d+\.\s|#+|>\s)"
-        return re.sub(r"([^\n])\n(" + block_pats + ")", r"\1\n\n\2", text)
+        return text.strip()
 
     def _should_use_markdown(self, text: str) -> bool:
         syntax_markers = [
             r"\n[*+-]\s",
-            r"^[*+-]\s",  # Unordered list
+            r"[*+-]\s",
             r"\n\d+\.\s",
-            r"^\d+\.\s",  # Ordered list
-            r"#+\s",  # Headers
-            r"\*\*.*?\*\*",  # Bold
-            r"\*.*?\*",  # Italic
-            r"`.*?`",  # Inline code
-            r"\[.*?\]\(.*?\)",  # Links
+            r"\d+\.\s",
+            r"#+\s",
+            r"\*\*.*?\*\*",
+            r"\*.*?\*",
+            r"`.*?`",
+            r"\[.*?\]\(.*?\)",
             r"\n>\s",
-            r"^>\s",  # Quotes
+            r">\s",
         ]
         return any(re.search(m, text, re.MULTILINE) for m in syntax_markers)
+
+    def toggle_section(self, section_id: str | None) -> None:
+        if section_id == "thoughts-header":
+            self.thoughts_collapsed = not self.thoughts_collapsed
+        elif section_id == "tools-header":
+            self.tools_collapsed = not self.tools_collapsed
+        self._update_ui_content()
 
     def _update_ui_content(self) -> None:
         if not self._message_view:
             return
 
-        from rich.console import RenderableType
+        self.set_class(self.collapsed, "collapsed-bubble")
 
-        elements: list[RenderableType] = []
+        if self.collapsed:
+            self._thought_header.display = False
+            self._thought_view.display = False
+            self._tool_header.display = False
+            self._tool_view.display = False
 
-        if self.thoughts:
-            expanded_symbol = "▼" if self.thoughts_expanded else "▶"
-            is_thinking = self.streaming and not self.content
-            label_text = "Thinking..." if is_thinking else "Thoughts"
+            summary = self.content.split("\n")[0][:50]
+            if len(self.content) > 50 or "\n" in self.content:
+                summary += "..."
 
-            thought_header = Text(
-                f"{expanded_symbol} {label_text}",
-                style=Style(color=THEME["yellow"]),
+            hint = f"[{THEME['meta_gray']} italic](Click to expand/collapse)[/] "
+            self._message_view.update(f"{hint}{summary}")
+            self._message_view.display = True
+            if self._meta_label:
+                self._meta_label.display = False
+            return
+
+        if self.thoughts and not self.collapsed:
+            self._thought_header.display = True
+            self._thought_view.display = (
+                not self.thoughts_collapsed if self.collapsible else True
             )
-            elements.append(thought_header)
 
-            if self.thoughts_expanded:
-                elements.append(Text(""))
+            is_thinking = self.streaming and not self.content
+            label_text = "Thinking" if is_thinking else "Thoughts"
+            self._thought_header.update_label(
+                label_text, self.thoughts_collapsed, self.collapsible
+            )
+
+            if not self.collapsible or not self.thoughts_collapsed:
                 clean_thoughts = self._preprocess_markdown(self.thoughts)
-                elements.append(
-                    Styled(
-                        RichMarkdown(clean_thoughts),
-                        Style(italic=True, color=THEME["meta_gray"]),
-                    )
-                )
+                self._thought_view.update(RichMarkdown(clean_thoughts))
+        else:
+            self._thought_header.display = False
+            self._thought_view.display = False
 
-            if self.content:
-                elements.append(Text(""))
+        if self.tool_calls and not self.collapsed:
+            self._tool_header.display = True
+            self._tool_view.display = (
+                not self.tools_collapsed if self.collapsible else True
+            )
+            self._tool_header.update_label(
+                "Tools Used", self.tools_collapsed, self.collapsible
+            )
+            self._tool_header.set_class(bool(self.thoughts), "section-gap")
+
+            if not self.collapsible or not self.tools_collapsed:
+                tool_lines = []
+                for tc in self.tool_calls:
+                    name = tc["name"]
+                    args = tc["args"]
+                    arg_str = ""
+                    if args:
+                        # Format args nicely: key=val, key2=val2
+                        items = []
+                        for k, v in args.items():
+                            val = str(v)
+                            if len(val) > 40:
+                                val = val[:37] + "..."
+                            items.append(f"{k}={val}")
+                        arg_str = f"({', '.join(items)})"
+                    tool_lines.append(f"• {name}{arg_str}")
+
+                self._tool_view.update("\n".join(tool_lines))
+        else:
+            self._tool_header.display = False
+            self._tool_view.display = False
 
         if self.content:
             clean_content = self._preprocess_markdown(self.content)
-            if self._should_use_markdown(clean_content):
-                elements.append(RichMarkdown(clean_content))
-            else:
-                elements.append(Text(clean_content))
 
-        if elements:
-            self._message_view.update(Group(*elements))
+            display_text = clean_content
+            is_active_turn = False
+            if hasattr(self.app, "active_turn"):
+                active = self.app.active_turn
+                if self == active.user_bubble or self in active.agent_bubbles:
+                    is_active_turn = True
+
+            if self.role == "user" and not self.streaming and not is_active_turn:
+                hint = f"[{THEME['meta_gray']} italic](Click to expand/collapse)[/] "
+                display_text = f"{hint}{clean_content}"
+
+            if self._should_use_markdown(clean_content):
+                self._message_view.update(RichMarkdown(clean_content))
+
+            else:
+                self._message_view.update(display_text)
+            self._message_view.display = True
+            self._message_view.set_class(
+                bool(self.thoughts or self.tool_calls), "section-gap"
+            )
+        else:
+            self._message_view.display = False
 
     def append_token(self, token: str, is_thought: bool = False) -> None:
         if is_thought:
             self.thoughts += token
         else:
-            if self.thoughts and not self.content:
-                if self.thoughts_expanded and self._message_view:
-                    self._message_view.styles.min_width = self._message_view.size.width
-                self.thoughts_expanded = False
             self.content += token
 
         self._update_ui_content()
+
+    def add_tool_call(
+        self, tool_name: str, tool_args: dict[str, Any] | None = None
+    ) -> None:
+        call_entry = {"name": tool_name, "args": tool_args or {}}
+        if call_entry not in self.tool_calls:
+            self.tool_calls.append(call_entry)
+            self._update_ui_content()
 
     def finalize(
         self,
@@ -225,21 +337,81 @@ class MessageBubble(Vertical):
         self.agents = agents or self.agents
         self.streaming = False
 
+        self.agents = agents or self.agents
+        self.streaming = False
+
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
-            self._meta_label.display = True
+            self._meta_label.display = not self.collapsed
 
         if self._message_view:
             final_width = self._message_view.size.width
             if final_width > 0:
                 self._message_view.styles.width = final_width
-            self._message_view.styles.min_width = None
 
     def on_click(self, event: Click) -> None:
-        if not self.thoughts or self.role == "user":
+        if self.collapsed:
+            parent = self.parent
+            if isinstance(parent, ChatTurn):
+                parent.toggle_collapse()
+            else:
+                self.collapsed = False
+                self._update_ui_content()
+                if self._meta_label:
+                    self._meta_label.display = True
+            event.stop()
             return
-        self.thoughts_expanded = not self.thoughts_expanded
-        self._update_ui_content()
+
+
+class ChatTurn(Vertical):
+    def __init__(self, user_bubble: MessageBubble):
+        super().__init__(classes="chat-turn")
+        self.user_bubble = user_bubble
+        self.agent_bubbles: list[MessageBubble] = []
+        self.collapsed = False
+
+    def compose(self) -> ComposeResult:
+        yield self.user_bubble
+
+    def collapse(self) -> None:
+        if not self.collapsed:
+            self.toggle_collapse()
+
+    def toggle_collapse(self) -> None:
+        if hasattr(self.app, "active_turn") and self == self.app.active_turn:
+            return
+
+        self.collapsed = not self.collapsed
+        self.user_bubble.collapsed = self.collapsed
+        self.user_bubble._update_ui_content()
+        for bubble in self.agent_bubbles:
+            bubble.collapsed = self.collapsed
+            bubble.display = not self.collapsed
+            if self.collapsed:
+                bubble.collapsible = True
+                bubble.thoughts_collapsed = True
+                bubble.tools_collapsed = True
+            if not self.collapsed:
+                bubble._update_ui_content()
+
+    async def mount_bubble(self, bubble: MessageBubble) -> None:
+        bubble.collapsed = self.collapsed
+        if self.collapsed:
+            bubble.thoughts_collapsed = True
+            bubble.tools_collapsed = True
+        self.agent_bubbles.append(bubble)
+        await self.mount(bubble)
+        if self.collapsed:
+            bubble.display = False
+        else:
+            bubble.display = True
+            bubble._update_ui_content()
+
+    def on_click(self, event: Click) -> None:
+        if hasattr(self.app, "active_turn") and self == self.app.active_turn:
+            return
+        self.toggle_collapse()
+        event.stop()
 
 
 class SupporterApp(App[None]):
@@ -289,34 +461,88 @@ class SupporterApp(App[None]):
         overflow: hidden;
     }}
 
+    .chat-turn {{
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        padding: 0;
+        layout: vertical;
+    }}
+
     MessageBubble.left  {{ align-horizontal: left; }}
     MessageBubble.right {{ align-horizontal: right; }}
 
     .bubble {{
-        width: auto;
-        max-width: 60%;
+        width: 100%;
         height: auto;
-        padding: 0 1;
+        padding: 0 2;
         margin: 0;
-        background: {THEME["bubble_bg"]};
-        border: round #444;
+        background: transparent;
+        border: none;
+        layout: vertical;
     }}
 
     .bubble.user-border {{
-        border: round {THEME["magenta"]};
         color: {THEME["magenta"]};
+        content-align-horizontal: right;
+    }}
+
+    .bubble.user-border #main-content {{
+        text-align: right;
     }}
 
     .bubble.agent-border {{
-        border: round {THEME["header_teal"]};
         color: {THEME["header_teal"]};
+        content-align-horizontal: left;
+    }}
+
+    .section-header {{
+        color: {THEME["yellow"]};
+        text-style: bold;
+        width: 1fr;
+    }}
+
+    .section-header.collapsed {{
+        text-style: dim bold;
+    }}
+
+    .section-header.collapsible {{
+    }}
+
+    .section-header.collapsible:hover {{
+        background: {THEME["bubble_bg"]};
+    }}
+
+    .section-content {{
+        color: {THEME["meta_gray"]};
+        text-style: italic;
+        margin-left: 2;
+        margin-top: 1;
+        width: 100%;
+    }}
+
+    #main-content {{
+        width: 100%;
+    }}
+
+    .collapsed-bubble #main-content {{
+        color: {THEME["meta_gray"]};
+        text-style: dim;
+    }}
+
+    .section-gap {{
+        margin-top: 1;
     }}
 
     .message-meta {{
         color: {THEME["yellow"]};
-        text-style: italic;
-        margin: 0 0 0 1;
-        width: auto;
+        text-style: dim italic;
+        margin: 0;
+        width: 1fr;
+    }}
+
+    .right .message-meta {{
+        text-align: right;
     }}
 
     #input-area {{
@@ -330,6 +556,13 @@ class SupporterApp(App[None]):
     #prompt-row {{
         height: 1;
         align: left middle;
+    }}
+
+    #mode-indicator {{
+        color: {THEME["yellow"]};
+        text-style: bold;
+        width: auto;
+        margin-right: 1;
     }}
 
     #prompt-symbol {{
@@ -416,7 +649,6 @@ class SupporterApp(App[None]):
             self.agent = CrewAgent(
                 provider=provider, status_callback=self._on_agent_active
             )
-            logger.info("Switched to multi-agent crew mode")
             return
 
         self.agent = ChatAgent(
@@ -439,6 +671,7 @@ class SupporterApp(App[None]):
                 pass
             yield Static("", id="thinking-indicator", markup=False)
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
+                yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
                 yield Input(
                     placeholder="Type a message... (/live, /crew, /clear, /exit)",
@@ -466,6 +699,7 @@ class SupporterApp(App[None]):
                 self._spinner_timer = None
             indicator = self.query_one("#thinking-indicator", Static)
             indicator.update("")
+            indicator.display = False
             indicator.refresh()
 
     def _tick_spinner(self) -> None:
@@ -478,14 +712,13 @@ class SupporterApp(App[None]):
         else:
             label = ""
             if self.crew_mode and self.current_active_agent:
-                label = f"[{self.current_active_agent}]"
-            elif self.live_mode:
-                label = "[LIVE]"
-            elif self.crew_mode:
-                label = "[AGENT]"
+                label = f"[{self.current_active_agent}] "
 
-            status = f"{frame} {label} {self.status_label}{dots}"
-        self.query_one("#thinking-indicator", Static).update(status)
+            status = f"{frame} {label}{self.status_label}{dots}"
+
+        indicator = self.query_one("#thinking-indicator", Static)
+        indicator.update(status)
+        indicator.display = True
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         user_text = event.value.strip()
@@ -495,14 +728,20 @@ class SupporterApp(App[None]):
         input_widget = self.query_one("#user-input", Input)
         input_widget.value = ""
         input_widget.focus()
+        chat_view = self.query_one("#chat-view", Vertical)
+        self.active_turn = None
+
+        for turn in chat_view.query(ChatTurn):
+            turn.collapse()
+
+        user_bubble = MessageBubble(role="user", content=user_text)
+        self.active_turn = ChatTurn(user_bubble)
+        chat_view.mount(self.active_turn)
+        chat_view.scroll_end()
 
         if user_text.startswith("/"):
             await self._handle_command(user_text.lower())
             return
-
-        chat_view = self.query_one("#chat-view", Vertical)
-        chat_view.mount(MessageBubble(role="user", content=user_text))
-        chat_view.scroll_end()
 
         self.run_worker(self._process_message_cycle(user_text, mount_user=False))
 
@@ -546,11 +785,22 @@ class SupporterApp(App[None]):
         self.is_activating_mode = True
         try:
             await self._setup_agent(use_crew=self.crew_mode, use_live=self.live_mode)
-            chat_view = self.query_one("#chat-view", Vertical)
-            await chat_view.mount(
+
+            mode_text = (
+                "CREW" if self.crew_mode else ("LIVE" if self.live_mode else "SINGLE")
+            )
+            indicator = self.query_one("#mode-indicator", Label)
+            indicator.markup = False
+            indicator.update(f"[{mode_text}]")
+
+            target = (
+                self.active_turn
+                if hasattr(self, "active_turn")
+                else self.query_one("#chat-view", Vertical)
+            )
+            await target.mount(
                 MessageBubble(role="agent", content=f"{mode_label} {status_msg}")
             )
-            chat_view.scroll_end()
         finally:
             self.is_activating_mode = False
             self._stop_thinking()
@@ -558,11 +808,15 @@ class SupporterApp(App[None]):
     async def _process_message_cycle(self, text: str, mount_user: bool = True) -> None:
         chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
-            await chat_view.mount(MessageBubble(role="user", content=text))
+            user_bubble = MessageBubble(role="user", content=text)
+            self.active_turn = ChatTurn(user_bubble)
+            await chat_view.mount(self.active_turn)
             chat_view.scroll_end()
             self.query_one("#user-input").focus()
 
-        self.current_active_agent = ""
+        target_container = (
+            self.active_turn if hasattr(self, "active_turn") else chat_view
+        )
         self.status_label = "Thinking"
         self._start_thinking()
         start_time = time.perf_counter()
@@ -573,20 +827,19 @@ class SupporterApp(App[None]):
                 raise RuntimeError("Agent is not initialized")
 
             if isinstance(agent, CrewAgent):
-                await self._process_crew_execution(text, chat_view, start_time)
+                await self._process_crew_execution(text, target_container, start_time)
             else:
                 await self._process_streaming_execution(
-                    text, chat_view, start_time, agent
+                    text, target_container, start_time, agent
                 )
         except Exception as e:
             logger.error(f"Execution error: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
-            chat_view.scroll_end()
         finally:
             self._stop_thinking()
 
     async def _process_crew_execution(
-        self, text: str, chat_view: Vertical, start_time: float
+        self, text: str, target: Vertical, start_time: float
     ) -> None:
         if not isinstance(self.agent, CrewAgent):
             return
@@ -594,25 +847,48 @@ class SupporterApp(App[None]):
         response = await self.agent.execute(text)
         agent_roles = response.usage.get("agents") if response.usage else None
 
-        await chat_view.mount(
-            MessageBubble(
-                role="agent",
-                content=response.text,
-                model=response.model,
-                duration=time.perf_counter() - start_time,
-                agents=agent_roles,
-            )
+        bubble = MessageBubble(
+            role="agent",
+            content=response.text,
+            model=response.model,
+            duration=time.perf_counter() - start_time,
+            agents=agent_roles,
         )
-        chat_view.scroll_end()
+
+        if isinstance(target, ChatTurn):
+            await target.mount_bubble(bubble)
+        else:
+            await target.mount(bubble)
 
     async def _process_streaming_execution(
-        self, text: str, chat_view: Vertical, start_time: float, agent: ChatAgent
+        self, text: str, target: Vertical, start_time: float, agent: ChatAgent
     ) -> None:
         bubble = None
         is_first_chunk = True
         actual_model = None
 
         async for chunk in agent.execute_stream(text):
+            if chunk.is_tool_call:
+                if "google_search" in (chunk.tool_name or "").lower():
+                    self.status_label = "Searching"
+                else:
+                    self.status_label = f"Using {chunk.tool_name}"
+                self._tick_spinner()
+
+                if is_first_chunk:
+                    is_first_chunk = False
+                    bubble = MessageBubble(role="agent", content="", streaming=True)
+                    if isinstance(target, ChatTurn):
+                        await target.mount_bubble(bubble)
+                    else:
+                        await target.mount(bubble)
+
+                if bubble:
+                    bubble.add_tool_call(
+                        chunk.tool_name or "unknown_tool", chunk.tool_args
+                    )
+                continue
+
             if chunk.is_last:
                 self.status_label = "Thinking"
                 self._tick_spinner()
@@ -633,18 +909,20 @@ class SupporterApp(App[None]):
                 else:
                     bubble.content = chunk.text
 
-                await chat_view.mount(bubble)
-                chat_view.scroll_end()
+                if isinstance(target, ChatTurn):
+                    await target.mount_bubble(bubble)
+                else:
+                    await target.mount(bubble)
             else:
                 if bubble:
+                    if self.status_label == "Searching" or "Using" in self.status_label:
+                        self.status_label = "Streaming"
                     bubble.append_token(chunk.text, is_thought=chunk.is_thought)
-                    chat_view.scroll_end()
 
         if bubble:
             bubble.finalize(
                 model=actual_model, duration=time.perf_counter() - start_time
             )
-            chat_view.scroll_end()
 
 
 def main() -> None:
