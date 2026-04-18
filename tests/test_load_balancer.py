@@ -27,7 +27,7 @@ async def test_round_robin_cycling() -> None:
     with MagicMock() as _:
         import supporter.index
 
-        supporter.index.GeminiProvider = MagicMock(side_effect=[p1, p2])
+        setattr(supporter.index, "GeminiProvider", MagicMock(side_effect=[p1, p2]))  # noqa: B010
         lb = DynamicPool(["key1", "key2"], model_name="P1")
 
         res1 = await lb.generate("test")
@@ -48,7 +48,7 @@ async def test_round_robin_streaming() -> None:
     with MagicMock() as _:
         import supporter.index
 
-        supporter.index.GeminiProvider = MagicMock(side_effect=[p1, p2])
+        setattr(supporter.index, "GeminiProvider", MagicMock(side_effect=[p1, p2]))  # noqa: B010
         lb = DynamicPool(["key1", "key2"], model_name="P1")
 
         stream1 = lb.generate_stream("test")
@@ -67,6 +67,6 @@ def test_load_balancer_name() -> None:
     with MagicMock() as _:
         import supporter.index
 
-        supporter.index.GeminiProvider = MagicMock(side_effect=[p1, p2])
+        setattr(supporter.index, "GeminiProvider", MagicMock(side_effect=[p1, p2]))  # noqa: B010
         lb = DynamicPool(["key1", "key2"], model_name="P1")
         assert lb.get_name() == "P1 (Dynamic Pool x2)"

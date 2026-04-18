@@ -32,7 +32,7 @@ async def test_chat_agent_execute_stream() -> None:
     assert len(history) == 2
     assert history[0].role == "user"
     assert history[1].role == "model"
-    assert history[1].parts[0].text == "Hello world"
+    assert history[1].parts and history[1].parts[0].text == "Hello world"
 
 
 @pytest.mark.asyncio
@@ -53,4 +53,4 @@ async def test_chat_agent_execute_stream_empty() -> None:
     assert "".join(collected) == ""
     history = agent.get_history()
     assert len(history) == 2
-    assert history[1].parts[0].text == ""
+    assert history[1].parts and history[1].parts[0].text == ""

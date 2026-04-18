@@ -9,9 +9,13 @@ from google.genai import types
 from google.genai.types import Content, GenerateContentConfig, Part
 
 from .config import config
+from .llm_types import (
+    DEFAULT_SYSTEM_INSTRUCTION,
+    LLMChunk,
+    LLMOptions,
+    LLMResult,
+)
 from .logger import logger
-
-logger.debug("--- Loading gemini_provider module ---")
 
 
 class GeminiProvider:
@@ -22,15 +26,19 @@ class GeminiProvider:
         system_instruction: str | None = None,
     ):
         target_model = model_name or config.gemini_model
-        logger.debug(f"Initializing GeminiProvider (model: {target_model})")
         retry_options = types.HttpRetryOptions(attempts=2)
+
         self.client = genai.Client(
             api_key=api_key, http_options=types.HttpOptions(retry_options=retry_options)
         )
         self.model_name = target_model
         self.default_system_instruction = (
-            system_instruction or config.default_system_instruction
+            system_instruction or DEFAULT_SYSTEM_INSTRUCTION
         )
+
+        self._tool_cache: list[Any] | None = None
+        self._last_tool_key: Any = None
+        logger.debug(f"GeminiProvider initialized (model: {target_model})")
 
     def _prepare_contents(
         self,
@@ -49,109 +57,134 @@ class GeminiProvider:
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
+            logger.debug(f"Executing tool: {name}")
             try:
-                result = await func(*args, **kwargs)
-                logger.debug(f"Tool {name} success: {result}")
-                return result
+                return await func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Tool {name} failed: {e!s}")
+                logger.error(f"Async tool '{name}' failed: {e}")
                 raise
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Calling tool: {name} (args: {args}, kwargs: {kwargs})")
+            logger.debug(f"Executing tool: {name}")
             try:
-                result = func(*args, **kwargs)
-                logger.debug(f"Tool {name} success: {result}")
-                return result
+                return func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Tool {name} failed: {e!s}")
+                logger.error(f"Sync tool '{name}' failed: {e}")
                 raise
 
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
 
-    def _transform_tools(
-        self, options: dict[str, Any] | None = None
-    ) -> list[Any] | None:
-        logger.debug("Entering GeminiProvider._transform_tools")
+    def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
         if not options:
             return None
+
         tools = options.get("tools", [])
         registry = options.get("registry") or {}
         use_search = options.get("use_search", False)
         use_code_execution = options.get("use_code_execution", False)
-        final_tools = list(tools) if tools else []
-        declared_names = set()
-        for t in final_tools:
-            if isinstance(t, dict) and "function_declarations" in t:
-                for fd in t["function_declarations"]:
-                    if isinstance(fd, dict) and "name" in fd:
-                        declared_names.add(fd["name"])
-            elif hasattr(t, "function_declarations"):
-                for fd in t.function_declarations:
-                    declared_names.add(fd.name)
+
+        current_identity_key = (
+            tuple(id(t) for t in tools),
+            tuple(sorted((name, id(func)) for name, func in registry.items())),
+            use_search,
+            use_code_execution,
+        )
+
+        if self._last_tool_key == current_identity_key:
+            return self._tool_cache
+
+        final_tools: list[Any] = list(tools) if tools else []
+        declared_names = self._extract_declared_tool_names(final_tools)
+
         for name, func in registry.items():
             if name not in declared_names:
                 final_tools.append(self._wrap_tool(name, func))
+
         if use_search:
-            final_tools.append(types.Tool(google_search=types.GoogleSearchRetrieval()))
+            final_tools.append(types.Tool(google_search=types.GoogleSearch()))
         if use_code_execution:
             final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
-        logger.debug(f"Exiting _transform_tools (Final counts: {len(final_tools)})")
-        return final_tools or None
+
+        self._tool_cache = final_tools or None
+        self._last_tool_key = current_identity_key
+        return self._tool_cache
+
+    def _extract_declared_tool_names(self, tools: list[Any]) -> set[str]:
+        names = set()
+        for tool in tools:
+            declarations = getattr(tool, "function_declarations", [])
+            if isinstance(tool, dict):
+                declarations = tool.get("function_declarations", [])
+
+            for decl in declarations:
+                name = (
+                    decl.get("name")
+                    if isinstance(decl, dict)
+                    else getattr(decl, "name", None)
+                )
+                if name:
+                    names.add(name)
+        return names
 
     async def generate(
         self,
         prompt: str | list[Content],
-        options: dict[str, Any] | None = None,
-    ) -> Any:
-        logger.debug("Entering GeminiProvider.generate")
-        from .index import LLMResult
-
+        options: LLMOptions | None = None,
+    ) -> LLMResult:
         options = options or {}
         interaction_id = options.get("interaction_id")
         transformed_tools = self._transform_tools(options)
-        config_inst = GenerateContentConfig(
+
+        generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
             or self.default_system_instruction,
             temperature=options.get("temperature"),
             top_p=options.get("top_p"),
             top_k=options.get("top_k"),
             max_output_tokens=options.get("max_output_tokens"),
-            automatic_function_calling={"disable": False}
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            )
             if transformed_tools
             else None,
             tools=transformed_tools,
+            thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
+
         start_time = time.perf_counter()
         result = None
+
         if interaction_id:
             try:
                 result = await self.client.aio.interactions.create(
                     model=self.model_name,
                     input=prompt if isinstance(prompt, str) else str(prompt),
                     previous_interaction_id=interaction_id,
-                    config=config_inst,
-                )
+                    generation_config=generation_config,
+                )  # type: ignore[call-overload]
             except Exception as e:
                 logger.warning(
-                    f"Failed to continue interaction {interaction_id}. "
-                    f"Falling back. Error: {e}"
+                    f"Resumption of interaction {interaction_id} failed; "
+                    f"falling back to standard generation. Reason: {e}"
                 )
+
         if not result:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=self._prepare_contents(prompt, options.get("history")),
-                config=config_inst,
+                contents=list(self._prepare_contents(prompt, options.get("history"))),  # type: ignore[arg-type]
+                config=generation_config,
             )
+
         end_time = time.perf_counter()
+
         history = getattr(result, "automatic_function_calling_history", None)
         if not history and interaction_id:
             response = getattr(result, "response", None)
             history = getattr(
                 response, "automatic_function_calling_history", None
             ) or getattr(result, "history", None)
+
         usage_meta = getattr(result, "usage_metadata", None)
         usage = (
             {
@@ -163,9 +196,22 @@ class GeminiProvider:
             if usage_meta
             else {}
         )
-        logger.debug("Exiting GeminiProvider.generate with success")
+
+        thoughts = ""
+        if result.candidates and result.candidates[0].content:
+            text_parts = result.candidates[0].content.parts
+            if text_parts:
+                thoughts = "".join(
+                    [
+                        p.text
+                        for p in text_parts
+                        if p.text and getattr(p, "thought", False)
+                    ]
+                )
+
         return LLMResult(
             text=result.text or "",
+            thoughts=thoughts,
             model=self.model_name,
             duration=end_time - start_time,
             interaction_id=getattr(result, "id", None),
@@ -178,30 +224,65 @@ class GeminiProvider:
     async def generate_stream(
         self,
         prompt: str | list[Content],
-        options: dict[str, Any] | None = None,
-    ) -> AsyncIterator[Any]:
-        logger.debug("Entering GeminiProvider.generate_stream")
-        from .index import LLMChunk
-
+        options: LLMOptions | None = None,
+    ) -> AsyncIterator[LLMChunk]:
         options = options or {}
         transformed_tools = self._transform_tools(options)
-        config_inst = GenerateContentConfig(
+        generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
             or self.default_system_instruction,
             tools=transformed_tools,
-            automatic_function_calling={"disable": False}
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            )
             if transformed_tools
             else None,
+            thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
+
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=self._prepare_contents(prompt, options.get("history")),
-            config=config_inst,
+            contents=list(self._prepare_contents(prompt, options.get("history"))),  # type: ignore[arg-type]
+            config=generation_config,
         )
+
         async for chunk in stream:
-            yield LLMChunk(
-                text=chunk.text or "", is_last=False, model=self.model_name, raw=chunk
-            )
+            if not chunk.candidates or not chunk.candidates[0].content:
+                continue
+
+            parts = chunk.candidates[0].content.parts
+            if not parts:
+                continue
+
+            for part in parts:
+                is_thought = getattr(part, "thought", False)
+                if is_thought:
+                    yield LLMChunk(
+                        text=part.text or "",
+                        is_thought=True,
+                        is_last=False,
+                        model=self.model_name,
+                        raw=chunk,
+                    )
+                elif part.function_call:
+                    yield LLMChunk(
+                        text="",
+                        is_thought=False,
+                        is_last=False,
+                        is_tool_call=True,
+                        tool_name=part.function_call.name,
+                        tool_args=part.function_call.args or {},
+                        model=self.model_name,
+                        raw=chunk,
+                    )
+                elif part.text:
+                    yield LLMChunk(
+                        text=part.text,
+                        is_thought=False,
+                        is_last=False,
+                        model=self.model_name,
+                        raw=chunk,
+                    )
 
     def get_name(self) -> str:
         return self.model_name

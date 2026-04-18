@@ -15,3 +15,4 @@ venv/
 .coverage
 htmlcov/
 supporter.egg-info
+.mypy_cache

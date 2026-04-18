@@ -2,8 +2,6 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from supporter.index import LLMChunk
-
 
 def get_mock_gemini_response(text: str = "Mocked Response") -> MagicMock:
     usage_metadata = MagicMock()
@@ -41,18 +39,39 @@ def create_mock_genai_client(**kwargs: Any) -> MagicMock:
     async def mock_interaction(**kwargs: Any) -> None:
         return None
 
-    async def mock_stream(**kwargs: Any) -> AsyncIterator[LLMChunk]:
-        async def internal_gen() -> AsyncIterator[LLMChunk]:
-            yield LLMChunk(text="Chunk 1", is_last=False)
-            yield LLMChunk(text="Chunk 2", is_last=True)
+    async def mock_stream(**kwargs: Any) -> AsyncIterator[Any]:
+        async def internal_gen() -> AsyncIterator[Any]:
+            # Mimic the SDK chunk structure: chunk.candidates[0].content.parts[0].text
+            content_chunk_1 = MagicMock()
+            content_chunk_1.candidates = [MagicMock()]
+            content_chunk_1.candidates[0].content.parts = [
+                MagicMock(text="Chunk 1", thought=False, function_call=None)
+            ]
+            yield content_chunk_1
+
+            content_chunk_2 = MagicMock()
+            content_chunk_2.candidates = [MagicMock()]
+            content_chunk_2.candidates[0].content.parts = [
+                MagicMock(text="Chunk 2", thought=False, function_call=None)
+            ]
+            yield content_chunk_2
 
         return internal_gen()
 
-    def mock_stream_sync(**kwargs: Any) -> Iterator[LLMChunk]:
-        yield from [
-            LLMChunk(text="Chunk 1", is_last=False),
-            LLMChunk(text="Chunk 2", is_last=True),
+    def mock_stream_sync(**kwargs: Any) -> Iterator[Any]:
+        content_chunk_1 = MagicMock()
+        content_chunk_1.candidates = [MagicMock()]
+        content_chunk_1.candidates[0].content.parts = [
+            MagicMock(text="Chunk 1", thought=False, function_call=None)
         ]
+        yield content_chunk_1
+
+        content_chunk_2 = MagicMock()
+        content_chunk_2.candidates = [MagicMock()]
+        content_chunk_2.candidates[0].content.parts = [
+            MagicMock(text="Chunk 2", thought=False, function_call=None)
+        ]
+        yield content_chunk_2
 
     client.models.generate_content = AsyncMock(side_effect=mock_generate)
     client.aio.models.generate_content = AsyncMock(side_effect=mock_generate)

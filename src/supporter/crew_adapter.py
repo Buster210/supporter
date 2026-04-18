@@ -3,7 +3,7 @@ import threading
 from typing import Any
 
 from crewai.llms.base_llm import BaseLLM
-from pydantic import Field, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 
 from .config import DEFAULT_AGENT_ROLE, DEFAULT_MODEL
 from .logger import logger
@@ -24,7 +24,8 @@ def _start_background_loop() -> asyncio.AbstractEventLoop:
     return _LOOP
 
 
-class SupporterLLM(BaseLLM):  # type: ignore[misc]
+class SupporterLLM(BaseLLM):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     model: str = Field(default=DEFAULT_MODEL)
     _supporter_provider: Any = PrivateAttr()
     _status_callback: Any | None = PrivateAttr(default=None)
@@ -39,13 +40,14 @@ class SupporterLLM(BaseLLM):  # type: ignore[misc]
 
     def call(
         self,
-        messages: str | list[dict[str, str]],
+        messages: Any,
         tools: list[Any] | None = None,
         callbacks: list[Any] | None = None,
         available_functions: dict[str, Any] | None = None,
         from_task: Any | None = None,
         from_agent: Any | None = None,
-        response_model: type | None = None,
+        response_model: Any | None = None,
+        **kwargs: Any,
     ) -> str:
         prompt = ""
         if isinstance(messages, str):
@@ -57,31 +59,49 @@ class SupporterLLM(BaseLLM):  # type: ignore[misc]
             agent_role = getattr(from_agent, "role", DEFAULT_AGENT_ROLE)
             self._status_callback(agent_role)
 
-        options: dict[str, Any] = {"use_search": True, "use_code_execution": True}
+        execution_options: dict[str, Any] = {
+            "use_search": True,
+            "use_code_execution": True,
+        }
         if available_functions:
-            options["registry"] = available_functions
+            execution_options["registry"] = available_functions
 
         loop = _start_background_loop()
         future = asyncio.run_coroutine_threadsafe(
-            self._supporter_provider.generate(prompt, options), loop
+            self._supporter_provider.generate(prompt, execution_options), loop
         )
         try:
             result = future.result()
             return str(result.text)
-        except Exception as e:
-            logger.error(f"SupporterLLM call failed: {e}")
-            return f"Error executing model: {e}"
+        except Exception as error:
+            logger.error(f"SupporterLLM synchronous call failed: {error}")
+            return f"Error executing model: {error}"
 
-    async def acall(self, messages: str | list[dict[str, str]], **kwargs: Any) -> str:
+    async def acall(
+        self,
+        messages: Any,
+        tools: list[Any] | None = None,
+        callbacks: list[Any] | None = None,
+        available_functions: dict[str, Any] | None = None,
+        from_task: Any | None = None,
+        from_agent: Any | None = None,
+        response_model: Any | None = None,
+        **kwargs: Any,
+    ) -> str:
         logger.debug("Entering SupporterLLM.acall (async)")
         prompt = (
             messages if isinstance(messages, str) else messages[-1].get("content", "")
         )
-        options: dict[str, Any] = {"use_search": True, "use_code_execution": True}
+
+        execution_options: dict[str, Any] = {
+            "use_search": True,
+            "use_code_execution": True,
+        }
         available_functions = kwargs.get("available_functions")
         if available_functions:
-            options["registry"] = available_functions
-        result = await self._supporter_provider.generate(prompt, options)
+            execution_options["registry"] = available_functions
+
+        result = await self._supporter_provider.generate(prompt, execution_options)
         logger.debug("Exiting SupporterLLM.acall")
         return str(result.text)
 

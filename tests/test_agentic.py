@@ -1,3 +1,4 @@
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -43,7 +44,6 @@ async def test_tool_dispatch_to_registry() -> None:
         )
     )
 
-    # Setup agent with registry
     time_called = False
 
     def mock_get_time() -> dict[str, str]:
@@ -53,7 +53,7 @@ async def test_tool_dispatch_to_registry() -> None:
 
     agent = ChatAgent(
         mock_provider,
-        tools=[{"name": "get_current_time"}],
+        tools=cast(Any, [{"name": "get_current_time"}]),
         registry={"get_current_time": mock_get_time},
     )
 

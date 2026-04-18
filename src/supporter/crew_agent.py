@@ -5,10 +5,8 @@ from crewai import Agent, Crew, Process, Task
 
 from .config import RESEARCHER_ROLE, WRITER_ROLE
 from .crew_adapter import SupporterLLM
-from .index import LLMResult
+from .llm_types import LLMResult
 from .logger import logger
-
-logger.debug("--- Loading crew_agent module ---")
 
 
 class CrewManager:
@@ -18,19 +16,21 @@ class CrewManager:
 
     def _assemble_research_crew(self, topic: str) -> Crew:
         logger.debug(f"Entering _assemble_research_crew (topic: {topic})")
+
         researcher = Agent(
             role=RESEARCHER_ROLE,
             goal=(
                 "Uncover cutting-edge developments and provide deep insights on {topic}"
             ),
             backstory=(
-                "You are a veteran researcher with an eye for detail. \n"
+                "You are a veteran researcher with an eye for detail. "
                 "You excel at finding non-obvious connections and trends."
             ),
             llm=self.llm,
             verbose=True,
             allow_delegation=False,
         )
+
         writer = Agent(
             role=WRITER_ROLE,
             goal=(
@@ -38,13 +38,14 @@ class CrewManager:
                 "and engaging reports"
             ),
             backstory=(
-                "You are an expert communicator who can take technical jargon \n"
+                "You are an expert communicator who can take technical jargon "
                 "and turn it into a narrative that humans actually want to read."
             ),
             llm=self.llm,
             verbose=True,
             allow_delegation=False,
         )
+
         research_task = Task(
             description=(
                 f"Conduct a comprehensive research on: {topic}. "
@@ -55,6 +56,7 @@ class CrewManager:
             ),
             agent=researcher,
         )
+
         write_task = Task(
             description=(
                 f"Synthesize the research findings into a coherent report for: {topic}"
@@ -65,6 +67,7 @@ class CrewManager:
             agent=writer,
             context=[research_task],
         )
+
         return Crew(
             agents=[researcher, writer],
             tasks=[research_task, write_task],
@@ -83,16 +86,18 @@ class CrewManager:
                 agent_roles = [
                     task.agent for task in result.tasks_output if hasattr(task, "agent")
                 ]
+
             if not agent_roles:
-                agent_roles = [a.role for a in crew.agents]
-            result_text = str(result)
+                agent_roles = [agent.role for agent in crew.agents]
+
             return LLMResult(
-                text=result_text,
+                text=str(result),
                 model="CrewAI (Multi-Agent)",
                 usage={"agents": list(set(agent_roles))},
             )
-        except Exception as e:
-            logger.error(f"Crew execution failed: {e}")
-            return LLMResult(text=f"Error executing crew: {e}")
+
+        except Exception as error:
+            logger.error(f"Crew orchestration failed: {error}")
+            return LLMResult(text=f"Error executing crew: {error}")
         finally:
             logger.debug("Exiting coordinate_execution")
