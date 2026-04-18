@@ -6,7 +6,7 @@
 - **Entrypoint**: `supporter.tui:main` (Command: `supporter`).
 - **Dependency Management**: `uv` based (`uv.lock`). Core dependencies: `google-genai` (V1 SDK), `textual`, `crewai`, `rich`.
 - **Quality Gate**: `prek.toml` manages pre-commit hooks: `trailing-whitespace`, `ruff`, `mypy`, `bandit`, `detect-secrets`.
-- **Configuration**: `AppConfig` dataclass in `config.py` loaded via `python-dotenv`. 
+- **Configuration**: `AppConfig` dataclass in `config.py` loaded via `python-dotenv`.
 - **Tooling Framework**: `src/supporter/tools.py` defines a unified execution layer for LLM-accessible tools (e.g., `GoogleSearch`, `Weather`).
 
 ## 2. Infrastructure Internals
@@ -16,7 +16,7 @@
 
 ## 3. UI Technicals (`tui.py`)
 - **Turn Management**: Interactions are encapsulated in `ChatTurn` components, grouping a user query with the agent's response(s).
-- **UX Interaction**: 
+- **UX Interaction**:
     - **Collapsing**: Previous chat turns auto-collapse when a new message is submitted to minimize scroll fatigue.
     - **Streaming**: `MessageBubble` logic separates model `thoughts` (italicized) from `content` (streaming tokens).
     - **Status Feedback**: Dynamic thinking indicator reflects real-time tool usage (e.g., "Searching", "Using [Tool]").
@@ -35,4 +35,3 @@
 ## 6. Project Flow-Graph
 - `tui` -> `ChatTurn` -> `ChatAgent` (History/Tools) -> `DynamicPool` -> `GeminiProvider` (SDK/Continuity).
 - `tui` -> `CrewAgent` -> `SupporterAsyncBridge` (Loop) -> `DynamicPool`.
-

@@ -2,20 +2,20 @@ import asyncio
 import functools
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast
 
 from google import genai
 from google.genai import types
 from google.genai.types import Content, GenerateContentConfig, Part
 
-from .config import config
-from .llm_types import (
+from ..config import config
+from ..llm_types import (
     DEFAULT_SYSTEM_INSTRUCTION,
     LLMChunk,
     LLMOptions,
     LLMResult,
 )
-from .logger import logger
+from ..logger import logger
 
 
 class GeminiProvider:
@@ -153,7 +153,7 @@ class GeminiProvider:
         )
 
         start_time = time.perf_counter()
-        result = None
+        result: Any = None
 
         if interaction_id:
             try:
@@ -161,8 +161,8 @@ class GeminiProvider:
                     model=self.model_name,
                     input=prompt if isinstance(prompt, str) else str(prompt),
                     previous_interaction_id=interaction_id,
-                    generation_config=generation_config,
-                )  # type: ignore[call-overload]
+                    generation_config=cast(Any, generation_config),
+                )
             except Exception as e:
                 logger.warning(
                     f"Resumption of interaction {interaction_id} failed; "
@@ -172,7 +172,9 @@ class GeminiProvider:
         if not result:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=list(self._prepare_contents(prompt, options.get("history"))),  # type: ignore[arg-type]
+                contents=cast(
+                    Any, self._prepare_contents(prompt, options.get("history"))
+                ),
                 config=generation_config,
             )
 
@@ -242,7 +244,7 @@ class GeminiProvider:
 
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=list(self._prepare_contents(prompt, options.get("history"))),  # type: ignore[arg-type]
+            contents=cast(Any, self._prepare_contents(prompt, options.get("history"))),
             config=generation_config,
         )
 

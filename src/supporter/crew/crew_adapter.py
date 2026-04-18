@@ -5,8 +5,8 @@ from typing import Any
 from crewai.llms.base_llm import BaseLLM
 from pydantic import ConfigDict, Field, PrivateAttr
 
-from .config import DEFAULT_AGENT_ROLE, DEFAULT_MODEL
-from .logger import logger
+from ..config import DEFAULT_AGENT_ROLE, DEFAULT_MODEL
+from ..logger import logger
 
 _LOOP: asyncio.AbstractEventLoop | None = None
 _LOOP_THREAD: threading.Thread | None = None

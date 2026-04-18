@@ -28,7 +28,7 @@ class ChatAgent:
         self.use_code_execution = use_code_execution
         logger.debug(f"ChatAgent initialized with provider: {provider.get_name()}")
 
-    def _get_execution_options(self) -> LLMOptions:
+    def _prepare_execution_context(self) -> LLMOptions:
         return {
             "history": self.history,
             "interaction_id": self.current_interaction_id,
@@ -41,34 +41,34 @@ class ChatAgent:
 
     async def execute(self, prompt: str) -> LLMResult:
         user_message = Content(role="user", parts=[Part(text=prompt)])
-        result = await self.provider.generate(prompt, self._get_execution_options())
+        result = await self.provider.generate(prompt, self._prepare_execution_context())
 
         self.current_interaction_id = result.interaction_id
-
-        if result.automatic_function_calling_history:
-            self.history = result.automatic_function_calling_history
-        else:
-            self.history.append(user_message)
-            model_parts = (
-                result.candidates[0].content.parts if result.candidates else []
-            )
-            self.history.append(Content(role="model", parts=model_parts))
+        self._sync_history(user_message, result)
 
         return result
+
+    def _sync_history(self, user_message: Content, result: LLMResult) -> None:
+        if result.automatic_function_calling_history:
+            self.history = result.automatic_function_calling_history
+            return
+
+        self.history.append(user_message)
+        parts = result.candidates[0].content.parts if result.candidates else []
+        self.history.append(Content(role="model", parts=parts))
 
     async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
         user_message = Content(role="user", parts=[Part(text=prompt)])
         accumulated_text = ""
 
         async for chunk in self.provider.generate_stream(
-            prompt, self._get_execution_options()
+            prompt, self._prepare_execution_context()
         ):
             accumulated_text += chunk.text
             yield chunk
 
         self.history.append(user_message)
         self.history.append(Content(role="model", parts=[Part(text=accumulated_text)]))
-
 
     def clear_history(self) -> None:
         logger.info("Clearing agent session history")
@@ -78,7 +78,7 @@ class ChatAgent:
 
 class CrewAgent:
     def __init__(self, provider: LLMProvider, status_callback: Any = None):
-        from .crew_agent import CrewManager
+        from .crew import CrewManager
 
         self.manager = CrewManager(provider=provider, status_callback=status_callback)
 
@@ -93,7 +93,6 @@ class CrewAgent:
         raise NotImplementedError(
             "Streaming is not yet supported for multi-agent workflows"
         )
-
 
     def clear_history(self) -> None:
         pass

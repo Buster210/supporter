@@ -7,10 +7,10 @@ from google import genai
 from google.genai import types
 from google.genai.types import Content
 
-from .config import config
-from .llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
-from .logger import logger
-from .tools import google_search
+from ..config import config
+from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
+from ..logger import logger
+from ..tools import google_search
 
 
 class GeminiLiveProvider:
@@ -238,7 +238,6 @@ class GeminiLiveProvider:
             try:
                 async for response in session.receive():
                     if response.tool_call:
-                        # Handle multiple function calls in one turn by yielding them
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(
                                 text="",

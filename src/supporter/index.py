@@ -13,10 +13,9 @@ from .config import (
     HTTP_SERVICE_UNAVAILABLE,
     config,
 )
-from .gemini_live_provider import GeminiLiveProvider
-from .gemini_provider import GeminiProvider
 from .llm_types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 from .logger import logger
+from .providers import GeminiLiveProvider, GeminiProvider
 
 __all__ = [
     "DynamicPool",
