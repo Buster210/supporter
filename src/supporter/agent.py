@@ -69,8 +69,6 @@ class ChatAgent:
         self.history.append(user_message)
         self.history.append(Content(role="model", parts=[Part(text=accumulated_text)]))
 
-    def get_history(self) -> list[Content]:
-        return self.history
 
     def clear_history(self) -> None:
         logger.info("Clearing agent session history")
@@ -96,8 +94,6 @@ class CrewAgent:
             "Streaming is not yet supported for multi-agent workflows"
         )
 
-    def get_history(self) -> list[Content]:
-        return []
 
     def clear_history(self) -> None:
         pass

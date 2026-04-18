@@ -60,4 +60,4 @@ async def test_tool_dispatch_to_registry() -> None:
     response = await agent.execute("What time is it?")
 
     assert response.text == "It is 12:00 PM."
-    assert agent.get_history() == mock_history
+    assert agent.history == mock_history
