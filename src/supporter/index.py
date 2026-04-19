@@ -338,7 +338,6 @@ _provider_registry: dict[str, LLMProvider] = {}
 
 
 def clear_providers() -> None:
-    """Clear the provider registry and release resources."""
     logger.info("Clearing provider registry")
     _provider_registry.clear()
 
@@ -348,13 +347,17 @@ def get_provider(
     live: bool = False,
     shared: bool = True,
     model_name: str | None = None,
+    registry: dict[str, Callable[..., Any]] | None = None,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
 
     if shared and cache_key in _provider_registry:
         logger.debug(f"Returning cached provider for {cache_key}")
-        return _provider_registry[cache_key]
+        provider = _provider_registry[cache_key]
+        if live and registry and hasattr(provider, "registry"):
+            provider.registry.update(registry)
+        return provider
 
     logger.debug(
         f"get_provider creating new instance (type: {target_type}, "
@@ -374,7 +377,7 @@ def get_provider(
         def live_primary_factory() -> LLMProvider:
             target_model = model_name or config.gemini_live_model
             logger.info(f"Creating Live Primary Provider: {target_model}")
-            return GeminiLiveProvider(keys, model_name=target_model)
+            return GeminiLiveProvider(keys, model_name=target_model, registry=registry)
 
         def live_fallback_factory() -> LLMProvider | None:
             if not config.gemini_live_fallback_model:
@@ -383,7 +386,7 @@ def get_provider(
                 f"Creating Live Fallback Provider: {config.gemini_live_fallback_model}"
             )
             return GeminiLiveProvider(
-                keys, model_name=config.gemini_live_fallback_model
+                keys, model_name=config.gemini_live_fallback_model, registry=registry
             )
 
         provider = LazyFallbackProvider(live_primary_factory, live_fallback_factory)
@@ -399,6 +402,7 @@ def get_provider(
             return DynamicPool(keys, config.gemini_fallback_model, pool_size=2)
 
         provider = LazyFallbackProvider(primary_factory, fallback_factory)
+
     if shared:
         _provider_registry[cache_key] = provider
 
