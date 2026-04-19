@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,16 @@ async def google_search(query: str) -> str:
         return f"Error performing search: {e!s}"
 
 
+_INTERNAL_BLACKLIST = [
+    ".env",
+    ".gitignore",
+    ".git",
+    ".venv",
+    "src/supporter",
+    "uv.lock",
+    "pyproject.toml",
+]
+
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
 
 
@@ -96,16 +107,7 @@ def _validate_path(path: str) -> Path:
         )
 
     rel_p_str = str(p.relative_to(project_root))
-    internal_blacklist = [
-        ".env",
-        ".gitignore",
-        ".git",
-        ".venv",
-        "src/supporter",
-        "uv.lock",
-        "pyproject.toml",
-    ]
-    if any(rel_p_str.startswith(pattern) for pattern in internal_blacklist):
+    if any(rel_p_str.startswith(pattern) for pattern in _INTERNAL_BLACKLIST):
         raise PermissionError(
             f"Access denied: {rel_p_str} is a protected internal file."
         )
@@ -195,3 +197,52 @@ async def write_file(
     except Exception as e:
         logger.error(f"Tool Failure: write_file failed: {e}")
         return f"Error writing file: {e!s}"
+
+
+async def list_dir(path: str) -> str:
+    logger.info(f"Tool Execute: list_dir(path='{path}')")
+
+    def _sync_list() -> str:
+        p = _validate_path(path)
+        if not p.is_dir():
+            return f"Error: Path is not a directory: {p}"
+
+        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
+        rel_parent = p.relative_to(project_root)
+        spec = _get_gitignore_spec(project_root)
+
+        items = []
+        try:
+            with os.scandir(p) as it:
+                for entry in it:
+                    name = entry.name
+                    rel_item_str = str(rel_parent / name)
+
+                    if any(
+                        rel_item_str.startswith(pattern)
+                        for pattern in _INTERNAL_BLACKLIST
+                    ):
+                        continue
+
+                    if spec and spec.match_file(rel_item_str):
+                        continue
+
+                    try:
+                        type_str = "[DIR]" if entry.is_dir() else "[FILE]"
+                        items.append(f"{type_str} {name}")
+                    except OSError:
+                        continue
+        except OSError as e:
+            return f"Error accessing directory: {e!s}"
+
+        if not items:
+            return "Directory is empty or all items are restricted."
+
+        items.sort()
+        return "\n".join(items)
+
+    try:
+        return await asyncio.to_thread(_sync_list)
+    except Exception as e:
+        logger.error(f"Tool Failure: list_dir failed: {e}")
+        return f"Error listing directory: {e!s}"
