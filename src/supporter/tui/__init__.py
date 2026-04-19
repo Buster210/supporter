@@ -11,6 +11,7 @@ from textual.widgets import Input, Label, Static
 
 from .. import ChatAgent, CrewAgent
 from ..logger import init_logger, logger
+from ..tools import set_confirmation_callback
 from .message_processor import ChatMessageProcessor
 from .mode_manager import ModeManager, SpinnerController
 from .widgets import (
@@ -49,6 +50,7 @@ class SupporterApp(App[None]):
 
     async def on_mount(self) -> None:
         init_logger()
+        set_confirmation_callback(self._confirm_write)
         logger.info("Supporter TUI dashboard active")
         try:
             await self._setup_agent(use_live=True)
@@ -59,6 +61,7 @@ class SupporterApp(App[None]):
             self.notify(msg, severity="error")
 
     async def on_unmount(self) -> None:
+        set_confirmation_callback(None)
         self._spinner_controller.shutdown()
         self._mode_manager.shutdown()
 
@@ -187,6 +190,24 @@ class SupporterApp(App[None]):
         self, text: str, target: Vertical, start_time: float, agent: ChatAgent
     ) -> None:
         await self._message_processor.process_streaming(text, target, start_time, agent)
+
+    def _confirm_write(self, path: Path, content: str) -> bool:
+        import threading
+
+        from .widgets import ConfirmationModal
+
+        event = threading.Event()
+        result = [False]
+
+        def callback(value: bool) -> None:
+            result[0] = value
+            event.set()
+
+        self.call_from_thread(
+            self.push_screen, ConfirmationModal(str(path), content), callback
+        )
+        event.wait()
+        return result[0]
 
 
 def main() -> None:

@@ -31,6 +31,7 @@ class AppConfig:
     voice_name: str
     default_system_instruction: str
     allowed_directories: list[str]
+    require_write_confirmation: bool
 
 
 def _get_project_root() -> str:
@@ -69,6 +70,10 @@ def load_config() -> AppConfig:
             ),
         ),
         allowed_directories=[project_root],
+        require_write_confirmation=os.getenv(
+            "REQUIRE_WRITE_CONFIRMATION", "true"
+        ).lower()
+        == "true",
     )
 
 

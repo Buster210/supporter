@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from textual.widgets import Label, Static
 
 from ..config import config
 from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION
 from ..logger import logger
-
-if TYPE_CHECKING:
-    pass
-
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -55,11 +51,9 @@ class SpinnerController:
         if self._app.is_activating_mode:
             status = f"Activating Mode{dots}"
         else:
-            label = ""
-            if self._app.crew_mode and self._app.current_active_agent:
-                label = f"[{self._app.current_active_agent}] "
-
-            status = f"{frame} {label}{self._app.status_label}{dots}"
+            agent = getattr(self._app, "current_active_agent", None)
+            prefix = f"[{agent}] " if self._app.crew_mode and agent else ""
+            status = f"{frame} {prefix}{self._app.status_label}{dots}"
 
         indicator = self._app.query_one("#thinking-indicator", Static)
         indicator.update(status)

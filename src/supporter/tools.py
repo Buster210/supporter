@@ -1,5 +1,7 @@
 import asyncio
 import os
+import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +9,13 @@ import pathspec
 
 from .config import config
 from .logger import logger
+
+_CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
+
+
+def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> None:
+    global _CONFIRMATION_CALLBACK
+    _CONFIRMATION_CALLBACK = callback
 
 
 async def google_search(query: str) -> str:
@@ -30,30 +39,29 @@ async def google_search(query: str) -> str:
             },
         )
 
-        response_parts = [result.text]
+        candidates = getattr(result.raw, "candidates", None)
+        if not candidates:
+            return result.text
 
-        raw_response = result.raw
-        if hasattr(raw_response, "candidates") and raw_response.candidates:
-            candidate = raw_response.candidates[0]
-            if (
-                hasattr(candidate, "grounding_metadata")
-                and candidate.grounding_metadata
-            ):
-                meta = candidate.grounding_metadata
+        meta = getattr(candidates[0], "grounding_metadata", None)
+        if not meta:
+            return result.text
 
-                sources = []
-                if hasattr(meta, "grounding_chunks") and meta.grounding_chunks:
-                    for chunk in meta.grounding_chunks:
-                        if hasattr(chunk, "web") and chunk.web:
-                            title = getattr(chunk.web, "title", "Search Result")
-                            url = getattr(chunk.web, "uri", "")
-                            if url:
-                                sources.append(f"- {title}: {url}")
+        sources = []
+        for chunk in getattr(meta, "grounding_chunks", []):
+            web = getattr(chunk, "web", None)
+            if not web:
+                continue
 
-                if sources:
-                    response_parts.append("\n\nSOURCES FOUND:\n" + "\n".join(sources))
+            url = getattr(web, "uri", "")
+            if url:
+                title = getattr(web, "title", "Search Result")
+                sources.append(f"- {title}: {url}")
 
-        full_response = "\n".join(response_parts)
+        if not sources:
+            return result.text
+
+        full_response = f"{result.text}\n\n\nSOURCES FOUND:\n" + "\n".join(sources)
         logger.debug(f"Tool Success: google_search returned {len(full_response)} chars")
         return full_response
 
@@ -162,6 +170,60 @@ async def write_file(
 
     def _sync_write() -> str:
         p = _validate_path(path)
+
+        if config.require_write_confirmation:
+            import difflib
+
+            if p.exists():
+                try:
+                    with p.open("r", encoding=encoding) as f:
+                        old_content = f.read()
+
+                    diff = difflib.unified_diff(
+                        old_content.splitlines(keepends=True),
+                        content.splitlines(keepends=True),
+                        fromfile=f"a/{p.name}",
+                        tofile=f"b/{p.name}",
+                        n=3,
+                    )
+                    display_diff = "".join(diff) or "(No changes detected)"
+                except Exception as e:
+                    display_diff = (
+                        f"Error generating diff: {e}\n\nProposed Content:\n{content}"
+                    )
+            else:
+                lines = content.splitlines(keepends=True)
+                diff = difflib.unified_diff(
+                    [],
+                    lines,
+                    fromfile="/dev/null",
+                    tofile=f"b/{p.name}",
+                    n=len(lines),
+                )
+                display_diff = "".join(diff)
+
+            if _CONFIRMATION_CALLBACK:
+                if not _CONFIRMATION_CALLBACK(p, display_diff):
+                    return "Write operation cancelled by user security preference."
+            elif sys.stdin.isatty():
+                print("\n" + "=" * 60)
+                print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
+                print(f" TARGET FILE: {p}")
+                print("-" * 60)
+                print(" PROPOSED DIFF ".center(60, "-"))
+                print(display_diff)
+                print("-" * 60)
+                confirm = input(" Proceed with write? (y/n): ").lower().strip()
+                print("=" * 60 + "\n")
+                if confirm not in ("y", "yes"):
+                    return "Write operation cancelled by user security preference."
+            else:
+                logger.warning(
+                    f"Write confirmation required for {p} but no interactive TTY "
+                    "or callback available. Skipping write for safety."
+                )
+                return "Error: Interactive confirmation required but unavailable."
+
         p.parent.mkdir(parents=True, exist_ok=True)
 
         if offset is None and limit is None:
@@ -215,21 +277,16 @@ async def list_dir(path: str) -> str:
         try:
             with os.scandir(p) as it:
                 for entry in it:
-                    name = entry.name
-                    rel_item_str = str(rel_parent / name)
+                    rel_path = str(rel_parent / entry.name)
 
-                    if any(
-                        rel_item_str.startswith(pattern)
-                        for pattern in _INTERNAL_BLACKLIST
-                    ):
+                    if any(rel_path.startswith(p) for p in _INTERNAL_BLACKLIST):
                         continue
-
-                    if spec and spec.match_file(rel_item_str):
+                    if spec and spec.match_file(rel_path):
                         continue
 
                     try:
-                        type_str = "[DIR]" if entry.is_dir() else "[FILE]"
-                        items.append(f"{type_str} {name}")
+                        tag = "[DIR]" if entry.is_dir() else "[FILE]"
+                        items.append(f"{tag} {entry.name}")
                     except OSError:
                         continue
         except OSError as e:

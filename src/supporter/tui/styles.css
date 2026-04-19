@@ -180,3 +180,59 @@ Input {
 #user-input:focus {
     border: solid #ff06b5;
 }
+
+ConfirmationModal {
+    align: center middle;
+}
+
+#modal-container {
+    width: auto;
+    max-width: 90%;
+    max-height: 90%;
+    height: auto;
+    background: #111;
+    border: solid #333;
+    padding: 1 4;
+}
+
+#modal-header {
+    text-align: center;
+    color: #ffeb3b;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#modal-content {
+    height: auto;
+    max-height: 30;
+    padding: 0 1;
+    overflow-y: scroll;
+    color: #888;
+    margin-bottom: 1;
+}
+
+#modal-buttons {
+    height: 3;
+    align: center middle;
+    border-top: solid #333;
+    padding-top: 1;
+}
+
+#modal-buttons Button {
+    width: auto;
+    height: 1;
+    min-width: 12;
+    border: none;
+    margin: 0 1;
+    padding: 0;
+}
+
+#modal-buttons #allow {
+    background: #00cc00;
+    color: #000;
+}
+
+#modal-buttons #cancel {
+    background: #ff0000;
+    color: #fff;
+}

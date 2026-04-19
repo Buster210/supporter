@@ -1,16 +1,57 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from rich.markdown import Markdown as RichMarkdown
+from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.events import Click, MouseScrollDown, MouseScrollUp
-from textual.widgets import Label, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, Label, Static
 
 from .theme import THEME, apply_crystal_gradient
+
+
+class ConfirmationModal(ModalScreen[bool]):
+    def __init__(self, path: str, content: str):
+        super().__init__()
+        self.path = path
+        self.content = content
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-container"):
+            filename = Path(self.path).name
+            yield Label(f"Write {filename}?", id="modal-header")
+            with ScrollableContainer(id="modal-content"):
+                yield Static(
+                    Syntax(
+                        self.content,
+                        "diff",
+                        theme="monokai",
+                        background_color="default",
+                        word_wrap=True,
+                    ),
+                    expand=True,
+                )
+            with Horizontal(id="modal-buttons"):
+                yield Button("Allow", id="allow")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        max_line = max((len(line) for line in self.content.splitlines()), default=40)
+        padding = 6  # borders + padding
+        width = min(int((max_line + padding) * 1.3), int(self.app.size.width * 0.9))
+        self.query_one("#modal-container").styles.width = width
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "allow":
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
 
 
 class SupporterHeader(Static):
