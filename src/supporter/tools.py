@@ -5,12 +5,9 @@ from .logger import logger
 async def google_search(query: str) -> str:
     logger.info(f"Tool Execute: google_search(query='{query}')")
 
-    target_model = config.gemini_model
-    from .providers import GeminiProvider
+    from .index import get_provider
 
-    provider = GeminiProvider(
-        api_key=config.gemini_api_keys[0], model_name=target_model
-    )
+    provider = get_provider(live=True, model_name=config.gemini_live_fallback_model)
 
     try:
         result = await provider.generate(

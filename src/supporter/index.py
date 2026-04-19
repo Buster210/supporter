@@ -26,6 +26,7 @@ __all__ = [
     "LLMProvider",
     "LLMResult",
     "LazyFallbackProvider",
+    "clear_providers",
     "config",
     "get_provider",
     "is_model_error",
@@ -173,6 +174,9 @@ class DynamicPool(LLMProvider):
 
         last_error: BaseException | None = None
         for attempt in range(len(self.keys)):
+            if not self.active_slots:
+                self._fill_slot()
+
             while not self.active_slots:
                 await self.slot_available.wait()
 
@@ -227,6 +231,9 @@ class DynamicPool(LLMProvider):
 
         last_error: BaseException | None = None
         for attempt in range(len(self.keys)):
+            if not self.active_slots:
+                self._fill_slot()
+
             while not self.active_slots:
                 await self.slot_available.wait()
 
@@ -327,10 +334,32 @@ class LazyFallbackProvider(LLMProvider):
         return self.primary.get_name()
 
 
+_provider_registry: dict[str, LLMProvider] = {}
+
+
+def clear_providers() -> None:
+    """Clear the provider registry and release resources."""
+    logger.info("Clearing provider registry")
+    _provider_registry.clear()
+
+
 def get_provider(
-    provider_type: ProviderType | None = None, live: bool = False
+    provider_type: ProviderType | None = None,
+    live: bool = False,
+    shared: bool = True,
+    model_name: str | None = None,
 ) -> LLMProvider:
-    logger.debug(f"get_provider called with type: {provider_type}, live: {live}")
+    target_type = provider_type or config.provider
+    cache_key = f"{target_type}_{live}_{model_name or 'default'}"
+
+    if shared and cache_key in _provider_registry:
+        logger.debug(f"Returning cached provider for {cache_key}")
+        return _provider_registry[cache_key]
+
+    logger.debug(
+        f"get_provider creating new instance (type: {target_type}, "
+        f"live: {live}, model: {model_name or 'default'})"
+    )
     target_type = provider_type or config.provider
 
     if target_type != "gemini":
@@ -343,8 +372,9 @@ def get_provider(
     if live:
 
         def live_primary_factory() -> LLMProvider:
-            logger.info(f"Creating Live Primary Provider: {config.gemini_live_model}")
-            return GeminiLiveProvider(keys, model_name=config.gemini_live_model)
+            target_model = model_name or config.gemini_live_model
+            logger.info(f"Creating Live Primary Provider: {target_model}")
+            return GeminiLiveProvider(keys, model_name=target_model)
 
         def live_fallback_factory() -> LLMProvider | None:
             if not config.gemini_live_fallback_model:
@@ -356,14 +386,20 @@ def get_provider(
                 keys, model_name=config.gemini_live_fallback_model
             )
 
-        return LazyFallbackProvider(live_primary_factory, live_fallback_factory)
+        provider = LazyFallbackProvider(live_primary_factory, live_fallback_factory)
+    else:
 
-    def primary_factory() -> LLMProvider:
-        return DynamicPool(keys, config.gemini_model, pool_size=2)
+        def primary_factory() -> LLMProvider:
+            target_model = model_name or config.gemini_model
+            return DynamicPool(keys, target_model, pool_size=2)
 
-    def fallback_factory() -> LLMProvider | None:
-        if not config.gemini_fallback_model:
-            return None
-        return DynamicPool(keys, config.gemini_fallback_model, pool_size=2)
+        def fallback_factory() -> LLMProvider | None:
+            if not config.gemini_fallback_model:
+                return None
+            return DynamicPool(keys, config.gemini_fallback_model, pool_size=2)
 
-    return LazyFallbackProvider(primary_factory, fallback_factory)
+        provider = LazyFallbackProvider(primary_factory, fallback_factory)
+    if shared:
+        _provider_registry[cache_key] = provider
+
+    return provider
