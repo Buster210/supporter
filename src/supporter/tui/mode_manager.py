@@ -8,6 +8,7 @@ from textual.widgets import Label, Static
 
 from ..config import config
 from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION
+from ..logger import logger
 
 if TYPE_CHECKING:
     pass
@@ -87,14 +88,7 @@ class ModeManager:
             use_search=True,
             use_code_execution=True,
         )
-        from ..logger import logger
-
         logger.info(f"Switched to standard chat agent (Live: {use_live})")
-
-        if use_live and hasattr(provider, "_ensure_session"):
-            task = asyncio.create_task(provider._ensure_session())
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
 
     async def toggle_mode(self, crew: bool = False, live: bool = False) -> None:
         if crew:

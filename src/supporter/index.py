@@ -15,7 +15,8 @@ from .config import (
 )
 from .llm_types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 from .logger import logger
-from .providers import GeminiLiveProvider, GeminiProvider
+from .providers.gemini_live_provider import GeminiLiveProvider
+from .providers.gemini_provider import GeminiProvider
 
 __all__ = [
     "DynamicPool",
@@ -111,8 +112,6 @@ class DynamicPool(LLMProvider):
         logger.debug(
             f"Initializing DynamicPool (size: {self.pool_size}) for {self.model_name}"
         )
-        for _ in range(self.pool_size):
-            self._fill_slot()
 
     def _fill_slot(self) -> None:
         key = self.keys[self.next_key_index % len(self.keys)]

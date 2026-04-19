@@ -1,12 +1,12 @@
 from .config import config
 from .logger import logger
-from .providers import GeminiProvider
 
 
 async def google_search(query: str) -> str:
     logger.info(f"Tool Execute: google_search(query='{query}')")
 
     target_model = config.gemini_model
+    from .providers import GeminiProvider
 
     provider = GeminiProvider(
         api_key=config.gemini_api_keys[0], model_name=target_model
