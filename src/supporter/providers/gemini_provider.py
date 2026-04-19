@@ -86,7 +86,7 @@ class GeminiProvider:
 
         current_identity_key = (
             tuple(id(t) for t in tools),
-            tuple(sorted((name, id(func)) for name, func in registry.items())),
+            tuple(sorted(registry.keys())),
             use_search,
             use_code_execution,
         )

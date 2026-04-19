@@ -222,7 +222,6 @@ class GeminiLiveProvider:
                 logger.error(f"Error during realtime response retrieval: {e}")
 
             response_text = "".join(full_response_parts)
-            # Create a mock raw object that tools.py expects
             from dataclasses import dataclass
 
             @dataclass
