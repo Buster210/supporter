@@ -1,43 +1,45 @@
 # Master Context: Supporter (EARC - Final Principal Edition)
 
-**Supporter** is a high-performance Python Textual TUI chat client powered by Google Gemini, optimized for rapid interaction, multimodal live sessions, and CrewAI orchestration with dynamic key rotation.
+**Supporter** is a high-performance Python Textual TUI chat client powered by Google Gemini, optimized for rapid interaction, multimodal live sessions, and CrewAI orchestration with dynamic key rotation and secure file-system tooling.
 
 ## 1. Project Anatomy & Manifests
 - **Entrypoint**: `src.supporter.tui:main` (Command: `supporter`).
-- **Dependency Management**: `uv` based (`uv.lock`). Core dependencies: `google-genai` (V1 SDK), `textual`, `crewai`, `rich`.
+- **Dependency Management**: `uv` based (`uv.lock`). Core dependencies: `google-genai` (V1 SDK), `textual`, `crewai`, `pathspec` (for secure file filtering).
 - **Modular Structure**:
-    - `src/supporter/tui/`: Encapsulated UI logic, widgets, and state management.
+    - `src/supporter/tui/`: Encapsulated UI logic, widgets, and modal-based state management.
     - `src/supporter/providers/`: Modular LLM provider implementations (Gemini, Gemini Live).
     - `src/supporter/crew/`: CrewAI integration and sync-to-async adapters.
-- **Quality Gate**: `prek.toml` manages pre-commit hooks: `trailing-whitespace`, `ruff`, `mypy`, `bandit`, `detect-secrets`.
-- **Configuration**: `AppConfig` dataclass in `config.py` loaded via `python-dotenv`.
+- **Root Detection**: `config.py` uses `_get_project_root` to automatically locate the repository base (via `.git` or `pyproject.toml`) for sandboxing.
 
 ## 2. Infrastructure Internals
-- **Pooling (`index.py`)**: `DynamicPool` maintains a `deque` of `GeminiProvider` slots. `rotate(-1)` handles round-robin selection. `slot_available` (`asyncio.Event`) handles backpressure during multi-slot recovery.
-- **Failover Logic**: 5XX errors trigger `_mark_model_cooldown` (30m) and background `_fill_slot`. 429 errors trigger immediate slot replacement without full model cooldown.
-- **Async Bridge (`src/supporter/crew/crew_adapter.py`)**: `SupporterLLM` (Custom CrewAI LLM) bridges sync execution to the async Provider Pool using a background daemon thread (`SupporterAsyncBridge`).
+- **Pooling (`index.py`)**: `DynamicPool` maintains a `deque` of `GeminiProvider` slots. Implements **Lazy Initialization**: slots are filled on-demand (`_fill_slot`) during execution if empty, reducing startup latency.
+- **Provider Registry**: `_provider_registry` implements a singleton cache for provider instances. `get_provider` returns cached instances by default (`shared=True`), ensuring pool reuse across different application components.
+- **Failover Logic**: 5XX errors trigger `_mark_model_cooldown` (30m). 429 errors trigger immediate slot replacement.
 
-## 3. UI Technicals (`src/supporter/tui/`)
-- **Mode Management**: `ModeManager` handles switching between `LIVE` (streaming) and `CREW` (agentic) modes via `/live` and `/crew` slash commands.
-- **Message Processing**: `ChatMessageProcessor` orchestrates turn execution, handling streaming responses and multi-agent progress updates.
-- **Turn Management**: Interactions are encapsulated in `ChatTurn` widgets, grouping user queries with agent response bubbles.
-- **UX Interaction**:
-    - **Collapsing**: Previous chat turns auto-collapse when a new message is submitted to minimize scroll fatigue.
-    - **Streaming**: `MessageBubble` handles real-time token rendering, distinguishing model `thoughts` from final content.
-    - **Status Feedback**: `SpinnerController` provides visual feedback during active generations.
-- **Theme**: Centralized `styles.css` with HSL-interpolated Cristal gradients.
+## 3. Security & Sandboxing (`src/supporter/tools.py`)
+- **FS Validation**: `_validate_path` enforces strict security boundaries:
+    - **Jailbreaking Protection**: Operations restricted to `allowed_directories` (project root).
+    - **Git-Awareness**: Uses `pathspec` to block access to files ignored by `.gitignore`.
+    - **Internal Blacklist**: Protects sensitive internal directories (`.gemini`, `__pycache__`).
+- **Write Confirmation**: `write_file` triggers a TUI-level security callback (`set_confirmation_callback`). Users must approve file writes via a unified diff interface before changes are committed.
 
-## 4. Interaction Logic (`src/supporter/providers/`)
-- **Provider Layer**: `GeminiProvider` and `GeminiLiveProvider` handle SDK interactions, including automatic function calling and thought extraction.
-- **Tool Execution**: Tools defined in `src/supporter/tools.py` are dynamically injected into generation configs and executed via the provider registry.
-- **Conversation State**: `ChatAgent` maintains persistent history. `automatic_function_calling_history` is prioritized for state synchronization.
-- **Continuity**: Uses `interactions.create(previous_interaction_id=...)` for stateful session resumption.
+## 4. UI Technicals (`src/supporter/tui/`)
+- **Modal System**: `ConfirmationModal` in `widgets.py` handles secure user approvals, providing syntax-highlighted diffs of proposed file changes.
+- **Status Reporting**: `SpinnerController` provides agent-aware feedback. In `CREW` mode, it displays the specific active agent (e.g., `[Researcher] Thinking...`).
+- **Mode Management**: `ModeManager` orchestrates agent setup, injecting the tool registry into both `ChatAgent` and `CrewAgent`.
+- **UX interaction**: Auto-collapsing chat turns, real-time token streaming with thought extraction, and HSL-interpolated Cristal themes.
 
-## 5. Testing & Mocks
+## 5. Interaction Logic
+- **Tool Registry**: Standard tools (`read_file`, `write_file`, `list_dir`) are defined in `tools.py` and registered with the LLM provider during initialization.
+- **Gemini Live Multimodal**: `GeminiLiveProvider` handles realtime sessions, extracting `grounding_metadata` and providing mock GenAI SDK objects for compatibility with existing tooling.
+- **Continuity**: Uses `previous_interaction_id` for stateful session resumption.
+
+## 6. Testing & Mocks
 - **Framework**: `pytest` + `pytest-asyncio`.
-- **Mocking**: `tests/mocks.py` provides `create_mock_genai_client`, mocking `aio.models` and `aio.interactions` for both streaming and unary calls.
+- **Mocking**: `tests/mocks.py` provides `MockRaw`/`MockCandidate` structures to simulate multimodal grounding and tool response objects.
 
-## 6. Project Flow-Graph
-- `tui` -> `ModeManager` -> `ChatAgent` -> `DynamicPool` -> `GeminiProvider`.
+## 7. Project Flow-Graph
+- `tui` -> `ModeManager` -> `ChatAgent` (Registry) -> `DynamicPool` -> `GeminiProvider`.
+- `tui` -> `ConfirmationModal` (Security Hook) -> `tools.py` -> File System.
 - `tui` -> `ChatMessageProcessor` -> `SupporterLLM` (Crew) -> `DynamicPool`.
-- `tui` -> `widgets.py` (ChatTurn/MessageBubble) -> `styles.css`.
+- `tui` -> `widgets.py` -> `styles.css`.
