@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -29,11 +30,22 @@ class AppConfig:
     log_file: str
     voice_name: str
     default_system_instruction: str
+    allowed_directories: list[str]
+
+
+def _get_project_root() -> str:
+    current = Path(__file__).resolve().parent
+    for parent in [current, *list(current.parents)]:
+        if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
+            return str(parent)
+    return os.getcwd()
 
 
 def load_config() -> AppConfig:
     raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
     keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+    project_root = _get_project_root()
+
     return AppConfig(
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         provider=os.getenv("LLM_PROVIDER", "gemini"),
@@ -56,6 +68,7 @@ def load_config() -> AppConfig:
                 "Prioritize quality and clarity in every response."
             ),
         ),
+        allowed_directories=[project_root],
     )
 
 

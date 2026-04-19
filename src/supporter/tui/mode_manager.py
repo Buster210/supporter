@@ -74,8 +74,14 @@ class ModeManager:
     async def setup_agent(self, use_crew: bool = False, use_live: bool = False) -> None:
         from .. import get_provider
         from ..agent import ChatAgent, CrewAgent
+        from ..tools import read_file, write_file
 
-        provider = get_provider(live=use_live)
+        registry: dict[str, Callable[..., Any]] = {
+            "read_file": read_file,
+            "write_file": write_file,
+        }
+
+        provider = get_provider(live=use_live, registry=registry)
         if use_crew:
             self._app.agent = CrewAgent(
                 provider=provider, status_callback=self._app._on_agent_active
@@ -84,6 +90,7 @@ class ModeManager:
 
         self._app.agent = ChatAgent(
             provider,
+            registry=registry,
             system_instruction=DEFAULT_SYSTEM_INSTRUCTION,
             use_search=True,
             use_code_execution=True,
