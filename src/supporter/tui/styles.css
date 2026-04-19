@@ -1,0 +1,182 @@
+Screen {
+    background: #121212;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+}
+
+#main-container {
+    width: 100%;
+    height: 100%;
+    layout: vertical;
+    background: transparent;
+    overflow-y: scroll;
+    scrollbar-size: 0 0;
+}
+
+SupporterHeader {
+    height: 5;
+    content-align: center middle;
+    background: transparent;
+    margin-top: 1;
+    color: #00ffcc;
+    text-style: bold;
+}
+
+#chat-view {
+    width: 100%;
+    height: 1fr;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    layout: vertical;
+    overflow-y: scroll;
+    scrollbar-size: 0 0;
+}
+
+MessageBubble {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.chat-turn {
+    width: 100%;
+    height: auto;
+    margin-top: 1;
+    padding: 0;
+    layout: vertical;
+}
+
+MessageBubble.left {
+    align-horizontal: left;
+}
+
+MessageBubble.right {
+    align-horizontal: right;
+}
+
+.bubble {
+    width: 100%;
+    height: auto;
+    padding: 0 2;
+    margin: 0;
+    background: transparent;
+    border: none;
+    layout: vertical;
+}
+
+.bubble.user-border {
+    color: #ff06b5;
+    content-align-horizontal: right;
+}
+
+.bubble.user-border #main-content {
+    text-align: right;
+}
+
+.bubble.agent-border {
+    color: #00ffcc;
+    content-align-horizontal: left;
+}
+
+.section-header {
+    color: #ffeb3b;
+    text-style: bold;
+    width: 1fr;
+}
+
+.section-header.collapsed {
+    text-style: dim bold;
+}
+
+.section-header.collapsible {}
+
+.section-header.collapsible:hover {
+    background: #1e1e1e;
+}
+
+.section-content {
+    color: #999999;
+    text-style: italic;
+    margin-left: 2;
+    margin-top: 1;
+    width: 100%;
+}
+
+#main-content {
+    width: 100%;
+}
+
+.collapsed-bubble #main-content {
+    color: #999999;
+    text-style: dim;
+}
+
+.section-gap {
+    margin-top: 1;
+}
+
+.message-meta {
+    color: #ffeb3b;
+    text-style: dim italic;
+    margin: 0;
+    width: 1fr;
+}
+
+.right .message-meta {
+    text-align: right;
+}
+
+#input-area {
+    height: 3;
+    border: solid #ff06b5;
+    margin: 0;
+    padding: 0 1;
+    background: transparent;
+}
+
+#prompt-row {
+    height: 1;
+    align: left middle;
+}
+
+#mode-indicator {
+    color: #ffeb3b;
+    text-style: bold;
+    width: auto;
+    margin-right: 1;
+}
+
+#prompt-symbol {
+    color: #00ff00;
+    text-style: bold;
+    width: 2;
+}
+
+Input {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    height: 1 !important;
+    color: #00ff00;
+}
+
+#user-input {
+    width: 1fr;
+}
+
+#thinking-indicator {
+    color: #ffeb3b;
+    text-style: italic;
+    margin-left: 2;
+    height: 1;
+}
+
+#user-input:focus {
+    border: solid #ff06b5;
+}
