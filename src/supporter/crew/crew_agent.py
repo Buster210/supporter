@@ -3,10 +3,10 @@ from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 
-from .config import RESEARCHER_ROLE, WRITER_ROLE
+from ..config import RESEARCHER_ROLE, WRITER_ROLE
+from ..llm_types import LLMResult
+from ..logger import logger
 from .crew_adapter import SupporterLLM
-from .llm_types import LLMResult
-from .logger import logger
 
 
 class CrewManager:

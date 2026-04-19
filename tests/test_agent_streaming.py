@@ -28,7 +28,7 @@ async def test_chat_agent_execute_stream() -> None:
 
     assert "".join(collected) == "Hello world"
 
-    history = agent.get_history()
+    history = agent.history
     assert len(history) == 2
     assert history[0].role == "user"
     assert history[1].role == "model"
@@ -51,6 +51,6 @@ async def test_chat_agent_execute_stream_empty() -> None:
         collected.append(chunk.text)
 
     assert "".join(collected) == ""
-    history = agent.get_history()
+    history = agent.history
     assert len(history) == 2
     assert history[1].parts and history[1].parts[0].text == ""

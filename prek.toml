@@ -23,6 +23,7 @@ rev = "v0.15.10"
 hooks = [
     { id = "ruff", args = [
         "--exit-non-zero-on-fix",
+        "--fix",
     ] },
     { id = "ruff-format" },
 ]

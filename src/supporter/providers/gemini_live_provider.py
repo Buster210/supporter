@@ -7,10 +7,10 @@ from google import genai
 from google.genai import types
 from google.genai.types import Content
 
-from .config import config
-from .llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
-from .logger import logger
-from .tools import google_search
+from ..config import config
+from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
+from ..logger import logger
+from ..tools import google_search
 
 
 class GeminiLiveProvider:
@@ -189,6 +189,7 @@ class GeminiLiveProvider:
 
             full_response_parts = []
             thought_parts = []
+            grounding_metadata = None
             try:
                 async for response in session.receive():
                     if response.tool_call:
@@ -204,6 +205,9 @@ class GeminiLiveProvider:
                             if part.thought and part.text:
                                 thought_parts.append(part.text)
 
+                    if server_content.grounding_metadata and not grounding_metadata:
+                        grounding_metadata = server_content.grounding_metadata
+
                     if (
                         server_content.output_transcription
                         and server_content.output_transcription.text
@@ -218,13 +222,27 @@ class GeminiLiveProvider:
                 logger.error(f"Error during realtime response retrieval: {e}")
 
             response_text = "".join(full_response_parts)
+            from dataclasses import dataclass
+
+            @dataclass
+            class MockCandidate:
+                grounding_metadata: Any
+
+            @dataclass
+            class MockRaw:
+                candidates: list[MockCandidate]
+
+            raw_mock = MockRaw(
+                candidates=[MockCandidate(grounding_metadata=grounding_metadata)]
+            )
+
             return LLMResult(
                 text=response_text,
                 model=self.model_name,
                 duration=time.perf_counter() - start_time,
                 thoughts="".join(thought_parts),
                 usage={},
-                raw=None,
+                raw=raw_mock,
             )
 
     async def generate_stream(
@@ -238,7 +256,6 @@ class GeminiLiveProvider:
             try:
                 async for response in session.receive():
                     if response.tool_call:
-                        # Handle multiple function calls in one turn by yielding them
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(
                                 text="",
