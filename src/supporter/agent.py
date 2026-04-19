@@ -54,8 +54,10 @@ class ChatAgent:
             return
 
         self.history.append(user_message)
-        parts = result.candidates[0].content.parts if result.candidates else []
-        self.history.append(Content(role="model", parts=parts))
+        if result.candidates and result.candidates[0].content:
+            self.history.append(
+                Content(role="model", parts=result.candidates[0].content.parts)
+            )
 
     async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
         user_message = Content(role="user", parts=[Part(text=prompt)])
