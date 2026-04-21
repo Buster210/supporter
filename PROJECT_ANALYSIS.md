@@ -12,9 +12,9 @@
 - **Root Detection**: `config.py` uses `_get_project_root` to automatically locate the repository base (via `.git` or `pyproject.toml`) for sandboxing.
 
 ## 2. Infrastructure Internals
-- **Pooling (`index.py`)**: `DynamicPool` maintains a `deque` of `GeminiProvider` slots. Implements **Lazy Initialization**: slots are filled on-demand (`_fill_slot`) during execution if empty, reducing startup latency.
-- **Provider Registry**: `_provider_registry` implements a singleton cache for provider instances. `get_provider` returns cached instances by default (`shared=True`), ensuring pool reuse across different application components.
-- **Failover Logic**: 5XX errors trigger `_mark_model_cooldown` (30m). 429 errors trigger immediate slot replacement.
+- **Pooling (`index.py`)**: `DynamicPool` maintains a `deque` of `GeminiProvider` instances, implementing a simplified **Round-Robin** rotation without complex async waiting logic for slot availability.
+- **Provider Registry**: `_provider_registry` implements a singleton cache for provider instances, now protected by `_provider_lock` for thread-safe access. `get_provider` ensures shared instances are reused across different application components.
+- **Failover Logic**: 5XX errors trigger `_mark_model_cooldown` (30m). 429 errors trigger immediate provider rotation in the pool.
 
 ## 3. Security & Sandboxing (`src/supporter/tools.py`)
 - **FS Validation**: `_validate_path` enforces strict security boundaries:
@@ -24,19 +24,20 @@
 - **Write Confirmation**: `write_file` triggers a TUI-level security callback (`set_confirmation_callback`). Users must approve file writes via a unified diff interface before changes are committed.
 
 ## 4. UI Technicals (`src/supporter/tui/`)
-- **Modal System**: `ConfirmationModal` in `widgets.py` handles secure user approvals, providing syntax-highlighted diffs of proposed file changes.
-- **Status Reporting**: `SpinnerController` provides agent-aware feedback. In `CREW` mode, it displays the specific active agent (e.g., `[Researcher] Thinking...`).
-- **Mode Management**: `ModeManager` orchestrates agent setup, injecting the tool registry into both `ChatAgent` and `CrewAgent`.
-- **UX interaction**: Auto-collapsing chat turns, real-time token streaming with thought extraction, and HSL-interpolated Cristal themes.
+- **Modular Rendering**: `MessageBubble` in `widgets.py` uses modularized rendering (`_render_thoughts`, `_render_tools`, `_render_main_content`) to handle complex multimodal and tool-aware message states.
+- **Turn Management**: `ChatTurn` implements clean state management for collapsible turns via `expand_turn` and `collapse_turn`, ensuring UI consistency and responsive interaction.
+- **Modal System**: `ConfirmationModal` handles secure user approvals with syntax-highlighted diffs for file changes.
+- **UX interaction**: Real-time token streaming with thought extraction, HSL-interpolated Cristal themes, and optimized layout for long-running agentic sessions.
 
 ## 5. Interaction Logic
-- **Tool Registry**: Standard tools (`read_file`, `write_file`, `list_dir`) are defined in `tools.py` and registered with the LLM provider during initialization.
-- **Gemini Live Multimodal**: `GeminiLiveProvider` handles realtime sessions, extracting `grounding_metadata` and providing mock GenAI SDK objects for compatibility with existing tooling.
-- **Continuity**: Uses `previous_interaction_id` for stateful session resumption.
+- **History Validation**: `ChatAgent` includes enhanced history handling with safety checks for null candidates and content parts, preventing state corruption during long interactions.
+- **Tool Registry**: Standard tools (`read_file`, `write_file`, `list_dir`) are registered with the LLM provider, with automated TUI-level confirmation hooks.
+- **Gemini Live Multimodal**: `GeminiLiveProvider` handles realtime sessions, extracting `grounding_metadata` and providing mock GenAI SDK objects for compatibility.
 
 ## 6. Testing & Mocks
-- **Framework**: `pytest` + `pytest-asyncio`.
-- **Mocking**: `tests/mocks.py` provides `MockRaw`/`MockCandidate` structures to simulate multimodal grounding and tool response objects.
+- **Framework**: `pytest` + `pytest-asyncio` with strict async compliance across provider and TUI tests.
+- **Isolation**: Uses `index.clear_providers()` in test fixtures to ensure registry isolation and prevent cross-test state leakage.
+- **Mocking**: `tests/mocks.py` provides `MockRaw`/`MockCandidate` structures, recently updated to align with the latest SDK chunk structures and tool-calling patterns.
 
 ## 7. Project Flow-Graph
 - `tui` -> `ModeManager` -> `ChatAgent` (Registry) -> `DynamicPool` -> `GeminiProvider`.
