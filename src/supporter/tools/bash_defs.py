@@ -1,0 +1,258 @@
+TIER1_BINARIES = {
+    "ls",
+    "tree",
+    "pwd",
+    "which",
+    "file",
+    "wc",
+    "grep",
+    "rg",
+    "head",
+    "tail",
+    "cat",
+    "date",
+    "echo",
+    "whoami",
+    "ps",
+    "df",
+    "uptime",
+}
+
+TIER2_BINARIES = {
+    "rm",
+    "mv",
+    "cp",
+    "mkdir",
+    "touch",
+    "chmod",
+    "uv",
+    "npm",
+    "node",
+    "python",
+    "pytest",
+    "git",
+    "make",
+    "just",
+    "find",
+    "xargs",
+    "awk",
+    "sed",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "diff",
+    "stat",
+}
+
+TIER3_BINARIES = {
+    "sudo",
+    "su",
+    "mkfs",
+    "fdisk",
+    "dd",
+    "reboot",
+    "shutdown",
+    "mount",
+    "umount",
+    "chown",
+    "chattr",
+    "shred",
+    "eval",
+    "exec",
+    "source",
+    "env",
+    "sudoedit",
+    "osascript",
+    "lldb",
+    "dtrace",
+    "dtruss",
+    "launchctl",
+    "defaults",
+    "plutil",
+    "automator",
+    "expect",
+    "screen",
+    "tmux",
+    "script",
+    "ssh",
+    "scp",
+    "sftp",
+    "telnet",
+    "rsync",
+}
+
+NETWORK_BINARIES = {
+    "curl",
+    "wget",
+    "nc",
+    "ncat",
+    "socat",
+    "httpie",
+    "http",
+    "ftp",
+    "tftp",
+}
+
+SHELL_METACHARACTERS = {
+    "|",
+    ">",
+    ">>",
+    "<",
+    "&",
+    ";",
+    "$",
+    "~",
+    "`",
+    "$(",
+    ")",
+    "(",
+    "&&",
+    "||",
+}
+
+SYSTEM_DIRECTORIES = {
+    "/etc",
+    "/var/log",
+    "~/.ssh",
+    "~/.bashrc",
+    "~/.zshrc",
+    "~/.profile",
+}
+
+TRUSTED_PREFIXES = ["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+
+SENSITIVE_FILE_PATTERNS = [
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "*_rsa",
+    "*.p12",
+    "*.pfx",
+    "*secret*",
+    "*token*",
+    "*credential*",
+    "*.kdbx",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".aws/credentials",
+    ".docker/config.json",
+    ".kube/config",
+]
+
+SECRET_PATTERNS = [
+    r"AIza[0-9A-Za-z\-_]{35}",
+    r"sk-[a-zA-Z0-9]{32,}",
+    r"AKIA[0-9A-Z]{16}",
+    r"ghp_[a-zA-Z0-9]{36}",
+    r"(?i)(password|secret|token|api_key)\s*[=:]\s*\S+",
+]
+
+
+UPLOAD_FLAGS = {
+    "-F",
+    "--form",
+    "-T",
+    "--upload-file",
+    "--post-file",
+    "--body-file",
+}
+
+PACKAGE_MANAGERS = {
+    "npm",
+    "yarn",
+    "pnpm",
+    "bun",
+    "pip",
+    "uv",
+    "poetry",
+    "cargo",
+    "go",
+    "gem",
+}
+
+INTERPRETERS = {"python", "python3", "node", "js", "bash", "sh", "perl", "ruby"}
+
+# Paths that, if targeted by rm, must be Tier 3 blocked
+RM_NUCLEAR_PATHS = {"/", "/usr", "/bin", "/etc", "/var", "/home", "/root"}
+
+SHELL_BINS = {
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "python",
+    "python3",
+    "node",
+    "perl",
+    "ruby",
+}
+
+FILE_READING_BINS = {
+    "cat",
+    "tail",
+    "head",
+    "grep",
+    "rg",
+    "file",
+    "wc",
+    "tar",
+    "zip",
+}
+
+TEMP_DIRS = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]  # nosec B108 # noqa: S108
+
+INSTALL_CMDS = {"install", "i", "ci", "add", "sync"}
+
+RISKY_PYTHON_NAMES = {
+    "getattr",
+    "setattr",
+    "__import__",
+    "compile",
+    "globals",
+    "locals",
+    "vars",
+    "chr",
+    "ord",
+    "exec",
+    "eval",
+    "import_module",
+    "__builtins__",
+}
+
+RISKY_PYTHON_ATTRS = {
+    "__import__",
+    "__builtins__",
+    "__globals__",
+    "__dict__",
+    "__class__",
+    "__subclasses__",
+    "__bases__",
+    "__mro__",
+    "import_module",
+}
+
+RISKY_PYTHON_MODULES = {
+    "os",
+    "subprocess",
+    "socket",
+    "importlib",
+}
+
+TIER3_PYTHON_MODULES = {
+    "codecs",
+    "base64",
+    "binascii",
+    "marshal",
+    "pickle",
+    "zlib",
+    "bz2",
+    "lzma",
+}
