@@ -10,7 +10,7 @@ from google.genai.types import Content
 from ..config import config
 from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION, LLMChunk, LLMOptions, LLMResult
 from ..logger import logger
-from ..tools import google_search
+from ..tools.search import google_search
 
 
 class GeminiLiveProvider:
