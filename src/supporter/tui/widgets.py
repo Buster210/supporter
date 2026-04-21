@@ -56,6 +56,43 @@ class ConfirmationModal(ModalScreen[bool]):
         self.dismiss(event.button.id == "allow")
 
 
+class BashConfirmationModal(ModalScreen[bool]):
+    def __init__(self, command: list[str], cwd: str):
+        super().__init__()
+        self.command = command
+        self.cwd = cwd
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-container"):
+            yield Label("Authorize Bash Execution?", id="modal-header")
+            with ScrollableContainer(id="modal-content"):
+                cmd_str = " ".join(self.command)
+                yield Label(
+                    f"[bold cyan]Working Dir:[/] {self.cwd}", classes="modal-meta"
+                )
+                yield Static(
+                    Syntax(
+                        cmd_str,
+                        "bash",
+                        theme="monokai",
+                        background_color="default",
+                        word_wrap=True,
+                    ),
+                    expand=True,
+                )
+            with Horizontal(id="modal-buttons"):
+                yield Button("Allow", id="allow", variant="success")
+                yield Button("Deny", id="cancel", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#modal-container").styles.width = min(
+            80, int(self.app.size.width * 0.9)
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "allow")
+
+
 SUPPORTER_ART = (
     " █▀▀ █ █ █▀█ █▀█ █▀█ █▀█ ▀█▀ █▀▀ █▀█ \n"
     " ▀▀█ █ █ █▀▀ █▀▀ █ █ █▀▄  █  █▀▀ █▀▄ \n"

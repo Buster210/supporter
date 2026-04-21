@@ -15,13 +15,25 @@ class ModeManager:
     async def setup_agent(self, use_crew: bool = False, use_live: bool = False) -> None:
         from .. import get_provider
         from ..agent import ChatAgent, CrewAgent
-        from ..tools import list_dir, read_file, write_file
+        from ..tools import (
+            check_bash_availability,
+            execute_bash,
+            list_dir,
+            notify_bash_unavailable,
+            read_file,
+            write_file,
+        )
 
         tools_registry: dict[str, Callable[..., Any]] = {
             "read_file": read_file,
             "write_file": write_file,
             "list_dir": list_dir,
         }
+
+        if check_bash_availability():
+            tools_registry["execute_bash"] = execute_bash
+        else:
+            notify_bash_unavailable()
 
         provider = get_provider(live=use_live, registry=tools_registry)
 

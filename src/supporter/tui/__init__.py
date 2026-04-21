@@ -12,7 +12,11 @@ from textual.widgets import Input, Label
 
 from .. import ChatAgent, CrewAgent
 from ..logger import init_logger, logger
-from ..tools import set_confirmation_callback
+from ..tools import (
+    set_bash_confirmation_callback,
+    set_bash_notification_callback,
+    set_confirmation_callback,
+)
 from .message_processor import AgentActive, ChatMessageProcessor, ModeChanged
 from .mode_manager import ModeManager
 from .widgets import (
@@ -72,6 +76,8 @@ class SupporterApp(App[None]):
     async def on_mount(self) -> None:
         init_logger()
         set_confirmation_callback(self._confirm_write)
+        set_bash_confirmation_callback(self._confirm_bash)
+        set_bash_notification_callback(self._notify_error)
 
         logger.info("Supporter TUI dashboard active")
         try:
@@ -84,6 +90,8 @@ class SupporterApp(App[None]):
 
     async def on_unmount(self) -> None:
         set_confirmation_callback(None)
+        set_bash_confirmation_callback(None)
+        set_bash_notification_callback(None)
 
         if (
             self.agent
@@ -251,6 +259,34 @@ class SupporterApp(App[None]):
         )
         event.wait()
         return result[0]
+
+    def _confirm_bash(self, tokens: list[str], cwd: str) -> bool:
+        import threading
+
+        from .widgets import BashConfirmationModal
+
+        event = threading.Event()
+        result = [False]
+
+        def callback(value: bool) -> None:
+            result[0] = value
+            event.set()
+
+        self.call_from_thread(
+            self.push_screen, BashConfirmationModal(tokens, cwd), callback
+        )
+        event.wait()
+        return result[0]
+
+    def _notify_error(self, message: str) -> None:
+        import threading
+
+        if threading.current_thread() is threading.main_thread():
+            self._toast_manager.notify(self, message, type="error")
+        else:
+            self.call_from_thread(
+                self._toast_manager.notify, self, message, type="error"
+            )
 
 
 def main() -> None:
