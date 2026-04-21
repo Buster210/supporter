@@ -107,8 +107,13 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
 
 
 def _validate_path(path: str) -> Path:
-    p = Path(path).expanduser().resolve()
+    if not config.allowed_directories:
+        raise PermissionError("Access denied: No allowed directories configured.")
+
+    p = Path(path).expanduser()
     project_root = Path(config.allowed_directories[0]).expanduser().resolve()
+
+    p = (project_root / p).resolve() if not p.is_absolute() else p.resolve()
 
     if not (p == project_root or project_root in p.parents):
         raise PermissionError(
