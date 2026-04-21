@@ -1,5 +1,5 @@
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -43,10 +43,7 @@ async def test_retry_on_429() -> None:
         m.generate = AsyncMock(return_value=LLMResult(text="Mocked Success"))
         return m
 
-    with MagicMock() as _:
-        import supporter.index
-
-        supporter.index.GeminiProvider = MagicMock(side_effect=provider_factory)
+    with patch("supporter.index.GeminiProvider", side_effect=provider_factory):
         lb = DynamicPool(["key1", "key2", "key3"], model_name="test-model")
         result = await lb.generate("test")
 
@@ -85,10 +82,7 @@ async def test_fast_fail_on_503_no_retry() -> None:
         m.generate = AsyncMock(return_value=LLMResult(text="Mocked Success"))
         return m
 
-    with MagicMock() as _:
-        import supporter.index
-
-        supporter.index.GeminiProvider = MagicMock(side_effect=provider_factory)
+    with patch("supporter.index.GeminiProvider", side_effect=provider_factory):
         lb = DynamicPool(["key1", "key2", "key3"], model_name="test-model")
 
         result = await lb.generate("test")
