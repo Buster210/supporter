@@ -48,7 +48,8 @@ async def google_search(query: str) -> str:
             return result.text
 
         sources = []
-        for chunk in getattr(meta, "grounding_chunks", []):
+        grounding_chunks = getattr(meta, "grounding_chunks", []) or []
+        for chunk in grounding_chunks:
             web = getattr(chunk, "web", None)
             if not web:
                 continue
