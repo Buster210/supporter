@@ -1,9 +1,10 @@
 import asyncio
 import threading
+import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from google.genai.types import Content
 
@@ -101,6 +102,14 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
 
 
 class DynamicPool(LLMProvider):
+    _instances: ClassVar[weakref.WeakSet["DynamicPool"]] = weakref.WeakSet()
+
+    @classmethod
+    async def shutdown_all(cls) -> None:
+        """Shut down all tracked DynamicPool instances."""
+        for pool in list(cls._instances):
+            await pool.shutdown()
+
     def __init__(self, keys: list[str], model_name: str, pool_size: int = 2):
         self.keys = keys
         self.model_name = model_name
@@ -110,6 +119,7 @@ class DynamicPool(LLMProvider):
         self.slot_available = asyncio.Event()
         self._current_index = 0
         self.background_tasks: set[asyncio.Task[None]] = set()
+        self._instances.add(self)
 
     def _fill_slot(self) -> None:
         key = self.keys[self.next_key_index % len(self.keys)]
@@ -144,12 +154,23 @@ class DynamicPool(LLMProvider):
             await asyncio.sleep(0)
             self._fill_slot()
 
+        coro = _bg_replace()
         try:
-            task = asyncio.create_task(_bg_replace())
+            task = asyncio.create_task(coro)
             self.background_tasks.add(task)
             task.add_done_callback(self.background_tasks.discard)
         except RuntimeError:
+            coro.close()
             self._fill_slot()
+
+    async def shutdown(self) -> None:
+        if self.background_tasks:
+            logger.info(
+                f"Shutting down pool {self.model_name}, awaiting background tasks"
+            )
+            await asyncio.gather(*self.background_tasks, return_exceptions=True)
+            self.background_tasks.clear()
+        return
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
@@ -187,7 +208,7 @@ class DynamicPool(LLMProvider):
 
         if last_error:
             raise last_error
-        raise RuntimeError(f"All {len(self.keys)} providers failed.")
+        raise RuntimeError("Unexpected: no provider available")
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
