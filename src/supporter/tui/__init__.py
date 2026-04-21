@@ -2,31 +2,42 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Input, Label, Static
-from textual.worker import Worker
+from textual.reactive import reactive
+from textual.widgets import Input, Label
 
 from .. import ChatAgent, CrewAgent
 from ..logger import init_logger, logger
 from ..tools import set_confirmation_callback
-from .message_processor import ChatMessageProcessor
-from .mode_manager import ModeManager, SpinnerController
+from .message_processor import AgentActive, ChatMessageProcessor, ModeChanged
+from .mode_manager import ModeManager
 from .widgets import (
     ChatContainer,
     ChatTurn,
     MessageBubble,
+    QueuedMessagesDisplay,
     SupporterHeader,
+    ThinkingIndicator,
+    ToastManager,
 )
 
-CSS = (Path(__file__).parent / "styles.css").read_text()
+CSS = (Path(__file__).parent / "styles.tcss").read_text()
 
 
 class SupporterApp(App[None]):
     CSS = CSS
+
+    status_label = reactive("Thinking")
+    active_queries = reactive(0)
+    is_activating_mode = reactive(False)
+    crew_mode = reactive(False)
+    live_mode = reactive(True)
+    active_turn: reactive[ChatTurn | None] = reactive(None)
+    current_active_agent = reactive("")
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+c", "quit", "Quit", show=True),
@@ -36,25 +47,32 @@ class SupporterApp(App[None]):
     def __init__(self) -> None:
         super().__init__()
         self.agent: ChatAgent | CrewAgent | None = None
-        self.active_queries = 0
-        self.crew_mode = False
-        self.live_mode = True
-        self.is_activating_mode = False
-        self.status_label = "Thinking"
-        self.current_active_agent: str = ""
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
         self._is_processing = False
-        self._user_message_queue: list[tuple[str, ChatTurn]] = []
-        self._active_worker: Worker[Any] | None = None
+        self._user_message_queue: list[str] = []
+        self._toast_manager = ToastManager()
 
     def _on_agent_active(self, agent_role: str) -> None:
-        self.current_active_agent = agent_role
-        self.call_from_thread(self._tick_spinner)
+        self.post_message(AgentActive(agent_role=agent_role))
+
+    def on_agent_active(self, event: AgentActive) -> None:
+        self.current_active_agent = event.agent_role
+
+    async def on_mode_changed(self, event: ModeChanged) -> None:
+        indicator = self.query_one("#mode-indicator", Label)
+        indicator.update(f"[{event.mode}]")
+
+        label = "Multi-Agent Crew" if event.mode == "CREW" else "Single Agent"
+        status = "ENABLED" if event.enabled else "DISABLED"
+
+        target = self.active_turn or self.query_one("#chat-view")
+        await target.mount(MessageBubble(role="agent", content=f"{label} {status}"))
 
     async def on_mount(self) -> None:
         init_logger()
         set_confirmation_callback(self._confirm_write)
+
         logger.info("Supporter TUI dashboard active")
         try:
             await self._setup_agent(use_live=True)
@@ -62,12 +80,10 @@ class SupporterApp(App[None]):
         except Exception as e:
             msg = f"Startup failure: {e}"
             logger.error(msg)
-            self.notify(msg, severity="error")
+            self._toast_manager.notify(self, msg, type="system")
 
     async def on_unmount(self) -> None:
         set_confirmation_callback(None)
-        self._spinner_controller.shutdown()
-        self._mode_manager.shutdown()
 
         if (
             self.agent
@@ -86,7 +102,8 @@ class SupporterApp(App[None]):
             yield SupporterHeader()
             with ChatContainer(id="chat-view"):
                 pass
-            yield Static("", id="thinking-indicator", markup=False)
+            yield QueuedMessagesDisplay(id="queue-display")
+            yield ThinkingIndicator(id="thinking-indicator")
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
                 yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
@@ -99,24 +116,14 @@ class SupporterApp(App[None]):
         if self.agent:
             self.agent.clear_history()
         self.query_one("#chat-view").query("*").remove()
+        self._user_message_queue.clear()
+        self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
     def _start_thinking(self) -> None:
-        self._spinner_controller.start()
+        self.active_queries += 1
 
     def _stop_thinking(self) -> None:
-        self._spinner_controller.stop()
-
-    @property
-    def _spinner_controller(self) -> SpinnerController:
-        if not hasattr(self, "__spinner_controller"):
-            object.__setattr__(self, "__spinner_controller", SpinnerController(self))
-        return cast(
-            SpinnerController,
-            object.__getattribute__(self, "__spinner_controller"),
-        )
-
-    def _tick_spinner(self) -> None:
-        self._spinner_controller._tick_spinner()
+        self.active_queries = max(0, self.active_queries - 1)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         user_text = event.value.strip()
@@ -130,25 +137,27 @@ class SupporterApp(App[None]):
         if user_text.startswith("/") and await self._handle_command(user_text):
             return
 
-        chat_view = self.query_one("#chat-view", Vertical)
-        prev_active = getattr(self, "active_turn", None)
-        for turn in chat_view.query(ChatTurn):
-            if turn is not prev_active:
-                turn.collapse_turn()
+        if self._is_processing:
+            self._user_message_queue.append(user_text)
+            self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
+                self._user_message_queue
+            )
+            self._toast_manager.notify(
+                self, f"Message queued ({len(self._user_message_queue)})", type="queue"
+            )
+            return
 
+        chat_view = self.query_one("#chat-view", Vertical)
         user_bubble = MessageBubble(role="user", content=user_text)
         new_turn = ChatTurn(user_bubble)
+        if self.active_turn:
+            self.active_turn.auto_collapse()
         self.active_turn = new_turn
         chat_view.mount(new_turn)
         chat_view.scroll_end()
 
-        if self._is_processing:
-            self._user_message_queue.append((user_text, new_turn))
-            self.notify(f"Message queued ({len(self._user_message_queue)})")
-            return
-
         self._is_processing = True
-        self._active_worker = self.run_worker(
+        self.run_worker(
             self._process_message_cycle(user_text, mount_user=False, target=new_turn)
         )
 
@@ -164,14 +173,13 @@ class SupporterApp(App[None]):
         self._is_processing = True
         chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
-            prev_active = getattr(self, "active_turn", None)
-            for turn in chat_view.query(ChatTurn):
-                if turn is not prev_active:
-                    turn.collapse_turn()
-
             user_bubble = MessageBubble(role="user", content=text)
-            self.active_turn = ChatTurn(user_bubble)
-            await chat_view.mount(self.active_turn)
+            new_turn = ChatTurn(user_bubble)
+            if self.active_turn:
+                self.active_turn.auto_collapse()
+            self.active_turn = new_turn
+            await chat_view.mount(new_turn)
+
             chat_view.scroll_end()
             self.query_one("#user-input").focus()
 
@@ -208,17 +216,13 @@ class SupporterApp(App[None]):
         if not self._user_message_queue:
             return
 
-        texts = []
-        for text, turn in self._user_message_queue:
-            texts.append(text)
-            turn.remove()
+        texts = list(self._user_message_queue)
         self._user_message_queue.clear()
+        self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
-        combined_text = "\n\n---\n\n".join(texts)
+        combined_text = "\n\n".join(texts)
         self._is_processing = True
-        self._active_worker = self.run_worker(
-            self._process_message_cycle(combined_text, mount_user=True)
-        )
+        self.run_worker(self._process_message_cycle(combined_text, mount_user=True))
 
     async def _process_crew_execution(
         self, text: str, target: Vertical, start_time: float

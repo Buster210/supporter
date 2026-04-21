@@ -4,69 +4,13 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from textual.widgets import Label, Static
-
-from ..config import config
 from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION
-
-SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-
-class SpinnerController:
-    def __init__(self, app: Any) -> None:
-        self._app = app
-        self._timer: Any | None = None
-        self._idx: int = 0
-
-    def start(self) -> None:
-        self._app.active_queries += 1
-        if self._app.active_queries == 1:
-            self._idx = 0
-            if self._timer:
-                self._timer.stop()
-            self._timer = self._app.set_interval(0.15, self._tick_spinner)
-            self._tick_spinner()
-
-    def stop(self) -> None:
-        self._app.active_queries = max(0, self._app.active_queries - 1)
-        if self._app.active_queries == 0:
-            if self._timer:
-                self._timer.stop()
-                self._timer = None
-            self._clear_indicator()
-
-    def _clear_indicator(self) -> None:
-        indicator = self._app.query_one("#thinking-indicator", Static)
-        indicator.update("")
-        indicator.display = False
-        indicator.refresh()
-
-    def shutdown(self) -> None:
-        if self._timer:
-            self._timer.stop()
-            self._timer = None
-
-    def _tick_spinner(self) -> None:
-        frame = SPINNER_FRAMES[self._idx % len(SPINNER_FRAMES)]
-        dots = "." * (self._idx % 4)
-        self._idx += 1
-
-        if self._app.is_activating_mode:
-            status = f"Activating Mode{dots}"
-        else:
-            agent_role = getattr(self._app, "current_active_agent", None)
-            prefix = f"[{agent_role}] " if self._app.crew_mode and agent_role else ""
-            status = f"{frame} {prefix}{self._app.status_label}{dots}"
-
-        indicator = self._app.query_one("#thinking-indicator", Static)
-        indicator.update(status)
-        indicator.display = True
+from .message_processor import ModeChanged
 
 
 class ModeManager:
     def __init__(self, app: Any) -> None:
         self._app = app
-        self._tasks: set[asyncio.Task[Any]] = set()
 
     async def setup_agent(self, use_crew: bool = False, use_live: bool = False) -> None:
         from .. import get_provider
@@ -112,46 +56,22 @@ class ModeManager:
             await self.setup_agent(
                 use_crew=self._app.crew_mode, use_live=self._app.live_mode
             )
-            self._update_ui(crew, live)
+            self._update_ui_state()
         finally:
             self._app.is_activating_mode = False
             self._app._stop_thinking()
 
-    def _update_ui(self, crew: bool, live: bool) -> None:
-        self._update_indicator()
-        task = asyncio.create_task(self._announce_change(crew, live))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    def _update_indicator(self) -> None:
-        mode_text = "SINGLE"
+    def _update_ui_state(self) -> None:
+        mode = "SINGLE"
         if self._app.crew_mode:
-            mode_text = "CREW"
+            mode = "CREW"
         elif self._app.live_mode:
-            mode_text = "LIVE"
+            mode = "LIVE"
 
-        indicator = self._app.query_one("#mode-indicator", Label)
-        indicator.markup = False
-        indicator.update(f"[{mode_text}]")
-
-    async def _announce_change(self, crew: bool, live: bool) -> None:
-        is_enabled = self._app.crew_mode or self._app.live_mode
-        status = "ENABLED" if is_enabled else "DISABLED"
-
-        if crew:
-            label = "Multi-Agent Crew"
-        else:
-            model = config.gemini_live_model if self._app.live_mode else "Standard"
-            label = f"Single Agent Live ({model})"
-
-        from .widgets import MessageBubble
-
-        target = getattr(self._app, "active_turn", self._app.query_one("#chat-view"))
-        await target.mount(MessageBubble(role="agent", content=f"{label} {status}"))
+        self._app.post_message(ModeChanged(mode=mode, enabled=True))
 
     async def handle_command(self, command: str) -> bool:
         cmd = command.lower().strip()
-
         handlers = {
             "/exit": self._app.exit,
             "/clear": self._app.action_clear_screen,
@@ -159,15 +79,11 @@ class ModeManager:
             "/live": lambda: self._app._toggle_mode(live=True),
         }
 
-        if cmd not in handlers:
+        handler = handlers.get(cmd)
+        if not handler:
             return False
 
-        result = handlers[cmd]()
+        result = handler()
         if asyncio.iscoroutine(result):
             await result
         return True
-
-    def shutdown(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        self._tasks.clear()
