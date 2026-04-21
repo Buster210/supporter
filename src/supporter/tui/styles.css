@@ -46,9 +46,13 @@ MessageBubble {
 .chat-turn {
     width: 100%;
     height: auto;
-    margin-top: 1;
-    padding: 0;
+    margin-bottom: 1;
+    padding: 0 1;
     layout: vertical;
+}
+
+.chat-turn.collapsed MessageBubble.left {
+    display: none;
 }
 
 MessageBubble.left {

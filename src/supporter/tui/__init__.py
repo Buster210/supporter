@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Input, Label, Static
+from textual.worker import Worker
 
 from .. import ChatAgent, CrewAgent
 from ..logger import init_logger, logger
@@ -43,6 +44,9 @@ class SupporterApp(App[None]):
         self.current_active_agent: str = ""
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
+        self._is_processing = False
+        self._user_message_queue: list[tuple[str, ChatTurn]] = []
+        self._active_worker: Worker[Any] | None = None
 
     def _on_agent_active(self, agent_role: str) -> None:
         self.current_active_agent = agent_role
@@ -122,39 +126,56 @@ class SupporterApp(App[None]):
         input_widget = self.query_one("#user-input", Input)
         input_widget.value = ""
         input_widget.focus()
-        chat_view = self.query_one("#chat-view", Vertical)
-        self.active_turn = None
 
-        for turn in chat_view.query(ChatTurn):
-            turn.collapse()
-
-        user_bubble = MessageBubble(role="user", content=user_text)
-        self.active_turn = ChatTurn(user_bubble)
-        chat_view.mount(self.active_turn)
-        chat_view.scroll_end()
-
-        if user_text.startswith("/"):
-            await self._handle_command(user_text.lower())
+        if user_text.startswith("/") and await self._handle_command(user_text):
             return
 
-        self.run_worker(self._process_message_cycle(user_text, mount_user=False))
+        chat_view = self.query_one("#chat-view", Vertical)
+        prev_active = getattr(self, "active_turn", None)
+        for turn in chat_view.query(ChatTurn):
+            if turn is not prev_active:
+                turn.collapse_turn()
 
-    async def _handle_command(self, command: str) -> None:
-        await self._mode_manager.handle_command(command)
+        user_bubble = MessageBubble(role="user", content=user_text)
+        new_turn = ChatTurn(user_bubble)
+        self.active_turn = new_turn
+        chat_view.mount(new_turn)
+        chat_view.scroll_end()
+
+        if self._is_processing:
+            self._user_message_queue.append((user_text, new_turn))
+            self.notify(f"Message queued ({len(self._user_message_queue)})")
+            return
+
+        self._is_processing = True
+        self._active_worker = self.run_worker(
+            self._process_message_cycle(user_text, mount_user=False, target=new_turn)
+        )
+
+    async def _handle_command(self, command: str) -> bool:
+        return await self._mode_manager.handle_command(command)
 
     async def _toggle_mode(self, crew: bool = False, live: bool = False) -> None:
         await self._mode_manager.toggle_mode(crew=crew, live=live)
 
-    async def _process_message_cycle(self, text: str, mount_user: bool = True) -> None:
+    async def _process_message_cycle(
+        self, text: str, mount_user: bool = True, target: Vertical | None = None
+    ) -> None:
+        self._is_processing = True
         chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
+            prev_active = getattr(self, "active_turn", None)
+            for turn in chat_view.query(ChatTurn):
+                if turn is not prev_active:
+                    turn.collapse_turn()
+
             user_bubble = MessageBubble(role="user", content=text)
             self.active_turn = ChatTurn(user_bubble)
             await chat_view.mount(self.active_turn)
             chat_view.scroll_end()
             self.query_one("#user-input").focus()
 
-        target_container = (
+        target_container = target or (
             self.active_turn if hasattr(self, "active_turn") else chat_view
         )
         if not isinstance(target_container, Vertical):
@@ -179,7 +200,25 @@ class SupporterApp(App[None]):
             logger.error(f"Execution error: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
         finally:
+            self._is_processing = False
             self._stop_thinking()
+            await self._flush_queued_messages()
+
+    async def _flush_queued_messages(self) -> None:
+        if not self._user_message_queue:
+            return
+
+        texts = []
+        for text, turn in self._user_message_queue:
+            texts.append(text)
+            turn.remove()
+        self._user_message_queue.clear()
+
+        combined_text = "\n\n---\n\n".join(texts)
+        self._is_processing = True
+        self._active_worker = self.run_worker(
+            self._process_message_cycle(combined_text, mount_user=True)
+        )
 
     async def _process_crew_execution(
         self, text: str, target: Vertical, start_time: float
