@@ -73,12 +73,8 @@ async def google_search(query: str) -> str:
 
 _INTERNAL_BLACKLIST = [
     ".env",
-    ".gitignore",
     ".git",
     ".venv",
-    "src/supporter",
-    "uv.lock",
-    "pyproject.toml",
 ]
 
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
@@ -121,7 +117,10 @@ def _validate_path(path: str) -> Path:
         )
 
     rel_p_str = str(p.relative_to(project_root))
-    if any(rel_p_str.startswith(pattern) for pattern in _INTERNAL_BLACKLIST):
+    if any(
+        rel_p_str == pattern or rel_p_str.startswith(f"{pattern}/")
+        for pattern in _INTERNAL_BLACKLIST
+    ):
         raise PermissionError(
             f"Access denied: {rel_p_str} is a protected internal file."
         )
@@ -285,7 +284,10 @@ async def list_dir(path: str) -> str:
                 for entry in it:
                     rel_path = str(rel_parent / entry.name)
 
-                    if any(rel_path.startswith(p) for p in _INTERNAL_BLACKLIST):
+                    if any(
+                        rel_path == pattern or rel_path.startswith(f"{pattern}/")
+                        for pattern in _INTERNAL_BLACKLIST
+                    ):
                         continue
                     if spec and spec.match_file(rel_path):
                         continue
