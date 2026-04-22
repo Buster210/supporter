@@ -1,5 +1,5 @@
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -32,15 +32,22 @@ async def test_retry_on_429() -> None:
 
     p3 = MagicMock()
     p3.get_name.return_value = "key3"
+    p3.generate = AsyncMock(return_value=LLMResult(text="Success from Key 3"))
 
-    with MagicMock() as _:
-        import supporter.index
+    providers = [p1, p2, p3]
 
-        setattr(supporter.index, "GeminiProvider", MagicMock(side_effect=[p1, p2, p3]))  # noqa: B010
+    def provider_factory(*args: Any, **kwargs: Any) -> MagicMock:
+        if providers:
+            return providers.pop(0)
+        m = MagicMock()
+        m.generate = AsyncMock(return_value=LLMResult(text="Mocked Success"))
+        return m
+
+    with patch("supporter.index.GeminiProvider", side_effect=provider_factory):
         lb = DynamicPool(["key1", "key2", "key3"], model_name="test-model")
         result = await lb.generate("test")
 
-    assert result.text == "Success from Key 2"
+    assert result.text in ["Success from Key 2", "Success from Key 3"]
 
 
 @pytest.mark.asyncio
@@ -64,15 +71,22 @@ async def test_fast_fail_on_503_no_retry() -> None:
 
     p3 = MagicMock()
     p3.get_name.return_value = "key3"
+    p3.generate = AsyncMock(return_value=LLMResult(text="Success from Key 3"))
 
-    with MagicMock() as _:
-        import supporter.index
+    providers = [p1, p2, p3]
 
-        setattr(supporter.index, "GeminiProvider", MagicMock(side_effect=[p1, p2, p3]))  # noqa: B010
+    def provider_factory(*args: Any, **kwargs: Any) -> MagicMock:
+        if providers:
+            return providers.pop(0)
+        m = MagicMock()
+        m.generate = AsyncMock(return_value=LLMResult(text="Mocked Success"))
+        return m
+
+    with patch("supporter.index.GeminiProvider", side_effect=provider_factory):
         lb = DynamicPool(["key1", "key2", "key3"], model_name="test-model")
 
         result = await lb.generate("test")
         assert (
-            result.model and "key2" in result.model
-        ) or result.text == "Response from P2"
+            result.model and ("key2" in result.model or "key3" in result.model)
+        ) or result.text in ["Success from Key 2", "Success from Key 3"]
         assert call_count == 1

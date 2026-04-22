@@ -20,7 +20,6 @@ def _start_background_loop() -> asyncio.AbstractEventLoop:
             target=_LOOP.run_forever, name="SupporterAsyncBridge", daemon=True
         )
         _LOOP_THREAD.start()
-        logger.debug("Background event loop started for sync-to-async bridging")
     return _LOOP
 
 
@@ -47,13 +46,13 @@ class SupporterLLM(BaseLLM):
         from_task: Any | None = None,
         from_agent: Any | None = None,
         response_model: Any | None = None,
-        **kwargs: Any,
     ) -> str:
         prompt = ""
         if isinstance(messages, str):
             prompt = messages
         elif isinstance(messages, list) and len(messages) > 0:
-            prompt = messages[-1].get("content", "")
+            item = messages[-1]
+            prompt = item if isinstance(item, str) else item.get("content", "")
 
         if self._status_callback and from_agent:
             agent_role = getattr(from_agent, "role", DEFAULT_AGENT_ROLE)
@@ -86,23 +85,23 @@ class SupporterLLM(BaseLLM):
         from_task: Any | None = None,
         from_agent: Any | None = None,
         response_model: Any | None = None,
-        **kwargs: Any,
-    ) -> str:
-        logger.debug("Entering SupporterLLM.acall (async)")
+    ) -> Any:
         prompt = (
-            messages if isinstance(messages, str) else messages[-1].get("content", "")
+            messages
+            if isinstance(messages, str)
+            else messages[-1]
+            if isinstance(messages[-1], str)
+            else messages[-1].get("content", "")
         )
 
         execution_options: dict[str, Any] = {
             "use_search": True,
             "use_code_execution": True,
         }
-        available_functions = kwargs.get("available_functions")
         if available_functions:
             execution_options["registry"] = available_functions
 
         result = await self._supporter_provider.generate(prompt, execution_options)
-        logger.debug("Exiting SupporterLLM.acall")
         return str(result.text)
 
     @property

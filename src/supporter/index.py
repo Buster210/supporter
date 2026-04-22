@@ -1,9 +1,10 @@
 import asyncio
 import threading
+import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from google.genai.types import Content
 
@@ -21,6 +22,7 @@ from .providers.gemini_provider import GeminiProvider
 
 __all__ = [
     "DynamicPool",
+    "GeminiLiveProvider",
     "GeminiProvider",
     "LLMChunk",
     "LLMOptions",
@@ -100,6 +102,14 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
 
 
 class DynamicPool(LLMProvider):
+    _instances: ClassVar[weakref.WeakSet["DynamicPool"]] = weakref.WeakSet()
+
+    @classmethod
+    async def shutdown_all(cls) -> None:
+        """Shut down all tracked DynamicPool instances."""
+        for pool in list(cls._instances):
+            await pool.shutdown()
+
     def __init__(self, keys: list[str], model_name: str, pool_size: int = 2):
         self.keys = keys
         self.model_name = model_name
@@ -109,17 +119,10 @@ class DynamicPool(LLMProvider):
         self.slot_available = asyncio.Event()
         self._current_index = 0
         self.background_tasks: set[asyncio.Task[None]] = set()
-
-        logger.debug(
-            f"Initializing DynamicPool (size: {self.pool_size}) for {self.model_name}"
-        )
+        self._instances.add(self)
 
     def _fill_slot(self) -> None:
         key = self.keys[self.next_key_index % len(self.keys)]
-        logger.debug(
-            f"  └─ Creating instance with key index "
-            f"{self.next_key_index % len(self.keys)}"
-        )
         self.next_key_index += 1
         provider = GeminiProvider(key, model_name=self.model_name)
         self.active_slots.append(provider)
@@ -135,35 +138,43 @@ class DynamicPool(LLMProvider):
         return provider
 
     def _replace_instance(self, provider: GeminiProvider) -> None:
+        if provider not in self.active_slots:
+            return
+
+        self.active_slots.remove(provider)
+        if not self.active_slots:
+            self.slot_available.clear()
+
+        logger.warning(
+            f"Instance failed in pool {self.model_name}. "
+            "Destroying and replacing in background..."
+        )
+
+        async def _bg_replace() -> None:
+            await asyncio.sleep(0)
+            self._fill_slot()
+
+        coro = _bg_replace()
         try:
-            self.active_slots.remove(provider)
-            if not self.active_slots:
-                self.slot_available.clear()
-            logger.warning(
-                f"Instance failed in pool {self.model_name}. "
-                "Destroying and replacing in background..."
+            task = asyncio.create_task(coro)
+            self.background_tasks.add(task)
+            task.add_done_callback(self.background_tasks.discard)
+        except RuntimeError:
+            coro.close()
+            self._fill_slot()
+
+    async def shutdown(self) -> None:
+        if self.background_tasks:
+            logger.info(
+                f"Shutting down pool {self.model_name}, awaiting background tasks"
             )
-
-            async def _bg_replace() -> None:
-                await asyncio.sleep(0)
-                logger.debug(f"Background task: Refilling slot for {self.model_name}")
-                self._fill_slot()
-
-            try:
-                task = asyncio.create_task(_bg_replace())
-                self.background_tasks.add(task)
-                task.add_done_callback(self.background_tasks.discard)
-            except RuntimeError:
-                self._fill_slot()
-
-        except ValueError:
-            pass
+            await asyncio.gather(*self.background_tasks, return_exceptions=True)
+            self.background_tasks.clear()
+        return
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult:
-        logger.debug(f"Entering DynamicPool.generate ({self.model_name})")
-
         if _is_model_in_cooldown(self.model_name):
             raise RuntimeError(
                 f"Model '{self.model_name}' is in cooldown due to repeated "
@@ -183,11 +194,6 @@ class DynamicPool(LLMProvider):
 
             except Exception as e:
                 last_error = e
-                logger.debug(
-                    f"[{self.model_name}] Generate exception caught: "
-                    f"{e.__class__.__name__}, "
-                    f"should_trigger_fallback={should_trigger_fallback(e)}"
-                )
                 if should_trigger_fallback(e):
                     if is_model_error(e, self.model_name):
                         logger.warning(
@@ -202,13 +208,11 @@ class DynamicPool(LLMProvider):
 
         if last_error:
             raise last_error
-        raise RuntimeError(f"All {len(self.keys)} providers failed.")
+        raise RuntimeError("Unexpected: no provider available")
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
-        logger.debug(f"Entering DynamicPool.generate_stream ({self.model_name})")
-
         if _is_model_in_cooldown(self.model_name):
             raise RuntimeError(
                 f"Model '{self.model_name}' is in cooldown due to repeated "
@@ -238,9 +242,8 @@ class DynamicPool(LLMProvider):
                     self._replace_instance(provider)
                     if not yielded_any:
                         logger.warning(
-                            f"[{self.model_name}] Stream failed before first "
-                            f"chunk (Attempt {attempt + 1}/{len(self.keys)}). "
-                            "Retrying..."
+                            f"[{self.model_name}] Stream failed before first chunk "
+                            f"(Attempt {attempt + 1}/{len(self.keys)}). Retrying..."
                         )
                         await asyncio.sleep(0.2 * (attempt + 1))
                         continue
@@ -263,51 +266,46 @@ class LazyFallbackProvider(LLMProvider):
         self.fallback_factory = fallback_factory
         self._primary: LLMProvider | None = None
         self._fallback: LLMProvider | None = None
-        logger.debug("Initializing LazyFallbackProvider")
 
     @property
     def primary(self) -> LLMProvider:
         if self._primary is None:
-            logger.debug("Lazy-initializing primary provider pool")
             self._primary = self.primary_factory()
         return self._primary
 
     @property
     def fallback(self) -> LLMProvider | None:
         if self._fallback is None and self.fallback_factory:
-            logger.debug("Lazy-initializing fallback provider pool")
             self._fallback = self.fallback_factory()
         return self._fallback
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> LLMResult:
-        logger.debug("Entering LazyFallbackProvider.generate")
         try:
             return await self.primary.generate(prompt, options)
         except Exception as e:
             if not should_trigger_fallback(e) or not self.fallback:
                 raise e
-            logger.warning("Primary pool exhausted/failed. Triggering lazy fallback...")
+            logger.warning("Primary pool exhausted. Triggering fallback...")
             return await self.fallback.generate(prompt, options)
 
     async def generate_stream(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
-        logger.debug("Entering LazyFallbackProvider.generate_stream")
         try:
             async for chunk in self.primary.generate_stream(prompt, options):
                 yield chunk
         except Exception as e:
             if not should_trigger_fallback(e) or not self.fallback:
                 raise e
-            logger.warning("Primary stream failed. Triggering lazy fallback...")
+            logger.warning("Primary stream failed. Triggering fallback...")
             async for chunk in self.fallback.generate_stream(prompt, options):
                 yield chunk
 
     def get_name(self) -> str:
         if self.fallback:
-            return f"{self.primary.get_name()} -> [Lazy Fallback]"
+            return f"{self.primary.get_name()} -> [Fallback]"
         return self.primary.get_name()
 
 
@@ -339,11 +337,6 @@ def get_provider(
             if live and registry and hasattr(provider, "registry"):
                 provider.registry.update(registry)
             return provider
-
-        logger.debug(
-            f"get_provider creating new instance (type: {target_type}, "
-            f"live: {live}, model: {model_name or 'default'})"
-        )
 
         if target_type != "gemini":
             raise ValueError(f"Unsupported provider type: {target_type}")

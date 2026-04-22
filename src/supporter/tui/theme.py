@@ -1,5 +1,7 @@
 from rich.text import Text
 
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
 THEME = {
     "background": "#121212",
     "bubble_bg": "#1e1e1e",

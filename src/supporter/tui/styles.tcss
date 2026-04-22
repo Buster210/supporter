@@ -1,38 +1,54 @@
-Screen {
-    background: #121212;
+$bg: #121212;
+$primary: #00ffcc;
+$secondary: #ff06b5;
+$accent: #ffeb3b;
+$success: #00ff00;
+$success-alt: #00cc00;
+$error: #ff0000;
+$text-dim: #999999;
+$text-dim-alt: #888;
+$modal-bg: #111;
+$modal-border: #333;
+
+Screen, #main-container, #chat-view, .chat-turn, #main-content, .main-content, #elements-container, #queue-display, .queue-badge {
     width: 100%;
+    height: auto;
+}
+
+#main-container, SupporterHeader, #chat-view, .chat-turn, .bubble, #input-area, Input, #queue-display, .queue-badge {
+    background: transparent;
+}
+
+#main-container, #chat-view {
+    height: 100%;
+    overflow-y: scroll;
+    scrollbar-size: 0 0;
+}
+
+Screen {
+    background: $bg;
     height: 100%;
     padding: 0;
     margin: 0;
 }
 
 #main-container {
-    width: 100%;
-    height: 100%;
     layout: vertical;
-    background: transparent;
-    overflow-y: scroll;
-    scrollbar-size: 0 0;
 }
 
 SupporterHeader {
-    height: 5;
+    height: 3;
     content-align: center middle;
-    background: transparent;
     margin-top: 1;
-    color: #00ffcc;
+    color: $primary;
     text-style: bold;
 }
 
 #chat-view {
-    width: 100%;
     height: 1fr;
     padding: 0;
     margin: 0;
-    background: transparent;
     layout: vertical;
-    overflow-y: scroll;
-    scrollbar-size: 0 0;
 }
 
 MessageBubble {
@@ -44,11 +60,14 @@ MessageBubble {
 }
 
 .chat-turn {
-    width: 100%;
     height: auto;
-    margin-top: 1;
-    padding: 0;
+    margin-bottom: 1;
+    padding: 0 1;
     layout: vertical;
+}
+
+.chat-turn.collapsed MessageBubble.left {
+    display: none;
 }
 
 MessageBubble.left {
@@ -60,31 +79,29 @@ MessageBubble.right {
 }
 
 .bubble {
-    width: 100%;
     height: auto;
     padding: 0 2;
     margin: 0;
-    background: transparent;
     border: none;
     layout: vertical;
 }
 
 .bubble.user-border {
-    color: #ff06b5;
+    color: $secondary;
     content-align-horizontal: right;
 }
 
-.bubble.user-border #main-content {
+.bubble.user-border #main-content, .bubble.user-border .main-content {
     text-align: right;
 }
 
 .bubble.agent-border {
-    color: #00ffcc;
+    color: $primary;
     content-align-horizontal: left;
 }
 
 .section-header {
-    color: #ffeb3b;
+    color: $accent;
     text-style: bold;
     width: 1fr;
 }
@@ -93,26 +110,20 @@ MessageBubble.right {
     text-style: dim bold;
 }
 
-.section-header.collapsible {}
-
 .section-header.collapsible:hover {
     background: #1e1e1e;
 }
 
 .section-content {
-    color: #999999;
+    color: $text-dim;
     text-style: italic;
     margin-left: 2;
     margin-top: 1;
     width: 100%;
 }
 
-#main-content {
-    width: 100%;
-}
-
-.collapsed-bubble #main-content {
-    color: #999999;
+.collapsed-bubble #main-content, .collapsed-bubble .main-content {
+    color: $text-dim;
     text-style: dim;
 }
 
@@ -121,7 +132,7 @@ MessageBubble.right {
 }
 
 .message-meta {
-    color: #ffeb3b;
+    color: $accent;
     text-style: dim italic;
     margin: 0;
     width: 1fr;
@@ -133,10 +144,9 @@ MessageBubble.right {
 
 #input-area {
     height: 3;
-    border: solid #ff06b5;
+    border: solid $secondary;
     margin: 0;
     padding: 0 1;
-    background: transparent;
 }
 
 #prompt-row {
@@ -145,14 +155,14 @@ MessageBubble.right {
 }
 
 #mode-indicator {
-    color: #ffeb3b;
+    color: $accent;
     text-style: bold;
     width: auto;
     margin-right: 1;
 }
 
 #prompt-symbol {
-    color: #00ff00;
+    color: $success;
     text-style: bold;
     width: 2;
 }
@@ -163,7 +173,7 @@ Input {
     padding: 0 !important;
     margin: 0 !important;
     height: 1 !important;
-    color: #00ff00;
+    color: $success;
 }
 
 #user-input {
@@ -171,14 +181,14 @@ Input {
 }
 
 #thinking-indicator {
-    color: #ffeb3b;
+    color: $accent;
     text-style: italic;
     margin-left: 2;
     height: 1;
 }
 
 #user-input:focus {
-    border: solid #ff06b5;
+    border: solid $secondary;
 }
 
 ConfirmationModal {
@@ -190,14 +200,14 @@ ConfirmationModal {
     max-width: 90%;
     max-height: 90%;
     height: auto;
-    background: #111;
-    border: solid #333;
+    background: $modal-bg;
+    border: solid $modal-border;
     padding: 1 4;
 }
 
 #modal-header {
     text-align: center;
-    color: #ffeb3b;
+    color: $accent;
     text-style: bold;
     margin-bottom: 1;
 }
@@ -207,14 +217,14 @@ ConfirmationModal {
     max-height: 30;
     padding: 0 1;
     overflow-y: scroll;
-    color: #888;
+    color: $text-dim-alt;
     margin-bottom: 1;
 }
 
 #modal-buttons {
     height: 3;
     align: center middle;
-    border-top: solid #333;
+    border-top: solid $modal-border;
     padding-top: 1;
 }
 
@@ -228,11 +238,36 @@ ConfirmationModal {
 }
 
 #modal-buttons #allow {
-    background: #00cc00;
+    background: $success-alt;
     color: #000;
 }
 
 #modal-buttons #cancel {
-    background: #ff0000;
+    background: $error;
     color: #fff;
+}
+
+#queue-display {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#queue-display:empty {
+    display: none;
+}
+
+.queue-header {
+    color: $success;
+    text-style: bold;
+    padding-left: 2;
+    height: 1;
+}
+
+.queue-badge {
+    color: $secondary;
+    padding-left: 4;
+    text-style: bold;
+    height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }

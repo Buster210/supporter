@@ -7,80 +7,25 @@ from typing import Any
 
 import pathspec
 
-from .config import config
-from .logger import logger
+from ..config import config
+from ..logger import logger
 
 _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
+_GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
+
+_INTERNAL_BLACKLIST = [
+    ".env",
+    ".git",
+    ".venv",
+    ".mypy_cache",
+    ".ruff_cache",
+    "__pycache__",
+]
 
 
 def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> None:
     global _CONFIRMATION_CALLBACK
     _CONFIRMATION_CALLBACK = callback
-
-
-async def google_search(query: str) -> str:
-    logger.info(f"Tool Execute: google_search(query='{query}')")
-
-    from .index import get_provider
-
-    provider = get_provider(live=True, model_name=config.gemini_live_fallback_model)
-
-    try:
-        result = await provider.generate(
-            prompt=query,
-            options={
-                "use_search": True,
-                "system_instruction": (
-                    "You are a search expert. Provide a detailed, highly accurate "
-                    "answer based on the search results. Include all relevant "
-                    "facts, figures, and technical details. Format the output "
-                    "to be consumed by another LLM."
-                ),
-            },
-        )
-
-        candidates = getattr(result.raw, "candidates", None)
-        if not candidates:
-            return result.text
-
-        meta = getattr(candidates[0], "grounding_metadata", None)
-        if not meta:
-            return result.text
-
-        sources = []
-        for chunk in getattr(meta, "grounding_chunks", []):
-            web = getattr(chunk, "web", None)
-            if not web:
-                continue
-
-            url = getattr(web, "uri", "")
-            if url:
-                title = getattr(web, "title", "Search Result")
-                sources.append(f"- {title}: {url}")
-
-        if not sources:
-            return result.text
-
-        full_response = f"{result.text}\n\n\nSOURCES FOUND:\n" + "\n".join(sources)
-        logger.debug(f"Tool Success: google_search returned {len(full_response)} chars")
-        return full_response
-
-    except Exception as e:
-        logger.error(f"Tool Failure: google_search failed: {e}")
-        return f"Error performing search: {e!s}"
-
-
-_INTERNAL_BLACKLIST = [
-    ".env",
-    ".gitignore",
-    ".git",
-    ".venv",
-    "src/supporter",
-    "uv.lock",
-    "pyproject.toml",
-]
-
-_GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
 
 
 def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
@@ -105,26 +50,44 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
         return None
 
 
+def _is_blacklisted(relative_path: str) -> bool:
+    return any(
+        relative_path == pattern or relative_path.startswith(f"{pattern}/")
+        for pattern in _INTERNAL_BLACKLIST
+    )
+
+
 def _validate_path(path: str) -> Path:
-    p = Path(path).expanduser().resolve()
+    if not config.allowed_directories:
+        raise PermissionError("Access denied: No allowed directories configured.")
+
+    target_path = Path(path).expanduser()
     project_root = Path(config.allowed_directories[0]).expanduser().resolve()
 
-    if not (p == project_root or project_root in p.parents):
+    target_path = (
+        (project_root / target_path).resolve()
+        if not target_path.is_absolute()
+        else target_path.resolve()
+    )
+
+    if not (target_path == project_root or project_root in target_path.parents):
         raise PermissionError(
-            f"Access denied: Path {p} is outside project root: {project_root}"
+            f"Access denied: Path {target_path} is outside project root: {project_root}"
         )
 
-    rel_p_str = str(p.relative_to(project_root))
-    if any(rel_p_str.startswith(pattern) for pattern in _INTERNAL_BLACKLIST):
+    relative_path = str(target_path.relative_to(project_root))
+    if _is_blacklisted(relative_path):
         raise PermissionError(
-            f"Access denied: {rel_p_str} is a protected internal file."
+            f"Access denied: {relative_path} is a protected internal file."
         )
 
     spec = _get_gitignore_spec(project_root)
-    if spec and spec.match_file(rel_p_str):
-        raise PermissionError(f"Access denied: {rel_p_str} is ignored by .gitignore")
+    if spec and spec.match_file(relative_path):
+        raise PermissionError(
+            f"Access denied: {relative_path} is ignored by .gitignore"
+        )
 
-    return p
+    return target_path
 
 
 async def read_file(
@@ -265,23 +228,23 @@ async def list_dir(path: str) -> str:
     logger.info(f"Tool Execute: list_dir(path='{path}')")
 
     def _sync_list() -> str:
-        p = _validate_path(path)
-        if not p.is_dir():
-            return f"Error: Path is not a directory: {p}"
+        target_path = _validate_path(path)
+        if not target_path.is_dir():
+            return f"Error: Path is not a directory: {target_path}"
 
         project_root = Path(config.allowed_directories[0]).expanduser().resolve()
-        rel_parent = p.relative_to(project_root)
+        relative_parent = target_path.relative_to(project_root)
         spec = _get_gitignore_spec(project_root)
 
         items = []
         try:
-            with os.scandir(p) as it:
+            with os.scandir(target_path) as it:
                 for entry in it:
-                    rel_path = str(rel_parent / entry.name)
+                    relative_item_path = str(relative_parent / entry.name)
 
-                    if any(rel_path.startswith(p) for p in _INTERNAL_BLACKLIST):
+                    if _is_blacklisted(relative_item_path):
                         continue
-                    if spec and spec.match_file(rel_path):
+                    if spec and spec.match_file(relative_item_path):
                         continue
 
                     try:

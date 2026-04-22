@@ -41,7 +41,6 @@ def create_mock_genai_client(**kwargs: Any) -> MagicMock:
 
     async def mock_stream(**kwargs: Any) -> AsyncIterator[Any]:
         async def internal_gen() -> AsyncIterator[Any]:
-            # Mimic the SDK chunk structure: chunk.candidates[0].content.parts[0].text
             content_chunk_1 = MagicMock()
             content_chunk_1.candidates = [MagicMock()]
             content_chunk_1.candidates[0].content.parts = [
