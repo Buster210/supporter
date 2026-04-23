@@ -19,15 +19,11 @@ async def test_chat_agent_execute_stream() -> None:
 
     mock_provider = MagicMock()
     mock_provider.generate_stream = mock_generator
-
     agent = ChatAgent(mock_provider)
-
     collected = []
     async for chunk in agent.execute_stream("Hi"):
         collected.append(chunk.text)
-
     assert "".join(collected) == "Hello world"
-
     history = agent.history
     assert len(history) == 2
     assert history[0].role == "user"
@@ -37,19 +33,17 @@ async def test_chat_agent_execute_stream() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_agent_execute_stream_empty() -> None:
+
     async def mock_empty_generator(*args: object, **kwargs: object) -> object:
         if False:
             yield
 
     mock_provider = MagicMock()
     mock_provider.generate_stream = mock_empty_generator
-
     agent = ChatAgent(mock_provider)
-
     collected = []
     async for chunk in agent.execute_stream("Hi"):
         collected.append(chunk.text)
-
     assert "".join(collected) == ""
     history = agent.history
     assert len(history) == 2

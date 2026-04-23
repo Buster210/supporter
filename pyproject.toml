@@ -63,14 +63,13 @@ indent-style = "space"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=src/supporter --cov-report=term-missing --cov-config=pyproject.toml"
 filterwarnings = [
     "ignore:.*crewai.rag.*:ImportWarning",
     "ignore:.*deprecated.*:DeprecationWarning",
 ]
 
 [tool.coverage.run]
-omit = ["src/supporter/tui/widgets.py", "src/supporter/tui/theme.py"]
+omit = []
 
 [tool.coverage.report]
 fail_under = 85
