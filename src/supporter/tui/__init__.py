@@ -107,7 +107,7 @@ class SupporterApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-container"):
-            yield SupporterHeader()
+            yield SupporterHeader(id="supporter-header")
             with ChatContainer(id="chat-view"):
                 pass
             yield QueuedMessagesDisplay(id="queue-display")
@@ -161,7 +161,7 @@ class SupporterApp(App[None]):
         if self.active_turn:
             self.active_turn.auto_collapse()
         self.active_turn = new_turn
-        chat_view.mount(new_turn)
+        await chat_view.mount(new_turn)
         chat_view.scroll_end()
 
         self._is_processing = True
