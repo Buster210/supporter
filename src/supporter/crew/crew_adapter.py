@@ -87,13 +87,12 @@ class SupporterLLM(BaseLLM):
         from_agent: Any | None = None,
         response_model: Any | None = None,
     ) -> Any:
-        prompt = (
-            messages
-            if isinstance(messages, str)
-            else messages[-1]
-            if isinstance(messages[-1], str)
-            else messages[-1].get("content", "")
-        )
+        prompt = ""
+        if isinstance(messages, str):
+            prompt = messages
+        elif isinstance(messages, list) and len(messages) > 0:
+            item = messages[-1]
+            prompt = item if isinstance(item, str) else item.get("content", "")
 
         execution_options: dict[str, Any] = {
             "use_search": True,

@@ -84,8 +84,13 @@ class GeminiProvider:
         use_search = options.get("use_search", False)
         use_code_execution = options.get("use_code_execution", False)
 
+        def _get_tool_id(t: Any) -> Any:
+            if hasattr(t, "__name__") and hasattr(t, "__module__"):
+                return (t.__module__, t.__name__)
+            return id(t)
+
         current_identity_key = (
-            tuple(id(t) for t in tools),
+            tuple(_get_tool_id(t) for t in tools),
             tuple(sorted(registry.keys())),
             use_search,
             use_code_execution,

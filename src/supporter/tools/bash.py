@@ -128,7 +128,6 @@ def set_bash_confirmation_callback(
 
 
 def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
-    # Any network binary used in a pipeline or with redirection is Tier 3
     cmd_str = " ".join(tokens)
     if "|" in cmd_str or "<" in cmd_str:
         return 3
@@ -235,7 +234,6 @@ def _check_rm_nuclear(binary_name: str, tokens: list[str], cwd: Path) -> None:
 
 
 def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
-    """Run the full security gate on a shell -c inner payload. Returns 2 or 3."""
     if not inner_tokens:
         return 2
     base_cmd = inner_tokens[0]
@@ -334,17 +332,12 @@ def _inspect_interpreter_payload(
                     return 3
 
                 if isinstance(node, ast.Subscript):
-                    # Block constant key access on risky names
-                    # (e.g., __builtins__["exec"])
                     if isinstance(node.slice, ast.Constant):
                         if str(node.slice.value) in RISKY_PYTHON_NAMES:
                             return 3
-                    # Block dynamic/computed key access
-                    # (e.g., __builtins__["ex" + "ec"])
                     elif not isinstance(node.slice, ast.Constant):
                         return 3
 
-                # Block BinOp (string concat) passed as argument to risky functions
                 if isinstance(node, ast.Call) and isinstance(
                     node.func, (ast.Name, ast.Attribute)
                 ):
@@ -365,7 +358,7 @@ def _inspect_interpreter_payload(
                                 arg.op, ast.Add
                             ):
                                 return 3
-                            if isinstance(arg, ast.JoinedStr):  # f-strings
+                            if isinstance(arg, ast.JoinedStr):
                                 return 3
                             if isinstance(arg, ast.Call):
                                 return 3
@@ -402,8 +395,6 @@ def _inspect_interpreter_payload(
             return 3
 
     if binary_name in ["bash", "sh"]:
-        # Tier 3 BLOCK: If payload contains shell metacharacters,
-        # shlex.split is insufficient
         if any(m in payload for m in [";", "&&", "||", "|", ">", "<", "`", "$("]):
             return 3
         try:
@@ -467,10 +458,13 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
 
         _apply_rate_limiting()
 
-        pre_state = _get_fs_state(cwd)
+        is_mutation = security_tier >= 2 or any(
+            m in command for m in SHELL_METACHARACTERS
+        )
+        pre_state = _get_fs_state(cwd) if is_mutation else {}
 
         return _execute_subprocess(
-            resolved_binary_path, tokens, cwd, project_root, pre_state
+            resolved_binary_path, tokens, cwd, project_root, pre_state, is_mutation
         )
 
     try:
@@ -608,7 +602,6 @@ def _apply_path_security(
 
 
 def _check_open_command(tokens: list[str]) -> int:
-    """Block 'open -a' and 'open -e' (shell-spawning). All other uses are Tier 2."""
     for token in tokens[1:]:
         if token in {"-a", "-e"}:
             return 3
@@ -705,13 +698,10 @@ def _apply_rate_limiting() -> None:
 
 
 def _get_fs_state(target_dir: Path) -> dict[str, float]:
-    """Shallow scan of target_dir to track mutations without O(N) project-wide walk."""
     from .file_ops import _INTERNAL_BLACKLIST as FILE_INTERNAL_BLACKLIST
 
     state = {}
     try:
-        # Optimization: Only scan the immediate directory where command executed
-        # This avoids O(N) overhead on large projects (node_modules, etc.)
         for entry in os.scandir(target_dir):
             if entry.is_file():
                 if entry.name in FILE_INTERNAL_BLACKLIST:
@@ -731,6 +721,7 @@ def _execute_subprocess(
     cwd: Path,
     project_root: Path,
     pre_state: dict[str, float],
+    is_mutation: bool = True,
 ) -> str:
     validated_tokens = [str(binary_path), *tokens[1:]]
     final_tokens = _wrap_in_sandbox(validated_tokens, cwd, project_root)
@@ -776,12 +767,14 @@ def _execute_subprocess(
 
         output = stdout + stderr
 
-        post_state = _get_fs_state(cwd)
-        changed = [f for f, m in post_state.items() if pre_state.get(f) != m]
-        if changed:
-            basenames = [Path(f).name for f in changed]
-            logger.warning(f"Files mutated by bash command in {cwd}: {basenames}")
-            output += f"\n\n[WARNING] Files mutated in cwd: {', '.join(basenames)}"
+        if is_mutation:
+            post_state = _get_fs_state(cwd)
+            all_paths = set(pre_state.keys()) | set(post_state.keys())
+            changed = [f for f in all_paths if pre_state.get(f) != post_state.get(f)]
+            if changed:
+                basenames = [Path(f).name for f in changed]
+                logger.warning(f"Files mutated by bash command in {cwd}: {basenames}")
+                output += f"\n\n[WARNING] Files mutated in cwd: {', '.join(basenames)}"
 
         log_msg = (
             f"Bash Exec: cmd={tokens} exit={result.returncode} out_len={len(output)}"
