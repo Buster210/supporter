@@ -32,7 +32,8 @@ class SupporterLLM(BaseLLM):
     def __init__(
         self, provider: Any, status_callback: Any | None = None, **kwargs: Any
     ) -> None:
-        super().__init__(model=kwargs.get("model", DEFAULT_MODEL), **kwargs)
+        model = kwargs.pop("model", DEFAULT_MODEL)
+        super().__init__(model=model, **kwargs)
         self._supporter_provider = provider
         self._status_callback = status_callback
         _start_background_loop()
@@ -106,4 +107,4 @@ class SupporterLLM(BaseLLM):
 
     @property
     def _llm_type(self) -> str:
-        return DEFAULT_MODEL
+        return self.model
