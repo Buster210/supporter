@@ -23,16 +23,17 @@ def init_logger() -> None:
     try:
         with open(config.log_file, "w") as f:
             f.write("")
+        file_handler = logging.FileHandler(config.log_file)
+        file_handler.setFormatter(SupporterFormatter())
+        logger.addHandler(file_handler)
     except Exception as e:
-        logger.warning(f"Failed to clear log file: {e}")
+        logger.warning(f"Failed to initialize file logging: {e}")
+
     log_level_str = config.log_level
     log_level = getattr(logging, log_level_str, logging.INFO)
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.CRITICAL)
     logger.setLevel(log_level)
-    file_handler = logging.FileHandler(config.log_file)
-    file_handler.setFormatter(SupporterFormatter())
-    logger.addHandler(file_handler)
     logger.info(f"Logging initialized at level: {log_level_str}")
     logger.debug(
         f"Config loaded: model={config.gemini_model}, "
@@ -41,6 +42,10 @@ def init_logger() -> None:
     logger.debug(f"API Keys count: {len(config.gemini_api_keys)}")
 
 
-if __name__ == "__main__":
+def main() -> None:
     init_logger()
     logger.info("Test message")
+
+
+if __name__ == "__main__":
+    main()
