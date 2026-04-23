@@ -41,7 +41,7 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
             return cast(pathspec.PathSpec, _GITIGNORE_CACHE["spec"])
 
         with gitignore_path.open("r") as f:
-            spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
+            spec = pathspec.PathSpec.from_lines("gitignore", f)
             _GITIGNORE_CACHE["spec"] = spec
             _GITIGNORE_CACHE["mtime"] = mtime
             return spec
