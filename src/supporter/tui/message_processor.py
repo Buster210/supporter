@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from textual.message import Message
 
 if TYPE_CHECKING:
-    from ..agent import ChatAgent, CrewAgent
+    from ..agent import ChatAgent
 
 
 @dataclass
@@ -124,6 +124,7 @@ class ChatMessageProcessor:
         target: Any,
         start_time: float,
     ) -> Any:
+        from ..agent import CrewAgent
         from .widgets import ChatTurn, MessageBubble
 
         if not isinstance(self._app.agent, CrewAgent):

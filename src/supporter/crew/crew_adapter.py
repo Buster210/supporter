@@ -32,7 +32,8 @@ class SupporterLLM(BaseLLM):
     def __init__(
         self, provider: Any, status_callback: Any | None = None, **kwargs: Any
     ) -> None:
-        super().__init__(model=kwargs.get("model", DEFAULT_MODEL), **kwargs)
+        model = kwargs.pop("model", DEFAULT_MODEL)
+        super().__init__(model=model, **kwargs)
         self._supporter_provider = provider
         self._status_callback = status_callback
         _start_background_loop()
@@ -86,13 +87,12 @@ class SupporterLLM(BaseLLM):
         from_agent: Any | None = None,
         response_model: Any | None = None,
     ) -> Any:
-        prompt = (
-            messages
-            if isinstance(messages, str)
-            else messages[-1]
-            if isinstance(messages[-1], str)
-            else messages[-1].get("content", "")
-        )
+        prompt = ""
+        if isinstance(messages, str):
+            prompt = messages
+        elif isinstance(messages, list) and len(messages) > 0:
+            item = messages[-1]
+            prompt = item if isinstance(item, str) else item.get("content", "")
 
         execution_options: dict[str, Any] = {
             "use_search": True,
@@ -106,4 +106,4 @@ class SupporterLLM(BaseLLM):
 
     @property
     def _llm_type(self) -> str:
-        return DEFAULT_MODEL
+        return self.model

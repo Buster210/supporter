@@ -10,7 +10,6 @@ from google.genai.types import Content
 
 from .config import (
     HTTP_INTERNAL_ERROR,
-    HTTP_NOT_FOUND,
     HTTP_RATE_LIMIT,
     HTTP_SERVICE_UNAVAILABLE,
     config,
@@ -40,14 +39,13 @@ __all__ = [
 GOOGLE_5XX_ERRORS = {
     "InternalServerError",
     "ServiceUnavailable",
-    "NotFound",
     "BadGateway",
     "GatewayTimeout",
     "APIError",
 }
 
 TRANSIENT_SIGNALS = {"unavailable", "overloaded", "internal error", "service level"}
-HTTP_ERRORS_5XX = {HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR}
+HTTP_ERRORS_5XX = {HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR}
 RATE_LIMIT_SIGNALS = {"quota", "too many requests", "429"}
 
 _model_cooldowns: dict[str, datetime] = {}
@@ -75,7 +73,7 @@ def is_model_error(error: Any, model_name: str | None = None) -> bool:
     if any(sig in message for sig in TRANSIENT_SIGNALS):
         return True
 
-    return any(code in message for code in ("404", "503", "500"))
+    return any(code in message for code in ("503", "500", "502", "504"))
 
 
 def should_trigger_fallback(error: Any) -> bool:
