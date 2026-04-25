@@ -53,8 +53,18 @@ uv sync --extra dev
 
 ## Testing
 
+Tests are organized into three layers:
+- `tests/unit/`: Individual component tests (load balancer, mode manager, bash, logger)
+- `tests/integration/`: Multi-component tests (search, indexing)
+- `tests/e2e/`: End-to-end tests (file operations)
+
+Run all tests or by marker:
+
 ```bash
-uv run pytest tests
+uv run pytest tests                 # all tests
+uv run pytest tests -m unit         # unit tests only
+uv run pytest tests -m integration   # integration tests only
+uv run pytest tests -m e2e           # e2e tests only
 ```
 
 ## Linting

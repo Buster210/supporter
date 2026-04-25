@@ -9,7 +9,6 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "rich>=14.3.4",
     "crewai>=1.14.1",
-    "langchain-google-genai>=4.2.2",
 ]
 
 [dependency-groups]
