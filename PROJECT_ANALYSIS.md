@@ -8,14 +8,14 @@
 ```
 supporter/
 ├── __init__.py           ChatAgent, CrewAgent exports
-├── agent.py            ChatAgent class
-├── config.py            config object
-├── index.py            get_provider function
-├── logger.py           logger object
-├── crew/              CrewAgent, crew_adapter
-├── providers/         GeminiProvider, get_provider
-├── tools/             read_file, write_file, execute_bash, google_search
-└── tui/              SupporterApp, main
+├── agent.py              ChatAgent class
+├── config.py             config object
+├── index.py              get_provider function, DynamicPool
+├── logger.py             logger object
+├── crew/                 CrewAgent, crew_adapter
+├── providers/            GeminiProvider, get_provider
+├── tools/                read_file, write_file, execute_bash, google_search
+└── tui/                 SupporterApp, main, message_processor, mode_manager
 ```
 
 ## Key Exports
@@ -36,11 +36,11 @@ User Input → run_worker → ChatAgent/CrewAgent → GeminiProvider → Tools �
 | get_provider | providers/__init__.py | Provider singleton |
 | read_file | tools/file_ops.py | Read with validation |
 | write_file | tools/file_ops.py | Write with confirmation |
-| execute_bash | tools/bash.py | Sandboxed execution |
+| execute_bash | tools/bash.py | Sandboxed execution with Mutation Tracking |
 | google_search | tools/search.py | Gemini search |
-| ChatMessageProcessor | tui/message_processor.py | Streaming |
+| ChatMessageProcessor | tui/message_processor.py | Streaming & Crew Handover |
 | ModeManager | tui/mode_manager.py | Mode commands |
-| ChatTurn | tui/widgets.py | Message bubbles |
+| ChatTurn | tui/widgets.py | Collapsible message turns |
 | ThinkingIndicator | tui/widgets.py | Status indicator |
 | ConfirmationModal | tui/widgets.py | Write approval |
 | BashConfirmationModal | tui/widgets.py | Bash approval |
@@ -53,9 +53,10 @@ User Input → run_worker → ChatAgent/CrewAgent → GeminiProvider → Tools �
 
 ## Tests
 
-- Test fixtures in tests/conftest.py
-- Mock provider in tests/mocks.py
-- Clear providers between tests
+- **Unit**: `tests/unit/` (Bash security, Config, File Ops, UI Widgets)
+- **Integration**: `tests/integration/` (Agent streaming, Gemini Provider, Crew, TUI logic)
+- **E2E**: `tests/e2e/` (Conversation flow, File ops lifecycle, TUI startup)
+- **Mocks**: `tests/mocks.py` (Provider), `tests/tui_mocks.py` (Textual)
 
 ## Quick Lookup
 
