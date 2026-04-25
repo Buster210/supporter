@@ -4,7 +4,6 @@ A Python-based TUI AI chat client using the Google Gemini model.
 
 ## Features
 
-- **Multi-Agent Execution**: CrewAI-powered multi-agent collaboration with researcher and writer roles.
 - **Round-Robin Load Balancing**: Support for multiple Gemini API keys.
 - **Model Fallback**: Automatically switches to a fallback model if the primary model fails.
 - **Real-time Streaming**: Asynchronous response streaming for immediate feedback.

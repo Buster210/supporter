@@ -16,7 +16,6 @@ class MockApp:
         self.status_label = "Thinking"
         self.active_queries = 0
         self.is_activating_mode = False
-        self.crew_mode = False
         self.live_mode = True
         self.active_turn = None
         self.current_active_agent = ""
@@ -25,7 +24,6 @@ class MockApp:
         self.exited = False
         self.screen_stack: list[Any] = []
         self.cleared = False
-        self.toggled_crew = False
         self.toggled_live = False
         self._is_processing = False
         self._user_message_queue: list[str] = []
@@ -65,9 +63,7 @@ class MockApp:
     def action_clear_screen(self) -> None:
         self.cleared = True
 
-    def _toggle_mode(self, crew: bool = False, live: bool = False) -> None:
-        if crew:
-            self.toggled_crew = True
+    def _toggle_mode(self, live: bool = False) -> None:
         if live:
             self.toggled_live = True
 
@@ -131,7 +127,6 @@ class MockBubble:
     streaming: bool = False
     model: str | None = None
     duration: float | None = None
-    agents: list[str] | None = None
     tokens: list[str] = field(default_factory=list)
     tool_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     finalized: bool = False

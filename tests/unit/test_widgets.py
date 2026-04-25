@@ -56,14 +56,6 @@ class TestMessageBubble:
         assert "gemma-4-31b-it" in bubble._get_meta_text()
         assert "1.50s" in bubble._get_meta_text()
 
-    def test_get_meta_text_with_agents(self) -> None:
-        bubble = MessageBubble(
-            role="agent", content="test", agents=["researcher", "writer"]
-        )
-        bubble.model = "gemini"
-        assert "researcher" in bubble._get_meta_text()
-        assert "writer" in bubble._get_meta_text()
-
     def test_get_meta_text_no_duration(self) -> None:
         bubble = MessageBubble(role="agent", content="test")
         bubble.model = "gemini"
@@ -166,8 +158,6 @@ class TestThinkingIndicator:
         assert indicator.status_label == "Thinking"
         assert indicator.active_queries == 0
         assert indicator.is_activating_mode is False
-        assert indicator.crew_mode is False
-        assert indicator.current_active_agent == ""
 
     def test_update_display_when_inactive(self) -> None:
         indicator = ThinkingIndicator()

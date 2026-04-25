@@ -16,11 +16,6 @@ class ModeChanged(Message):
     enabled: bool
 
 
-@dataclass
-class AgentActive(Message):
-    agent_role: str
-
-
 class StreamingState:
     def __init__(self) -> None:
         self.bubble: Any = None
@@ -67,14 +62,22 @@ class ChatMessageProcessor:
             state.actual_model = chunk.model
 
         if not state.is_first_chunk:
-            if state.bubble:
-                self._update_streaming_status()
-                state.bubble.append_token(chunk.text, is_thought=chunk.is_thought)
+            self._append_to_existing_bubble(chunk, state)
             return
 
-        if not (chunk.text.strip() or chunk.is_thought):
+        if not chunk.text.strip() and not chunk.is_thought:
             return
 
+        await self._create_and_append_first_chunk(chunk, target, state, bubble_class)
+
+    def _append_to_existing_bubble(self, chunk: Any, state: StreamingState) -> None:
+        if state.bubble:
+            self._update_streaming_status()
+            state.bubble.append_token(chunk.text, is_thought=chunk.is_thought)
+
+    async def _create_and_append_first_chunk(
+        self, chunk: Any, target: Any, state: StreamingState, bubble_class: type
+    ) -> None:
         state.is_first_chunk = False
         state.bubble = await self._initialize_bubble(target, bubble_class)
         self._update_status("Streaming")
@@ -117,34 +120,3 @@ class ChatMessageProcessor:
 
     def _update_status(self, status: str) -> None:
         self._app.status_label = status
-
-    async def process_crew(
-        self,
-        text: str,
-        target: Any,
-        start_time: float,
-    ) -> Any:
-        from ..agent import CrewAgent
-        from .widgets import ChatTurn, MessageBubble
-
-        if not isinstance(self._app.agent, CrewAgent):
-            return None
-
-        response = await self._app.agent.execute(text)
-        usage = response.usage or {}
-        agent_roles = usage.get("agents")
-
-        bubble = MessageBubble(
-            role="agent",
-            content=response.text,
-            model=response.model,
-            duration=time.perf_counter() - start_time,
-            agents=agent_roles,
-        )
-
-        if isinstance(target, ChatTurn):
-            await target.mount_bubble(bubble)
-        else:
-            await target.mount(bubble)
-
-        return bubble

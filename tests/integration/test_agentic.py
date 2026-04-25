@@ -1,11 +1,11 @@
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.genai import types
 from google.genai.types import Content, Part
 
-from supporter.agent import ChatAgent, CrewAgent
+from supporter.agent import ChatAgent
 from supporter.index import LLMChunk, LLMResult
 
 
@@ -125,33 +125,3 @@ def test_chat_agent_clear_history() -> None:
     agent.history = [Content(role="user", parts=[Part(text="some history")])]
     agent.clear_history()
     assert agent.history == []
-
-
-@pytest.mark.asyncio
-async def test_crew_agent_execute() -> None:
-    mock_provider = MagicMock()
-    mock_provider.get_name.return_value = "mock"
-    with patch("supporter.crew.CrewManager") as mock_manager_cls:
-        mock_manager = MagicMock()
-        mock_manager.coordinate_execution = AsyncMock(
-            return_value=LLMResult(text="Crew Result")
-        )
-        mock_manager_cls.return_value = mock_manager
-        agent = CrewAgent(mock_provider)
-        result = await agent.execute("run crew")
-        assert result.text == "Crew Result"
-        assert result.model == "CrewAI (Multi-Agent)"
-
-
-@pytest.mark.asyncio
-async def test_crew_agent_streaming_unsupported() -> None:
-    mock_provider = MagicMock()
-    agent = CrewAgent(mock_provider)
-    with pytest.raises(NotImplementedError):
-        await agent.execute_stream("hi")
-
-
-def test_crew_agent_clear_history_is_noop() -> None:
-    mock_provider = MagicMock()
-    agent = CrewAgent(mock_provider)
-    agent.clear_history()

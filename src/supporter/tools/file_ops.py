@@ -28,7 +28,7 @@ def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> N
     _CONFIRMATION_CALLBACK = callback
 
 
-def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
+def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
     gitignore_path = project_root / ".gitignore"
     if not gitignore_path.exists():
         return None
@@ -38,7 +38,7 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
         if _GITIGNORE_CACHE["spec"] is not None and _GITIGNORE_CACHE["mtime"] == mtime:
             from typing import cast
 
-            return cast(pathspec.PathSpec, _GITIGNORE_CACHE["spec"])
+            return cast(pathspec.PathSpec[Any], _GITIGNORE_CACHE["spec"])
 
         with gitignore_path.open("r") as f:
             spec = pathspec.PathSpec.from_lines("gitignore", f)

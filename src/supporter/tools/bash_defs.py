@@ -18,33 +18,6 @@ TIER1_BINARIES = {
     "uptime",
 }
 
-TIER2_BINARIES = {
-    "rm",
-    "mv",
-    "cp",
-    "mkdir",
-    "touch",
-    "chmod",
-    "uv",
-    "npm",
-    "node",
-    "python",
-    "pytest",
-    "git",
-    "make",
-    "just",
-    "find",
-    "xargs",
-    "awk",
-    "sed",
-    "sort",
-    "uniq",
-    "cut",
-    "tr",
-    "diff",
-    "stat",
-}
-
 TIER3_BINARIES = {
     "sudo",
     "su",
@@ -179,7 +152,6 @@ PACKAGE_MANAGERS = {
 
 INTERPRETERS = {"python", "python3", "node", "js", "bash", "sh", "perl", "ruby"}
 
-# Paths that, if targeted by rm, must be Tier 3 blocked
 RM_NUCLEAR_PATHS = {"/", "/usr", "/bin", "/etc", "/var", "/home", "/root"}
 
 SHELL_BINS = {

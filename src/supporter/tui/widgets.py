@@ -168,7 +168,6 @@ class MessageBubble(Vertical):
         content: str,
         model: str | None = None,
         duration: float | None = None,
-        agents: list[str] | None = None,
         streaming: bool = False,
     ):
         super().__init__()
@@ -176,7 +175,6 @@ class MessageBubble(Vertical):
         self.content = content
         self.model = model
         self.duration = duration
-        self.agents = agents
         self.streaming = streaming
         self.thoughts = ""
         self.tool_calls: list[dict[str, Any]] = []
@@ -225,8 +223,6 @@ class MessageBubble(Vertical):
         model_info = self.model or "Unknown"
         if self.duration is not None:
             model_info += f" in {self.duration:.2f}s"
-        if self.agents:
-            return f"({', '.join(self.agents)} via {model_info})"
         return f"({model_info})"
 
     def _should_use_markdown(self, text: str) -> bool:
@@ -329,70 +325,83 @@ class MessageBubble(Vertical):
         if not container.is_attached:
             return
 
+        self._ensure_correct_widget_count(container)
+        self._refresh_widget_content(container)
+
+    def _ensure_correct_widget_count(self, container: Any) -> None:
         current_widgets = container.query("*")
+        expected_count = sum(
+            2 if el["type"] in ("thought", "tool_calls") else 1 for el in self.elements
+        )
 
-        expected_widget_count = 0
-        for el in self.elements:
-            expected_widget_count += 2 if el["type"] in ("thought", "tool_calls") else 1
+        if len(current_widgets) < expected_count:
+            self._mount_missing_widgets(container, current_widgets)
+        elif len(current_widgets) > expected_count:
+            self._rebuild_widgets(container)
 
-        if len(current_widgets) < expected_widget_count:
-            current_element_idx = 0
-            w_idx = 0
-            while w_idx < len(current_widgets) and current_element_idx < len(
-                self.elements
-            ):
-                el = self.elements[current_element_idx]
-                w_idx += 2 if el["type"] in ("thought", "tool_calls") else 1
-                current_element_idx += 1
+    def _mount_missing_widgets(self, container: Any, current_widgets: Any) -> None:
+        element_idx = 0
+        w_idx = 0
+        while w_idx < len(current_widgets) and element_idx < len(self.elements):
+            el = self.elements[element_idx]
+            w_idx += 2 if el["type"] in ("thought", "tool_calls") else 1
+            element_idx += 1
 
-            new_widgets = []
-            for i in range(current_element_idx, len(self.elements)):
-                el_widgets = self._create_widgets_for_element(i, self.elements[i])
-                new_widgets.extend(el_widgets)
+        new_widgets = []
+        for i in range(element_idx, len(self.elements)):
+            new_widgets.extend(self._create_widgets_for_element(i, self.elements[i]))
 
-            if new_widgets:
-                container.mount(*new_widgets)
-
-            current_widgets = container.query("*")
-        elif len(current_widgets) > expected_widget_count:
-            container.remove_children()
-            new_widgets = []
-            for i, el in enumerate(self.elements):
-                new_widgets.extend(self._create_widgets_for_element(i, el))
+        if new_widgets:
             container.mount(*new_widgets)
-            current_widgets = container.query("*")
 
+    def _rebuild_widgets(self, container: Any) -> None:
+        container.remove_children()
+        new_widgets = []
+        for i, el in enumerate(self.elements):
+            new_widgets.extend(self._create_widgets_for_element(i, el))
+        container.mount(*new_widgets)
+
+    def _refresh_widget_content(self, container: Any) -> None:
+        current_widgets = container.query("*")
         w_idx = 0
         for i, el in enumerate(self.elements):
             if el["type"] in ("thought", "tool_calls"):
                 if w_idx + 1 >= len(current_widgets):
                     break
-                header = cast(SectionHeader, current_widgets[w_idx])
-                view = cast(Static, current_widgets[w_idx + 1])
-
-                if el["type"] == "thought":
-                    is_thinking = (
-                        self.streaming
-                        and i == len(self.elements) - 1
-                        and not self.content
-                    )
-                    label = "Thinking" if is_thinking else "Thoughts"
-                    header.update_label(label, el["collapsed"], self.collapsible)
-                    view.update(RichMarkdown(el["content"]))
-                else:
-                    header.update_label("Tools Used", el["collapsed"], self.collapsible)
-                    view.update(self._format_tool_calls(el["calls"]))
+                self._update_section_widget(
+                    current_widgets[w_idx], current_widgets[w_idx + 1], el, i
+                )
                 w_idx += 2
             else:
                 if w_idx >= len(current_widgets):
                     break
-                view = cast(Static, current_widgets[w_idx])
-                content = el["content"]
-                if self._should_use_markdown(content):
-                    view.update(RichMarkdown(content))
-                else:
-                    view.update(content)
+                self._update_content_widget(current_widgets[w_idx], el)
                 w_idx += 1
+
+    def _update_section_widget(
+        self, header: Any, view: Any, el: dict[str, Any], idx: int
+    ) -> None:
+        header = cast(SectionHeader, header)
+        view = cast(Static, view)
+
+        if el["type"] == "thought":
+            is_thinking = (
+                self.streaming and idx == len(self.elements) - 1 and not self.content
+            )
+            label = "Thinking" if is_thinking else "Thoughts"
+            header.update_label(label, el["collapsed"], self.collapsible)
+            view.update(RichMarkdown(el["content"]))
+        else:
+            header.update_label("Tools Used", el["collapsed"], self.collapsible)
+            view.update(self._format_tool_calls(el["calls"]))
+
+    def _update_content_widget(self, view: Any, el: dict[str, Any]) -> None:
+        view = cast(Static, view)
+        content = el["content"]
+        if self._should_use_markdown(content):
+            view.update(RichMarkdown(content))
+        else:
+            view.update(content)
 
     def _create_widgets_for_element(self, idx: int, el: dict[str, Any]) -> list[Static]:
         if el["type"] == "thought":
@@ -473,11 +482,9 @@ class MessageBubble(Vertical):
         self,
         model: str | None = None,
         duration: float | None = None,
-        agents: list[str] | None = None,
     ) -> None:
         self.model = model or self.model
         self.duration = duration or self.duration
-        self.agents = agents or self.agents
         self.streaming = False
 
         if self._meta_label:
@@ -570,8 +577,6 @@ class ThinkingIndicator(Static):
     status_label = reactive("Thinking")
     active_queries = reactive(0)
     is_activating_mode = reactive(False)
-    crew_mode = reactive(False)
-    current_active_agent = reactive("")
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(0.1, self._tick)
@@ -580,8 +585,6 @@ class ThinkingIndicator(Static):
             "status_label",
             "active_queries",
             "is_activating_mode",
-            "crew_mode",
-            "current_active_agent",
         ]:
             self.watch(self.app, prop, self._sync_app_prop)
 
@@ -591,8 +594,6 @@ class ThinkingIndicator(Static):
         self.status_label = self.app.status_label  # type: ignore
         self.active_queries = self.app.active_queries  # type: ignore
         self.is_activating_mode = self.app.is_activating_mode  # type: ignore
-        self.crew_mode = self.app.crew_mode  # type: ignore
-        self.current_active_agent = self.app.current_active_agent  # type: ignore
 
     def _tick(self) -> None:
         self._update_display(None)
@@ -614,9 +615,7 @@ class ThinkingIndicator(Static):
         if self.is_activating_mode:
             status = f"Activating Mode{dots}"
         else:
-            role = self.current_active_agent
-            prefix = f"[{role}] " if self.crew_mode and role else ""
-            status = f"{frame} {prefix}{self.status_label}{dots}"
+            status = f"{frame} {self.status_label}{dots}"
 
         self.update(status)
         self.display = True

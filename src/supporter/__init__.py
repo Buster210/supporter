@@ -1,4 +1,4 @@
-from .agent import ChatAgent, CrewAgent
+from .agent import ChatAgent
 from .index import (
     DynamicPool,
     GeminiLiveProvider,
@@ -17,7 +17,6 @@ from .index import (
 
 __all__ = [
     "ChatAgent",
-    "CrewAgent",
     "DynamicPool",
     "GeminiLiveProvider",
     "GeminiProvider",

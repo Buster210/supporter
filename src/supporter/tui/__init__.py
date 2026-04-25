@@ -10,14 +10,14 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Input, Label
 
-from .. import ChatAgent, CrewAgent
+from .. import ChatAgent, DynamicPool
 from ..logger import init_logger, logger
 from ..tools import (
     set_bash_confirmation_callback,
     set_bash_notification_callback,
     set_confirmation_callback,
 )
-from .message_processor import AgentActive, ChatMessageProcessor, ModeChanged
+from .message_processor import ChatMessageProcessor, ModeChanged
 from .mode_manager import ModeManager
 from .widgets import (
     ChatContainer,
@@ -38,10 +38,8 @@ class SupporterApp(App[None]):
     status_label = reactive("Thinking")
     active_queries = reactive(0)
     is_activating_mode = reactive(False)
-    crew_mode = reactive(False)
     live_mode = reactive(True)
     active_turn: reactive[ChatTurn | None] = reactive(None)
-    current_active_agent = reactive("")
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("ctrl+c", "quit", "Quit", show=True),
@@ -50,24 +48,17 @@ class SupporterApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self.agent: ChatAgent | CrewAgent | None = None
+        self.agent: ChatAgent | None = None
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
         self._is_processing = False
         self._user_message_queue: list[str] = []
         self._toast_manager = ToastManager()
 
-    def _on_agent_active(self, agent_role: str) -> None:
-        self.post_message(AgentActive(agent_role=agent_role))
-
-    def on_agent_active(self, event: AgentActive) -> None:
-        self.current_active_agent = event.agent_role
-
     async def on_mode_changed(self, event: ModeChanged) -> None:
         indicator = self.query_one("#mode-indicator", Label)
         indicator.update(f"[{event.mode}]")
-
-        label = "Multi-Agent Crew" if event.mode == "CREW" else "Single Agent"
+        label = "Single Agent"
         status = "ENABLED" if event.enabled else "DISABLED"
 
         target = self.active_turn or self.query_one("#chat-view")
@@ -100,10 +91,10 @@ class SupporterApp(App[None]):
         ):
             await self.agent.provider.close()
 
-    async def _setup_agent(
-        self, use_crew: bool = False, use_live: bool = False
-    ) -> None:
-        await self._mode_manager.setup_agent(use_crew=use_crew, use_live=use_live)
+        await DynamicPool.shutdown_all()
+
+    async def _setup_agent(self, use_live: bool = False) -> None:
+        await self._mode_manager.setup_agent(use_live=use_live)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-container"):
@@ -116,14 +107,19 @@ class SupporterApp(App[None]):
                 yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
                 yield Input(
-                    placeholder="Type a message... (/live, /crew, /clear, /exit)",
+                    placeholder="Type a message... (/agent, /live, /clear, /exit)",
                     id="user-input",
                 )
 
     def action_clear_screen(self) -> None:
+        chat_view = self.query_one("#chat-view")
+        if not chat_view.query("*") and (not self.agent or not self.agent.history):
+            self._toast_manager.notify(self, "Session already clear", type="system")
+            return
+
         if self.agent:
             self.agent.clear_history()
-        self.query_one("#chat-view").query("*").remove()
+        chat_view.query("*").remove()
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
@@ -172,8 +168,8 @@ class SupporterApp(App[None]):
     async def _handle_command(self, command: str) -> bool:
         return await self._mode_manager.handle_command(command)
 
-    async def _toggle_mode(self, crew: bool = False, live: bool = False) -> None:
-        await self._mode_manager.toggle_mode(crew=crew, live=live)
+    async def _toggle_mode(self, live: bool = False) -> None:
+        await self._mode_manager.toggle_mode(live=live)
 
     async def _process_message_cycle(
         self, text: str, mount_user: bool = True, target: Vertical | None = None
@@ -206,12 +202,9 @@ class SupporterApp(App[None]):
             if not agent:
                 raise RuntimeError("Agent is not initialized")
 
-            if isinstance(agent, CrewAgent):
-                await self._process_crew_execution(text, target_container, start_time)
-            else:
-                await self._process_streaming_execution(
-                    text, target_container, start_time, agent
-                )
+            await self._process_streaming_execution(
+                text, target_container, start_time, agent
+            )
         except Exception as e:
             logger.error(f"Execution error: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
@@ -231,11 +224,6 @@ class SupporterApp(App[None]):
         combined_text = "\n\n".join(texts)
         self._is_processing = True
         self.run_worker(self._process_message_cycle(combined_text, mount_user=True))
-
-    async def _process_crew_execution(
-        self, text: str, target: Vertical, start_time: float
-    ) -> None:
-        await self._message_processor.process_crew(text, target, start_time)
 
     async def _process_streaming_execution(
         self, text: str, target: Vertical, start_time: float, agent: ChatAgent

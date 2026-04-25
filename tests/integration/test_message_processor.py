@@ -1,10 +1,9 @@
 from collections.abc import AsyncGenerator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from supporter.agent import CrewAgent
 from supporter.tui.message_processor import ChatMessageProcessor
 from supporter.tui.widgets import ChatTurn
 
@@ -64,33 +63,3 @@ async def test_handle_tool_chunk_google_search() -> None:
     processor = ChatMessageProcessor(app)
     processor._handle_tool_call_status("google_search")
     assert app.status_label == "Searching"
-
-
-@pytest.mark.asyncio
-async def test_process_crew_non_crew_agent() -> None:
-    app = MagicMock()
-    app.agent = MagicMock()
-    processor = ChatMessageProcessor(app)
-    target = MagicMock()
-    result = await processor.process_crew("test", target, 0)
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_process_crew_chat_turn_mount() -> None:
-    app = MagicMock()
-    agent = MagicMock(spec=CrewAgent)
-
-    async def mock_execute(*args: Any, **kwargs: Any) -> Any:
-        return MagicMock(
-            text="response text", model="crew-model", usage={"agents": ["agent1"]}
-        )
-
-    agent.execute = MagicMock(side_effect=mock_execute)
-    app.agent = agent
-    processor = ChatMessageProcessor(app)
-    target = MagicMock(spec=ChatTurn)
-    target.mount_bubble = AsyncMock()
-    result = await processor.process_crew("test", target, 0)
-    assert result is not None
-    target.mount_bubble.assert_called()

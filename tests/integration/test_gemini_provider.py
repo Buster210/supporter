@@ -65,7 +65,7 @@ async def test_provider_streaming_thought_chunks(mock_genai_client: Any) -> None
         api_key="test-key",  # pragma: allowlist secret
         model_name="gemini-test-model",
     )
-    provider.client._stream_chunks = [
+    cast(Any, provider).client._stream_chunks = [
         build_mock_stream_chunk(
             parts=[build_mock_stream_part(text="Internal reasoning", is_thought=True)]
         )
@@ -85,7 +85,7 @@ async def test_provider_streaming_function_call_chunks(mock_genai_client: Any) -
         api_key="test-key",  # pragma: allowlist secret
         model_name="gemini-test-model",
     )
-    provider.client._stream_chunks = [
+    cast(Any, provider).client._stream_chunks = [
         build_mock_stream_chunk(
             parts=[
                 build_mock_stream_part(
@@ -114,7 +114,7 @@ async def test_provider_streaming_handles_empty_candidates(
         api_key="test-key",  # pragma: allowlist secret
         model_name="gemini-test-model",
     )
-    provider.client._stream_chunks = [
+    cast(Any, provider).client._stream_chunks = [
         build_mock_stream_chunk(include_candidate=False),
         build_mock_stream_chunk(
             parts=[build_mock_stream_part(text="Chunk after skip")]
@@ -133,7 +133,7 @@ async def test_provider_streaming_handles_missing_parts(mock_genai_client: Any) 
         api_key="test-key",  # pragma: allowlist secret
         model_name="gemini-test-model",
     )
-    provider.client._stream_chunks = [
+    cast(Any, provider).client._stream_chunks = [
         build_mock_stream_chunk(include_content=False),
         build_mock_stream_chunk(parts=[]),
         build_mock_stream_chunk(parts=[build_mock_stream_part(text="Recovered chunk")]),
@@ -221,7 +221,7 @@ async def test_provider_generate_uses_top_level_automatic_function_calling_histo
 
     client_instance.aio.models.generate_content.side_effect = mock_generate
     result = await provider.generate("test")
-    assert result.automatic_function_calling_history == mock_history
+    assert cast(Any, result.automatic_function_calling_history) == mock_history
 
 
 @pytest.mark.asyncio
@@ -249,7 +249,7 @@ async def test_provider_generate_uses_nested_response_history_fallback(
 
     client_instance.aio.models.generate_content.side_effect = mock_generate
     result = await provider.generate("test", {"interaction_id": "interaction-123"})
-    assert result.automatic_function_calling_history == mock_history
+    assert cast(Any, result.automatic_function_calling_history) == mock_history
 
 
 @pytest.mark.asyncio
@@ -277,7 +277,7 @@ async def test_provider_generate_uses_result_history_as_final_fallback(
 
     client_instance.aio.models.generate_content.side_effect = mock_generate
     result = await provider.generate("test", {"interaction_id": "interaction-123"})
-    assert result.automatic_function_calling_history == mock_history
+    assert cast(Any, result.automatic_function_calling_history) == mock_history
 
 
 @pytest.mark.asyncio
@@ -356,7 +356,9 @@ async def test_provider_prepare_contents() -> None:
     history = [Content(role="user", parts=[Part(text="hello")])]
     contents = provider._prepare_contents("how are you?", history=history)
     assert len(contents) == 2
+    assert contents[0].parts is not None
     assert contents[0].parts[0].text == "hello"
+    assert contents[1].parts is not None
     assert contents[1].parts[0].text == "how are you?"
 
 

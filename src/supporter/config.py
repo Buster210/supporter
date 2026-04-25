@@ -6,16 +6,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-HTTP_NOT_FOUND = 404
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
 HTTP_SERVICE_UNAVAILABLE = 503
 
-DEFAULT_MODEL = "supporter-gemini"
-DEFAULT_AGENT_ROLE = "Analyzing"
-
-RESEARCHER_ROLE = "Senior Research Analyst"
-WRITER_ROLE = "Technical Content Strategist"
+DEFAULT_MODEL = "gemma-4-31b-it"
 
 
 @dataclass
@@ -51,7 +46,7 @@ def load_config() -> AppConfig:
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         provider=os.getenv("LLM_PROVIDER", "gemini"),
         gemini_api_keys=keys,
-        gemini_model=os.getenv("GEMINI_MODEL", "gemma-4-31b-it"),
+        gemini_model=os.getenv("GEMINI_MODEL", DEFAULT_MODEL),
         gemini_live_model=os.getenv(
             "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"
         ),

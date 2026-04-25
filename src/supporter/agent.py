@@ -1,4 +1,3 @@
-import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -55,7 +54,7 @@ class ChatAgent:
 
         self.history.append(user_message)
 
-        if not (result.candidates and result.candidates[0].content):
+        if not result.candidates or not result.candidates[0].content:
             return
 
         self.history.append(
@@ -79,25 +78,3 @@ class ChatAgent:
         logger.info("Clearing agent session history")
         self.history = []
         self.current_interaction_id = None
-
-
-class CrewAgent:
-    def __init__(self, provider: LLMProvider, status_callback: Any = None):
-        from .crew import CrewManager
-
-        self.manager = CrewManager(provider=provider, status_callback=status_callback)
-
-    async def execute(self, prompt: str) -> LLMResult:
-        start_time = time.perf_counter()
-        result = await self.manager.coordinate_execution(prompt)
-        result.duration = time.perf_counter() - start_time
-        result.model = "CrewAI (Multi-Agent)"
-        return result
-
-    async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
-        raise NotImplementedError(
-            "Streaming is not yet supported for multi-agent workflows"
-        )
-
-    def clear_history(self) -> None:
-        pass

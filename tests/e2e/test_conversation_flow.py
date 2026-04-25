@@ -1,6 +1,4 @@
-import os
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import Any
 from unittest.mock import patch
 
@@ -11,62 +9,10 @@ from supporter.index import (
     DynamicPool,
     LazyFallbackProvider,
     LLMProvider,
-    clear_providers,
 )
 from supporter.llm_types import LLMChunk, LLMOptions, LLMResult
 
-
-@dataclass
-class MockCandidate:
-    content: Any
-
-
-class MockLLMProvider(LLMProvider):  # type: ignore[misc]
-    def __init__(self, text_response: str = "Mocked response") -> None:
-        self._text = text_response
-        self._call_count = 0
-
-    def get_name(self) -> str:
-        return "MockProvider"
-
-    async def generate(
-        self, prompt: str | list[Any], options: LLMOptions | None = None
-    ) -> LLMResult:
-        self._call_count += 1
-        text = f"{self._text} (call #{self._call_count})"
-        from google.genai.types import Content, Part
-
-        content = Content(role="model", parts=[Part(text=text)])
-        return LLMResult(
-            text=text,
-            model="mock-model",
-            interaction_id=f"mock-{self._call_count}",
-            candidates=[MockCandidate(content)],
-        )
-
-    async def generate_stream(
-        self, prompt: str | list[Any], options: LLMOptions | None = None
-    ) -> AsyncIterator[LLMChunk]:
-        self._call_count += 1
-        words = self._text.split()
-        for i, word in enumerate(words):
-            is_last = i == len(words) - 1
-            yield LLMChunk(text=word + " ", model="mock-model", is_last=is_last)
-
-
-@pytest.fixture(autouse=True)
-def setup_test_env() -> Any:
-    with patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key-for-e2e",  # pragma: allowlist secret
-            "GEMINI_MODEL": "gemini-3.1-flash-lite-preview",
-            "LOG_LEVEL": "DEBUG",
-        },
-        clear=True,
-    ):
-        yield
-    clear_providers()
+from .conftest import MockLLMProvider
 
 
 @pytest.mark.e2e
@@ -128,7 +74,7 @@ async def test_conversation_with_pool() -> None:
         pool = DynamicPool(
             keys=["test-key-1", "test-key-2"],
             model_name="mock-model",
-            pool_size=2,  # pragma: allowlist secret
+            pool_size=2,
         )
         agent = ChatAgent(provider=pool)
         result = await agent.execute("Test with pool")
@@ -141,7 +87,7 @@ async def test_conversation_with_pool() -> None:
 async def test_conversation_fallback_trigger() -> None:
     call_count = {"primary": 0, "fallback": 0}
 
-    class FailingProvider(LLMProvider):  # type: ignore[misc]
+    class FailingProvider(LLMProvider):
         def get_name(self) -> str:
             return "FailingProvider"
 
@@ -160,11 +106,10 @@ async def test_conversation_fallback_trigger() -> None:
         async def generate_stream(
             self, prompt: str | list[Any], options: LLMOptions | None = None
         ) -> AsyncIterator[LLMChunk]:
-            if False:
-                yield LLMChunk(text="", is_last=True)
-            raise NotImplementedError
+            return
+            yield
 
-    class WorkingProvider(LLMProvider):  # type: ignore[misc]
+    class WorkingProvider(LLMProvider):
         def get_name(self) -> str:
             return "FallbackProvider"
 
