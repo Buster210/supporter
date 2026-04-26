@@ -4,8 +4,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION
-from .message_processor import ModeChanged
+from ..types import ModeChanged
 
 
 class ModeManager:
@@ -15,6 +14,7 @@ class ModeManager:
     async def setup_agent(self, use_live: bool = False) -> None:
         from .. import get_provider
         from ..agent import ChatAgent
+        from ..config import config
         from ..tools import (
             check_bash_availability,
             execute_bash,
@@ -40,14 +40,14 @@ class ModeManager:
         self._app.agent = ChatAgent(
             provider,
             registry=tools_registry,
-            system_instruction=DEFAULT_SYSTEM_INSTRUCTION,
             use_search=True,
             use_code_execution=True,
+            system_instruction=config.default_system_instruction,
         )
 
     async def toggle_mode(self, live: bool | None = None) -> None:
         if live is not None and self._app.live_mode == live:
-            from .widgets import MessageBubble
+            from .bubble import MessageBubble
 
             mode_name = "LIVE" if live else "SINGLE Agent"
             target = getattr(self._app, "active_turn", None) or self._app.query_one(
@@ -74,10 +74,7 @@ class ModeManager:
             self._app._stop_thinking()
 
     def _update_ui_state(self) -> None:
-        mode = "SINGLE"
-        if self._app.live_mode:
-            mode = "LIVE"
-
+        mode = "LIVE" if self._app.live_mode else "SINGLE"
         self._app.post_message(ModeChanged(mode=mode, enabled=True))
 
     async def handle_command(self, command: str) -> bool:
@@ -89,11 +86,10 @@ class ModeManager:
             "/agent": lambda: self._app._toggle_mode(live=False),
         }
 
-        handler = handlers.get(cmd)
-        if not handler:
+        if cmd not in handlers:
             return False
 
-        result = handler()
+        result = handlers[cmd]()
         if asyncio.iscoroutine(result):
             await result
         return True

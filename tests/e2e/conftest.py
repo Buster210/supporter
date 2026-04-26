@@ -8,10 +8,10 @@ import pytest
 from google.genai.types import Content, Part
 
 from supporter.index import LLMProvider, clear_providers
-from supporter.llm_types import LLMChunk, LLMOptions, LLMResult
+from supporter.types import LLMChunk, LLMOptions, LLMResult
 
 TEST_MODEL = "gemini-3.1-flash-lite-preview"
-TEST_API_KEY = "test-key-for-e2e"
+TEST_API_KEY = "test-key-for-e2e"  # pragma: allowlist secret
 
 
 @dataclass

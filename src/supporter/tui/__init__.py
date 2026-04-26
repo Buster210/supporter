@@ -8,7 +8,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Input, Label
+from textual.widgets import Button, Input, Label
 
 from .. import ChatAgent, DynamicPool
 from ..logger import init_logger, logger
@@ -17,17 +17,18 @@ from ..tools import (
     set_bash_notification_callback,
     set_confirmation_callback,
 )
-from .message_processor import ChatMessageProcessor, ModeChanged
-from .mode_manager import ModeManager
-from .widgets import (
+from ..types import ModeChanged
+from .bubble import MessageBubble
+from .chat import (
     ChatContainer,
     ChatTurn,
-    MessageBubble,
     QueuedMessagesDisplay,
     SupporterHeader,
     ThinkingIndicator,
-    ToastManager,
 )
+from .message_processor import ChatMessageProcessor
+from .mode_manager import ModeManager
+from .utils import ToastManager
 
 CSS = (Path(__file__).parent / "styles.tcss").read_text()
 
@@ -58,11 +59,12 @@ class SupporterApp(App[None]):
     async def on_mode_changed(self, event: ModeChanged) -> None:
         indicator = self.query_one("#mode-indicator", Label)
         indicator.update(f"[{event.mode}]")
-        label = "Single Agent"
         status = "ENABLED" if event.enabled else "DISABLED"
 
         target = self.active_turn or self.query_one("#chat-view")
-        await target.mount(MessageBubble(role="agent", content=f"{label} {status}"))
+        await target.mount(
+            MessageBubble(role="agent", content=f"Single Agent {status}")
+        )
 
     async def on_mount(self) -> None:
         init_logger()
@@ -103,6 +105,8 @@ class SupporterApp(App[None]):
                 pass
             yield QueuedMessagesDisplay(id="queue-display")
             yield ThinkingIndicator(id="thinking-indicator")
+            with Horizontal(id="scroll-btn-wrapper", classes="hidden"):
+                yield Button("↓ Go to bottom", id="scroll-bottom-btn")
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
                 yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
@@ -110,6 +114,12 @@ class SupporterApp(App[None]):
                     placeholder="Type a message... (/agent, /live, /clear, /exit)",
                     id="user-input",
                 )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "scroll-bottom-btn":
+            chat_view = self.query_one("#chat-view", Vertical)
+            chat_view.scroll_end(animate=True)
+            event.button.add_class("hidden")
 
     def action_clear_screen(self) -> None:
         chat_view = self.query_one("#chat-view")
@@ -183,7 +193,6 @@ class SupporterApp(App[None]):
                 self.active_turn.auto_collapse()
             self.active_turn = new_turn
             await chat_view.mount(new_turn)
-
             chat_view.scroll_end()
             self.query_one("#user-input").focus()
 
@@ -198,15 +207,12 @@ class SupporterApp(App[None]):
         start_time = time.perf_counter()
 
         try:
-            agent = self.agent
-            if not agent:
+            if not self.agent:
                 raise RuntimeError("Agent is not initialized")
-
             await self._process_streaming_execution(
-                text, target_container, start_time, agent
+                text, target_container, start_time, self.agent
             )
         except Exception as e:
-            logger.error(f"Execution error: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
         finally:
             self._is_processing = False
@@ -233,7 +239,7 @@ class SupporterApp(App[None]):
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
 
-        from .widgets import ConfirmationModal
+        from .modals import ConfirmationModal
 
         event = threading.Event()
         result = [False]
@@ -251,7 +257,7 @@ class SupporterApp(App[None]):
     def _confirm_bash(self, tokens: list[str], cwd: str) -> bool:
         import threading
 
-        from .widgets import BashConfirmationModal
+        from .modals import BashConfirmationModal
 
         event = threading.Event()
         result = [False]

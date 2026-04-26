@@ -3,8 +3,8 @@ from typing import Any
 
 from google.genai.types import Content, Part, Tool
 
-from .llm_types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 from .logger import logger
+from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
 
 class ChatAgent:
@@ -13,18 +13,18 @@ class ChatAgent:
         provider: LLMProvider,
         tools: list[Tool] | None = None,
         registry: dict[str, Callable[..., Any]] | None = None,
-        system_instruction: str | None = None,
         use_search: bool = False,
         use_code_execution: bool = False,
+        system_instruction: str | None = None,
     ):
         self.provider = provider
         self.history: list[Content] = []
         self.current_interaction_id: str | None = None
         self.tools = tools
         self.registry = registry
-        self.system_instruction = system_instruction
         self.use_search = use_search
         self.use_code_execution = use_code_execution
+        self.system_instruction = system_instruction
         logger.debug(f"ChatAgent initialized with provider: {provider.get_name()}")
 
     def _prepare_execution_context(self) -> LLMOptions:
@@ -33,9 +33,9 @@ class ChatAgent:
             "interaction_id": self.current_interaction_id,
             "tools": self.tools or [],
             "registry": self.registry or {},
-            "system_instruction": self.system_instruction,
             "use_search": self.use_search,
             "use_code_execution": self.use_code_execution,
+            "system_instruction": self.system_instruction,
         }
 
     async def execute(self, prompt: str) -> LLMResult:

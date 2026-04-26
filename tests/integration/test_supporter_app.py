@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from supporter.tui import SupporterApp
-from supporter.tui.message_processor import ModeChanged
+from supporter.types import ModeChanged
 from tests.tui_mocks import MockWidget
 
 pytestmark = pytest.mark.filterwarnings(
@@ -65,7 +65,7 @@ async def test_mode_changed_uses_active_turn_when_available() -> None:
     mock_active_turn = ActiveTurn()
     from typing import cast
 
-    from supporter.tui.widgets import ChatTurn
+    from supporter.tui.chat import ChatTurn
 
     with patch.object(
         app,

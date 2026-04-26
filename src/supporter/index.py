@@ -9,15 +9,13 @@ from typing import Any, ClassVar, cast
 from google.genai.types import Content
 
 from .config import (
-    HTTP_INTERNAL_ERROR,
     HTTP_RATE_LIMIT,
-    HTTP_SERVICE_UNAVAILABLE,
     config,
 )
-from .llm_types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 from .logger import logger
 from .providers.gemini_live_provider import GeminiLiveProvider
 from .providers.gemini_provider import GeminiProvider
+from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
 __all__ = [
     "DynamicPool",
@@ -36,17 +34,6 @@ __all__ = [
     "should_trigger_fallback",
 ]
 
-GOOGLE_5XX_ERRORS = {
-    "InternalServerError",
-    "ServiceUnavailable",
-    "BadGateway",
-    "GatewayTimeout",
-    "APIError",
-}
-
-TRANSIENT_SIGNALS = {"unavailable", "overloaded", "internal error", "service level"}
-HTTP_ERRORS_5XX = {HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR}
-RATE_LIMIT_SIGNALS = {"quota", "too many requests", "429"}
 
 _model_cooldowns: dict[str, datetime] = {}
 _provider_registry: dict[str, LLMProvider] = {}
@@ -57,20 +44,20 @@ def is_rate_limit(error: Any) -> bool:
     if getattr(error, "status", None) == HTTP_RATE_LIMIT:
         return True
     message = str(error).lower()
-    return any(sig in message for sig in RATE_LIMIT_SIGNALS)
+    return any(sig in message for sig in config.rate_limit_signals)
 
 
 def is_model_error(error: Any, model_name: str | None = None) -> bool:
     error_class_name = error.__class__.__name__
-    if error_class_name in GOOGLE_5XX_ERRORS:
+    if error_class_name in config.google_5xx_errors:
         return True
 
     status = getattr(error, "status", None)
-    if status in HTTP_ERRORS_5XX:
+    if status in config.http_errors_5xx:
         return True
 
     message = str(error).lower()
-    if any(sig in message for sig in TRANSIENT_SIGNALS):
+    if any(sig in message for sig in config.transient_signals):
         return True
 
     return any(code in message for code in ("503", "500", "502", "504"))
@@ -104,11 +91,16 @@ class DynamicPool(LLMProvider):
 
     @classmethod
     async def shutdown_all(cls) -> None:
-        """Shut down all tracked DynamicPool instances."""
+
         for pool in list(cls._instances):
             await pool.shutdown()
 
-    def __init__(self, keys: list[str], model_name: str, pool_size: int = 2):
+    def __init__(
+        self,
+        keys: list[str],
+        model_name: str,
+        pool_size: int = 2,
+    ):
         self.keys = keys
         self.model_name = model_name
         self.pool_size = min(pool_size, len(keys))

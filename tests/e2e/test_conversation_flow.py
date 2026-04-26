@@ -10,7 +10,7 @@ from supporter.index import (
     LazyFallbackProvider,
     LLMProvider,
 )
-from supporter.llm_types import LLMChunk, LLMOptions, LLMResult
+from supporter.types import LLMChunk, LLMOptions, LLMResult
 
 from .conftest import MockLLMProvider
 

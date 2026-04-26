@@ -8,14 +8,13 @@ from google import genai
 from google.genai import types
 from google.genai.types import Content, GenerateContentConfig, Part
 
-from ..config import config
-from ..llm_types import (
-    DEFAULT_SYSTEM_INSTRUCTION,
+from ..config import DEFAULT_SYSTEM_INSTRUCTION, config
+from ..logger import logger
+from ..types import (
     LLMChunk,
     LLMOptions,
     LLMResult,
 )
-from ..logger import logger
 
 
 class GeminiProvider:
@@ -23,7 +22,6 @@ class GeminiProvider:
         self,
         api_key: str,
         model_name: str | None = None,
-        system_instruction: str | None = None,
     ):
         target_model = model_name or config.gemini_model
         retry_options = types.HttpRetryOptions(attempts=2)
@@ -32,9 +30,6 @@ class GeminiProvider:
             api_key=api_key, http_options=types.HttpOptions(retry_options=retry_options)
         )
         self.model_name = target_model
-        self.default_system_instruction = (
-            system_instruction or DEFAULT_SYSTEM_INSTRUCTION
-        )
 
         self._tool_cache: list[Any] | None = None
         self._last_tool_key: Any = None
@@ -143,7 +138,7 @@ class GeminiProvider:
 
         generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
-            or self.default_system_instruction,
+            or DEFAULT_SYSTEM_INSTRUCTION,
             temperature=options.get("temperature"),
             top_p=options.get("top_p"),
             top_k=options.get("top_k"),
@@ -237,7 +232,7 @@ class GeminiProvider:
         transformed_tools = self._transform_tools(options)
         generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
-            or self.default_system_instruction,
+            or DEFAULT_SYSTEM_INSTRUCTION,
             tools=transformed_tools,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
                 disable=False
