@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from supporter.tui.chat import ChatTurn
 from supporter.tui.message_processor import ChatMessageProcessor
 from tests.tui_mocks import MockApp, MockBubble, MockTurn, MockWidget
 
@@ -33,9 +34,9 @@ async def test_process_streaming_basic() -> None:
 
     agent.execute_stream.side_effect = mock_stream
     with (
-        patch("supporter.tui.widgets.MessageBubble", MockBubble),
+        patch("supporter.tui.bubble.MessageBubble", MockBubble),
         patch("supporter.tui.message_processor.MessageBubble", MockBubble, create=True),
-        patch("supporter.tui.widgets.ChatTurn", MockTurn),
+        patch("supporter.tui.chat.ChatTurn", MockTurn),
         patch("supporter.tui.message_processor.ChatTurn", MockTurn, create=True),
     ):
         bubble = await processor.process_streaming("Hi", target, 0.0, agent)
@@ -78,9 +79,9 @@ async def test_process_streaming_with_tool_calls() -> None:
 
     agent.execute_stream.side_effect = mock_stream
     with (
-        patch("supporter.tui.widgets.MessageBubble", MockBubble),
+        patch("supporter.tui.bubble.MessageBubble", MockBubble),
         patch("supporter.tui.message_processor.MessageBubble", MockBubble, create=True),
-        patch("supporter.tui.widgets.ChatTurn", MockTurn),
+        patch("supporter.tui.chat.ChatTurn", MockTurn),
         patch("supporter.tui.message_processor.ChatTurn", MockTurn, create=True),
     ):
         bubble = await processor.process_streaming("task", target, 0.0, agent)
@@ -89,3 +90,60 @@ async def test_process_streaming_with_tool_calls() -> None:
     assert "Thinking..." in bubble.tokens
     assert "Result" in bubble.tokens
     assert app.status_label == "Streaming"
+
+
+@pytest.mark.asyncio
+async def test_process_streaming_empty_chunk() -> None:
+    app = MagicMock()
+    processor = ChatMessageProcessor(app)
+    chunk = MagicMock()
+    chunk.is_tool_call = False
+    chunk.is_last = False
+    chunk.text = "   "
+    chunk.is_thought = False
+    chunk.model = None
+
+    async def mock_stream(*args: Any) -> AsyncGenerator[Any, Any]:
+        yield chunk
+
+    agent = MagicMock()
+    agent.execute_stream = mock_stream
+    target = MagicMock()
+    result = await processor.process_streaming("test", target, 0, agent)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_process_streaming_chat_turn_mount() -> None:
+    app = MagicMock()
+    processor = ChatMessageProcessor(app)
+    chunk = MagicMock()
+    chunk.is_tool_call = False
+    chunk.is_last = False
+    chunk.text = "Hello"
+    chunk.is_thought = False
+    chunk.model = "test-model"
+
+    async def mock_stream(*args: Any) -> AsyncGenerator[Any, Any]:
+        yield chunk
+
+    agent = MagicMock()
+    agent.execute_stream = mock_stream
+    target = MagicMock(spec=ChatTurn)
+
+    async def mock_mount_bubble(*args: Any, **kwargs: Any) -> Any:
+        return None
+
+    target.mount_bubble = MagicMock(side_effect=mock_mount_bubble)
+    result = await processor.process_streaming("test", target, 0, agent)
+    assert result is not None
+    target.mount_bubble.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_chunk_google_search() -> None:
+    app = MagicMock()
+    app.status_label = "Ready"
+    processor = ChatMessageProcessor(app)
+    processor._handle_tool_call_status("google_search")
+    assert app.status_label == "Searching"

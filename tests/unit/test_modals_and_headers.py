@@ -4,7 +4,8 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 from textual.geometry import Size
 
-from supporter.tui.widgets import BashConfirmationModal, SectionHeader
+from supporter.tui.bubble import SectionHeader
+from supporter.tui.modals import BashConfirmationModal
 
 
 @pytest.fixture
@@ -146,7 +147,7 @@ class TestSectionHeader:
                 event = MagicMock()
                 header.on_click(event)
                 event.stop.assert_called_once()
-                mock_bubble.toggle_section.assert_called_once_with(header.id)
+                mock_bubble.toggle_section.assert_called_once_with(header)
 
     def test_on_click_posts_message_when_bubble_not_collapsible(
         self, mock_app: Any
@@ -170,7 +171,7 @@ class TestSectionHeader:
                 event.stop.assert_not_called()
 
     def test_find_bubble_parent_returns_bubble(self) -> None:
-        from supporter.tui.widgets import MessageBubble
+        from supporter.tui.bubble import MessageBubble
 
         header = SectionHeader("Test")
         mock_content = MagicMock()
@@ -190,7 +191,7 @@ class TestSectionHeader:
             assert result is None
 
     def test_find_bubble_parent_traverses_up_hierarchy(self) -> None:
-        from supporter.tui.widgets import MessageBubble
+        from supporter.tui.bubble import MessageBubble
 
         header = SectionHeader("Test")
         mock_wrapper = MagicMock()

@@ -1,7 +1,8 @@
 from typing import Any
 from unittest.mock import MagicMock
 
-from supporter.tui.widgets import BashConfirmationModal, ConfirmationModal, ToastManager
+from supporter.tui.modals import BashConfirmationModal, ConfirmationModal
+from supporter.tui.utils import ToastManager
 from tests.tui_mocks import MockApp, MockWidget
 
 

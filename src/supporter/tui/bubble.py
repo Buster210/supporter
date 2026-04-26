@@ -1,122 +1,24 @@
 from __future__ import annotations
 
+import contextlib
 import re
-import time
-from collections import OrderedDict
-from pathlib import Path
 from typing import Any, cast
 
 from rich.markdown import Markdown as RichMarkdown
-from rich.syntax import Syntax
-from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.events import Click, MouseScrollDown, MouseScrollUp
+from textual.containers import Vertical
+from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
-from textual.screen import ModalScreen
-from textual.widgets import Button, Label, Static
+from textual.widgets import Label, Static
 
-from ..logger import logger
-from .theme import THEME, apply_crystal_gradient
-
-
-class ConfirmationModal(ModalScreen[bool]):
-    def __init__(self, path: str, content: str):
-        super().__init__()
-        self.path = path
-        self.content = content
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal-container"):
-            filename = Path(self.path).name
-            yield Label(f"Write {filename}?", id="modal-header")
-            with ScrollableContainer(id="modal-content"):
-                yield Static(
-                    Syntax(
-                        self.content,
-                        "diff",
-                        theme="monokai",
-                        background_color="default",
-                        word_wrap=True,
-                    ),
-                    expand=True,
-                )
-            with Horizontal(id="modal-buttons"):
-                yield Button("Allow", id="allow")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        lines = self.content.splitlines()
-        max_line = max((len(line) for line in lines), default=40)
-        width = min(int((max_line + 6) * 1.3), int(self.app.size.width * 0.9))
-        self.query_one("#modal-container").styles.width = width
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "allow")
-
-
-class BashConfirmationModal(ModalScreen[bool]):
-    def __init__(self, command: list[str], cwd: str):
-        super().__init__()
-        self.command = command
-        self.cwd = cwd
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal-container"):
-            yield Label("Authorize Bash Execution?", id="modal-header")
-            with ScrollableContainer(id="modal-content"):
-                cmd_str = " ".join(self.command)
-                yield Label(
-                    f"[bold cyan]Working Dir:[/] {self.cwd}", classes="modal-meta"
-                )
-                yield Static(
-                    Syntax(
-                        cmd_str,
-                        "bash",
-                        theme="monokai",
-                        background_color="default",
-                        word_wrap=True,
-                    ),
-                    expand=True,
-                )
-            with Horizontal(id="modal-buttons"):
-                yield Button("Allow", id="allow", variant="success")
-                yield Button("Deny", id="cancel", variant="error")
-
-    def on_mount(self) -> None:
-        self.query_one("#modal-container").styles.width = min(
-            80, int(self.app.size.width * 0.9)
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "allow")
-
-
-SUPPORTER_ART = (
-    " █▀▀ █ █ █▀█ █▀█ █▀█ █▀█ ▀█▀ █▀▀ █▀█ \n"
-    " ▀▀█ █ █ █▀▀ █▀▀ █ █ █▀▄  █  █▀▀ █▀▄ \n"
-    " ▀▀▀ ▀▀▀ ▀   ▀   ▀▀▀ ▀ ▀  ▀  ▀▀▀ ▀ ▀ "
+from ..config import (
+    COLLAPSED_SUMMARY_LEN,
+    MARKDOWN_SYNTAX_MARKERS,
+    THEME,
+    TOOL_ARG_MAX_LEN,
+    TOOL_ARG_TRUNC_LEN,
 )
-
-
-class SupporterHeader(Static):
-    def render(self) -> Text:
-        return apply_crystal_gradient(SUPPORTER_ART)
-
-
-class ChatContainer(Vertical):
-    SCROLL_AMOUNT = 5
-
-    def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
-        for _ in range(self.SCROLL_AMOUNT):
-            self.scroll_down()
-        event.prevent_default()
-
-    def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
-        for _ in range(self.SCROLL_AMOUNT):
-            self.scroll_up()
-        event.prevent_default()
 
 
 class SectionHeader(Static):
@@ -135,11 +37,9 @@ class SectionHeader(Static):
         self.label = label
         self.set_class(is_collapsed, "collapsed")
         self.set_class(is_collapsible, "collapsible")
-
         hint = ""
         if is_collapsible:
             hint = f" [{THEME['meta_gray']} italic](Click to expand/collapse)[/]"
-
         self.update(f"{self.label}{hint}")
 
     def on_click(self, event: Click) -> None:
@@ -147,9 +47,8 @@ class SectionHeader(Static):
         if not (bubble and bubble.collapsible):
             self.post_message(self.ToggleRequest(self))
             return
-
         event.stop()
-        bubble.toggle_section(self.id)
+        bubble.toggle_section(self)
 
     def _find_bubble_parent(self) -> MessageBubble | None:
         current = self.parent
@@ -179,18 +78,13 @@ class MessageBubble(Vertical):
         self.thoughts = ""
         self.tool_calls: list[dict[str, Any]] = []
         self.elements: list[dict[str, Any]] = []
-        if self.thoughts:
-            self.elements.append(
-                {"type": "thought", "content": self.thoughts, "collapsed": False}
-            )
+
         if self.content:
             self.elements.append(
                 {"type": "content", "content": self.content, "collapsed": False}
             )
 
-        self.collapsible = False
-        self.thoughts_collapsed = False
-        self.tools_collapsed = False
+        self.collapsible = True
         self._message_view: Static | None = None
         self._meta_label: Label | None = None
         self.add_class("right" if role == "user" else "left")
@@ -226,34 +120,17 @@ class MessageBubble(Vertical):
         return f"({model_info})"
 
     def _should_use_markdown(self, text: str) -> bool:
-        syntax_markers = [
-            r"[*+-]\s",
-            r"\d+\.\s",
-            r"#+\s",
-            r"\*\*.*?\*\*",
-            r"\*.*?\*",
-            r"`.*?`",
-            r"\[.*?\]\(.*?\)",
-            r">\s",
-        ]
-        return any(re.search(m, text, re.MULTILINE) for m in syntax_markers)
+        return any(re.search(m, text, re.MULTILINE) for m in MARKDOWN_SYNTAX_MARKERS)
 
     def on_section_header_toggle_request(
         self, event: SectionHeader.ToggleRequest
     ) -> None:
-        self.toggle_section(event.header.id)
+        self.toggle_section(event.header)
 
-    def toggle_section(self, section_id: str | None) -> None:
-        try:
+    def toggle_section(self, section: SectionHeader) -> None:
+        with contextlib.suppress(ValueError, Exception):
             container = self.query_one("#elements-container")
-            idx = -1
-            if section_id:
-                try:
-                    header = self.query_one(f"#{section_id}")
-                    idx = container.children.index(header)
-                except Exception:
-                    logger.debug("Header not found for section toggle")
-
+            idx = container.children.index(section)
             if idx == -1:
                 return
 
@@ -262,13 +139,11 @@ class MessageBubble(Vertical):
                 if el["type"] in ("thought", "tool_calls"):
                     if current_child_idx == idx:
                         el["collapsed"] = not el["collapsed"]
+                        el["manually_interacted"] = True
                         break
                     current_child_idx += 2
                 else:
                     current_child_idx += 1
-        except (ValueError, Exception):
-            logger.debug("Failed to toggle section")
-
         self._update_ui_content()
 
     def watch_collapsed(self, value: bool) -> None:
@@ -292,13 +167,10 @@ class MessageBubble(Vertical):
     def _render_collapsed(self) -> None:
         if not self._message_view:
             return
-
         self._elements_container.display = False
-
-        summary = self.content.split("\n")[0][:50]
-        if len(self.content) > 50 or "\n" in self.content:
+        summary = self.content.split("\n")[0][:COLLAPSED_SUMMARY_LEN]
+        if len(self.content) > COLLAPSED_SUMMARY_LEN or "\n" in self.content:
             summary += "..."
-
         hint = f"[{THEME['meta_gray']} italic](Click to expand/collapse)[/] "
         self._message_view.update(f"{hint}{summary}")
         self._message_view.display = True
@@ -311,7 +183,6 @@ class MessageBubble(Vertical):
             container.display = True
         except Exception:
             return
-
         if self._message_view:
             self._message_view.display = False
         self._sync_elements()
@@ -321,10 +192,8 @@ class MessageBubble(Vertical):
             container = self.query_one("#elements-container")
         except Exception:
             return
-
         if not container.is_attached:
             return
-
         self._ensure_correct_widget_count(container)
         self._refresh_widget_content(container)
 
@@ -333,7 +202,6 @@ class MessageBubble(Vertical):
         expected_count = sum(
             2 if el["type"] in ("thought", "tool_calls") else 1 for el in self.elements
         )
-
         if len(current_widgets) < expected_count:
             self._mount_missing_widgets(container, current_widgets)
         elif len(current_widgets) > expected_count:
@@ -346,11 +214,9 @@ class MessageBubble(Vertical):
             el = self.elements[element_idx]
             w_idx += 2 if el["type"] in ("thought", "tool_calls") else 1
             element_idx += 1
-
         new_widgets = []
         for i in range(element_idx, len(self.elements)):
             new_widgets.extend(self._create_widgets_for_element(i, self.elements[i]))
-
         if new_widgets:
             container.mount(*new_widgets)
 
@@ -383,7 +249,6 @@ class MessageBubble(Vertical):
     ) -> None:
         header = cast(SectionHeader, header)
         view = cast(Static, view)
-
         if el["type"] == "thought":
             is_thinking = (
                 self.streaming and idx == len(self.elements) - 1 and not self.content
@@ -391,9 +256,11 @@ class MessageBubble(Vertical):
             label = "Thinking" if is_thinking else "Thoughts"
             header.update_label(label, el["collapsed"], self.collapsible)
             view.update(RichMarkdown(el["content"]))
+            view.display = not el["collapsed"] if self.collapsible else True
         else:
             header.update_label("Tools Used", el["collapsed"], self.collapsible)
             view.update(self._format_tool_calls(el["calls"]))
+            view.display = not el["collapsed"] if self.collapsible else True
 
     def _update_content_widget(self, view: Any, el: dict[str, Any]) -> None:
         view = cast(Static, view)
@@ -424,7 +291,6 @@ class MessageBubble(Vertical):
             view.display = not el["collapsed"] if self.collapsible else True
             header.set_class(idx > 0, "section-gap")
             return [header, view]
-
         content = el["content"].strip()
         if self._should_use_markdown(content):
             view = Static(RichMarkdown(content), classes="main-content")
@@ -440,7 +306,11 @@ class MessageBubble(Vertical):
             arg_str = ""
             if args:
                 items = [
-                    f"{k}={str(v)[:37]}..." if len(str(v)) > 40 else f"{k}={v}"
+                    (
+                        f"{k}={str(v)[:TOOL_ARG_TRUNC_LEN]}..."
+                        if len(str(v)) > TOOL_ARG_MAX_LEN
+                        else f"{k}={v}"
+                    )
                     for k, v in args.items()
                 ]
                 arg_str = f"({', '.join(items)})"
@@ -454,12 +324,23 @@ class MessageBubble(Vertical):
         else:
             self.content += token
             etype = "content"
-
         if not self.elements or self.elements[-1]["type"] != etype:
-            self.elements.append({"type": etype, "content": token, "collapsed": False})
+            if (
+                self.elements
+                and self.elements[-1]["type"] in ("thought", "tool_calls")
+                and not self.elements[-1].get("manually_interacted")
+            ):
+                self.elements[-1]["collapsed"] = True
+            self.elements.append(
+                {
+                    "type": etype,
+                    "content": token,
+                    "collapsed": False,
+                    "manually_interacted": False,
+                }
+            )
         else:
             self.elements[-1]["content"] += token
-
         self._update_ui_content()
 
     def add_tool_call(
@@ -468,14 +349,23 @@ class MessageBubble(Vertical):
         entry = {"name": tool_name, "args": tool_args or {}}
         if entry not in self.tool_calls:
             self.tool_calls.append(entry)
-
             if not self.elements or self.elements[-1]["type"] != "tool_calls":
+                if (
+                    self.elements
+                    and self.elements[-1]["type"] == "thought"
+                    and not self.elements[-1].get("manually_interacted")
+                ):
+                    self.elements[-1]["collapsed"] = True
                 self.elements.append(
-                    {"type": "tool_calls", "calls": [entry], "collapsed": False}
+                    {
+                        "type": "tool_calls",
+                        "calls": [entry],
+                        "collapsed": False,
+                        "manually_interacted": False,
+                    }
                 )
             else:
                 self.elements[-1]["calls"].append(entry)
-
             self._update_ui_content()
 
     def finalize(
@@ -486,19 +376,23 @@ class MessageBubble(Vertical):
         self.model = model or self.model
         self.duration = duration or self.duration
         self.streaming = False
-
+        if (
+            self.elements
+            and self.elements[-1]["type"] in ("thought", "tool_calls")
+            and not self.elements[-1].get("manually_interacted")
+        ):
+            self.elements[-1]["collapsed"] = True
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
             self._meta_label.display = not self.collapsed
-
         if self._message_view and self._message_view.size.width > 0:
             self._message_view.styles.width = self._message_view.size.width
-
         self._update_ui_content()
 
     def on_click(self, event: Click) -> None:
         if not self.collapsed:
             return
+        from .chat import ChatTurn
 
         if isinstance(self.parent, ChatTurn):
             self.parent.toggle_collapse()
@@ -507,166 +401,4 @@ class MessageBubble(Vertical):
             self._update_ui_content()
             if self._meta_label:
                 self._meta_label.display = True
-
         event.stop()
-
-
-class ChatTurn(Vertical):
-    collapsed = reactive(False)
-    manually_expanded = reactive(False)
-
-    def __init__(self, user_bubble: MessageBubble):
-        super().__init__(classes="chat-turn")
-        self.user_bubble = user_bubble
-        self.agent_bubbles: list[MessageBubble] = []
-
-    def watch_collapsed(self, value: bool) -> None:
-        self.set_class(value, "collapsed")
-        self.user_bubble.collapsed = value
-        for bubble in self.agent_bubbles:
-            bubble.collapsed = value
-
-    def on_mount(self) -> None:
-        self.watch(self.app, "active_turn", self._on_active_turn_change)
-        self._on_active_turn_change(self.app.active_turn)  # type: ignore
-
-    def _on_active_turn_change(self, active_turn: ChatTurn | None) -> None:
-        is_active = active_turn is self
-        self.user_bubble.is_active = is_active
-        for bubble in self.agent_bubbles:
-            bubble.is_active = is_active
-
-        if is_active:
-            self.collapsed = False
-
-    def auto_collapse(self) -> None:
-        if not self.manually_expanded:
-            self.collapsed = True
-
-    def watch_is_active(self, value: bool) -> None:
-        self.user_bubble.is_active = value
-        for bubble in self.agent_bubbles:
-            bubble.is_active = value
-
-    def compose(self) -> ComposeResult:
-        yield self.user_bubble
-
-    def toggle_collapse(self) -> None:
-        if self.collapsed:
-            self.manually_expanded = True
-            self.collapsed = False
-        else:
-            self.manually_expanded = False
-            self.collapsed = True
-
-    def expand_turn(self) -> None:
-        self.app.active_turn = self  # type: ignore
-
-    async def mount_bubble(self, bubble: MessageBubble) -> None:
-        bubble.collapsed = self.collapsed
-        bubble.is_active = self.app.active_turn is self  # type: ignore
-        self.agent_bubbles.append(bubble)
-        await self.mount(bubble)
-
-    def on_click(self, event: Click) -> None:
-        self.toggle_collapse()
-        event.stop()
-
-
-class ThinkingIndicator(Static):
-    status_label = reactive("Thinking")
-    active_queries = reactive(0)
-    is_activating_mode = reactive(False)
-
-    def on_mount(self) -> None:
-        self._timer = self.set_interval(0.1, self._tick)
-
-        for prop in [
-            "status_label",
-            "active_queries",
-            "is_activating_mode",
-        ]:
-            self.watch(self.app, prop, self._sync_app_prop)
-
-        self._sync_app_prop(None)
-
-    def _sync_app_prop(self, _: Any) -> None:
-        self.status_label = self.app.status_label  # type: ignore
-        self.active_queries = self.app.active_queries  # type: ignore
-        self.is_activating_mode = self.app.is_activating_mode  # type: ignore
-
-    def _tick(self) -> None:
-        self._update_display(None)
-
-    def _update_display(self, _: Any) -> None:
-        from .theme import SPINNER_FRAMES
-
-        if self.active_queries == 0 and not self.is_activating_mode:
-            self.update("")
-            self.display = False
-            return
-
-        idx = getattr(self, "_spinner_idx", 0)
-        self._spinner_idx = idx + 1
-
-        frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
-        dots = "." * (idx % 4)
-
-        if self.is_activating_mode:
-            status = f"Activating Mode{dots}"
-        else:
-            status = f"{frame} {self.status_label}{dots}"
-
-        self.update(status)
-        self.display = True
-
-
-class QueuedMessagesDisplay(Vertical):
-    def update_queue(self, messages: list[str]) -> None:
-        self.query("*").remove()
-        if not messages:
-            self.display = False
-            return
-
-        self.mount(Label("Queued:", classes="queue-header"))
-        for msg in messages:
-            self.mount(Label(msg, classes="queue-badge"))
-
-        self.display = True
-
-
-class ToastManager:
-    def __init__(self, timeout: float = 5.0) -> None:
-        self.active_toasts: OrderedDict[str, str] = OrderedDict()
-        self.last_toast_time: float = 0
-        self.timeout = timeout
-
-    def notify(self, app: Any, message: str, type: str = "system") -> None:
-        now = time.time()
-
-        if now - self.last_toast_time > self.timeout:
-            self.active_toasts.clear()
-
-        if type in self.active_toasts:
-            del self.active_toasts[type]
-
-        self.active_toasts[type] = message
-        self.active_toasts.move_to_end(type, last=False)
-
-        self._clear_ui(app)
-        self.last_toast_time = now
-
-        content = "\n".join(self.active_toasts.values())
-        app.notify(content, timeout=self.timeout)
-
-    def clear(self, app: Any) -> None:
-        self.active_toasts.clear()
-        self._clear_ui(app)
-
-    def _clear_ui(self, app: Any) -> None:
-        if hasattr(app, "clear_notifications"):
-            app.clear_notifications()
-            return
-
-        if hasattr(app, "screen") and app.screen:
-            app.screen.query("Toast, Notification, .textual-notification").remove()
