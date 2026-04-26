@@ -58,7 +58,7 @@ class ChatContainer(Vertical):
             else:
                 if not wrapper.has_class("hidden"):
                     wrapper.add_class("hidden")
-        except Exception:  # noqa: S110
+        except Exception:  # nosec B110 # noqa: S110
             pass
 
 
