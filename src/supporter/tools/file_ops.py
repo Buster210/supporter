@@ -7,20 +7,11 @@ from typing import Any
 
 import pathspec
 
-from ..config import config
+from ..config import INTERNAL_BLACKLIST, config
 from ..logger import logger
 
 _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
-
-_INTERNAL_BLACKLIST = [
-    ".env",
-    ".git",
-    ".venv",
-    ".mypy_cache",
-    ".ruff_cache",
-    "__pycache__",
-]
 
 
 def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> None:
@@ -53,7 +44,7 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
 def _is_blacklisted(relative_path: str) -> bool:
     return any(
         relative_path == pattern or relative_path.startswith(f"{pattern}/")
-        for pattern in _INTERNAL_BLACKLIST
+        for pattern in INTERNAL_BLACKLIST
     )
 
 

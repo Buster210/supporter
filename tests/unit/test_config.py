@@ -119,6 +119,15 @@ class TestAppConfig:
             default_system_instruction="Be helpful.",
             allowed_directories=["/project"],
             require_write_confirmation=True,
+            live_thinking_level="medium",
+            retriable_codes={"429"},
+            google_5xx_errors={"InternalServerError"},
+            transient_signals={"unavailable"},
+            http_errors_5xx={500},
+            rate_limit_signals={"429"},
+            drain_timeout=2.0,
+            context_trigger_tokens=100000,
+            context_target_tokens=4000,
         )
         assert config.log_level == "DEBUG"
         assert config.provider == "gemini"

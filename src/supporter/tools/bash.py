@@ -698,7 +698,7 @@ def _apply_rate_limiting() -> None:
 
 
 def _get_fs_state(target_dir: Path) -> dict[str, float]:
-    from .file_ops import _INTERNAL_BLACKLIST as FILE_INTERNAL_BLACKLIST
+    from ..config import INTERNAL_BLACKLIST as FILE_INTERNAL_BLACKLIST
 
     state = {}
     try:
