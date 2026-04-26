@@ -105,16 +105,28 @@ async def test_generate_with_thoughts_and_grounding(
     provider._session = mock_session
     r1 = MagicMock()
     r1.tool_call = None
-    r1.server_content.model_turn.parts = [MagicMock(text="Thinking", thought=True)]
+    r1.session_resumption_update = None
+    r1.go_away = None
+    part1 = MagicMock()
+    part1.text = "Thinking"
+    part1.thought = True
+    r1.server_content.model_turn.parts = [part1]
     r1.server_content.output_transcription = None
     r1.server_content.grounding_metadata = None
     r1.server_content.turn_complete = False
+    r1.server_content.generation_complete = False
+
     r2 = MagicMock()
     r2.tool_call = None
+    r2.session_resumption_update = None
+    r2.go_away = None
     r2.server_content.model_turn = None
     r2.server_content.grounding_metadata = MagicMock()
-    r2.server_content.output_transcription.text = "Done"
+    ot = MagicMock()
+    ot.text = "Done"
+    r2.server_content.output_transcription = ot
     r2.server_content.turn_complete = True
+    r2.server_content.generation_complete = True
 
     async def mock_receive() -> AsyncGenerator[Any, Any]:
         yield r1
@@ -134,17 +146,28 @@ async def test_generate_stream_with_tool_call(
     provider._session = mock_session
     r1 = MagicMock()
     r1.tool_call = MagicMock()
+    r1.session_resumption_update = None
+    r1.go_away = None
     fc = MagicMock()
     fc.name = "my_tool"
     fc.args = {"a": 1}
     fc.id = "call_1"
     r1.tool_call.function_calls = [fc]
     r1.server_content = None
+
     r2 = MagicMock()
     r2.tool_call = None
-    r2.server_content.model_turn.parts = [MagicMock(text="T", thought=True)]
-    r2.server_content.output_transcription.text = "Stream"
+    r2.session_resumption_update = None
+    r2.go_away = None
+    part2 = MagicMock()
+    part2.text = "T"
+    part2.thought = True
+    r2.server_content.model_turn.parts = [part2]
+    ot2 = MagicMock()
+    ot2.text = "Stream"
+    r2.server_content.output_transcription = ot2
     r2.server_content.turn_complete = True
+    r2.server_content.generation_complete = True
 
     async def mock_receive() -> AsyncGenerator[Any, Any]:
         yield r1

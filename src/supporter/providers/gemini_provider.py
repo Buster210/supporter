@@ -149,6 +149,7 @@ class GeminiProvider:
             if transformed_tools
             else None,
             tools=transformed_tools,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True) if transformed_tools else None,
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
@@ -239,6 +240,7 @@ class GeminiProvider:
             )
             if transformed_tools
             else None,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True) if transformed_tools else None,
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
