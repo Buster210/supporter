@@ -16,8 +16,6 @@ from ..config import (
     COLLAPSED_SUMMARY_LEN,
     MARKDOWN_SYNTAX_MARKERS,
     THEME,
-    TOOL_ARG_MAX_LEN,
-    TOOL_ARG_TRUNC_LEN,
 )
 
 
@@ -301,20 +299,17 @@ class MessageBubble(Vertical):
 
     def _format_tool_calls(self, calls: list[dict[str, Any]]) -> str:
         lines = []
+        max_width = 80
         for tc in calls:
             name, args = tc["name"], tc["args"]
             arg_str = ""
             if args:
-                items = [
-                    (
-                        f"{k}={str(v)[:TOOL_ARG_TRUNC_LEN]}..."
-                        if len(str(v)) > TOOL_ARG_MAX_LEN
-                        else f"{k}={v}"
-                    )
-                    for k, v in args.items()
-                ]
+                items = [f"{k}={str(v).replace('\n', ' ')}" for k, v in args.items()]
                 arg_str = f"({', '.join(items)})"
-            lines.append(f"• {name}{arg_str}")
+            full_line = f"• {name}{arg_str}"
+            if len(full_line) > max_width:
+                full_line = f"{full_line[: max_width - 3]}..."
+            lines.append(full_line)
         return "\n".join(lines)
 
     def append_token(self, token: str, is_thought: bool = False) -> None:

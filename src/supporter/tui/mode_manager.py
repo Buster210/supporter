@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+from ..logger import logger
 from ..types import ModeChanged
 
 
@@ -37,6 +38,10 @@ class ModeManager:
 
         provider = get_provider(live=use_live, registry=tools_registry)
 
+        logger.info(
+            f"ModeManager: setting up agent — use_live={use_live}, "
+            f"tools={list(tools_registry.keys())}"
+        )
         self._app.agent = ChatAgent(
             provider,
             registry=tools_registry,
@@ -63,6 +68,7 @@ class ModeManager:
         else:
             self._app.live_mode = not self._app.live_mode
 
+        logger.info(f"ModeManager: toggling mode — live={self._app.live_mode}")
         self._app._start_thinking()
         self._app.is_activating_mode = True
 

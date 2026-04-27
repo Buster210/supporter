@@ -179,7 +179,7 @@ FILE_READING_BINS = {
     "zip",
 }
 
-TEMP_DIRS = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]  # nosec B108 # noqa: S108
+TEMP_DIRS = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]  # noqa: S108
 
 INSTALL_CMDS = {"install", "i", "ci", "add", "sync"}
 

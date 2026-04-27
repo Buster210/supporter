@@ -72,7 +72,7 @@ def _is_model_in_cooldown(model_name: str) -> bool:
         return False
     if datetime.now() > _model_cooldowns[model_name]:
         del _model_cooldowns[model_name]
-        logger.info(f"Model '{model_name}' cooldown expired, re-enabling")
+        logger.info(f"Model '{model_name}' cooldown expired — re-enabling")
         return False
     return True
 
@@ -80,9 +80,9 @@ def _is_model_in_cooldown(model_name: str) -> bool:
 def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
     expiry = datetime.now() + timedelta(minutes=minutes)
     _model_cooldowns[model_name] = expiry
-    logger.warning(
-        f"Model '{model_name}' in cooldown until "
-        f"{expiry.strftime('%Y-%m-%d %H:%M:%S')} due to 5XX error"
+    logger.info(
+        f"Model '{model_name}' placed in cooldown until "
+        f"{expiry.strftime('%Y-%m-%d %H:%M:%S')} — repeated 5XX errors"
     )
 
 
@@ -135,9 +135,9 @@ class DynamicPool(LLMProvider):
         if not self.active_slots:
             self.slot_available.clear()
 
-        logger.warning(
-            f"Instance failed in pool {self.model_name}. "
-            "Destroying and replacing in background..."
+        logger.info(
+            f"Pool '{self.model_name}': provider instance retired after failure — "
+            f"scheduling replacement (slots remaining: {len(self.active_slots)})"
         )
 
         async def _bg_replace() -> None:
@@ -156,7 +156,8 @@ class DynamicPool(LLMProvider):
     async def shutdown(self) -> None:
         if self.background_tasks:
             logger.info(
-                f"Shutting down pool {self.model_name}, awaiting background tasks"
+                f"Pool '{self.model_name}' shutdown: draining "
+                f"{len(self.background_tasks)} background task(s)"
             )
             await asyncio.gather(*self.background_tasks, return_exceptions=True)
             self.background_tasks.clear()
@@ -186,11 +187,15 @@ class DynamicPool(LLMProvider):
                 last_error = e
                 if should_trigger_fallback(e):
                     if is_model_error(e, self.model_name):
-                        logger.warning(
-                            f"[{self.model_name}] 5XX error detected; marking cooldown."
+                        logger.info(
+                            f"[{self.model_name}] 5XX on attempt {attempt + 1}: {e}"
                         )
                         _mark_model_cooldown(self.model_name)
-
+                    else:
+                        logger.info(
+                            f"[{self.model_name}] Retriable error attempt "
+                            f"{attempt + 1}: {e}"
+                        )
                     self._replace_instance(provider)
                     await asyncio.sleep(0.2 * (attempt + 1))
                     continue
@@ -223,17 +228,21 @@ class DynamicPool(LLMProvider):
                 last_error = e
                 if should_trigger_fallback(e):
                     if is_model_error(e, self.model_name):
-                        logger.warning(
-                            f"[{self.model_name}] 5XX error detected during stream; "
-                            "marking cooldown."
+                        logger.info(
+                            f"[{self.model_name}] 5XX error during stream attempt "
+                            f"{attempt + 1}: {e}"
                         )
                         _mark_model_cooldown(self.model_name)
-
+                    else:
+                        logger.info(
+                            f"[{self.model_name}] Retriable stream error attempt "
+                            f"{attempt + 1}: {e}"
+                        )
                     self._replace_instance(provider)
                     if not yielded_any:
-                        logger.warning(
-                            f"[{self.model_name}] Stream failed before first chunk "
-                            f"(Attempt {attempt + 1}/{len(self.keys)}). Retrying..."
+                        logger.info(
+                            f"[{self.model_name}] Stream failed before first chunk — "
+                            f"retrying (attempt {attempt + 1}/{len(self.keys)})"
                         )
                         await asyncio.sleep(0.2 * (attempt + 1))
                         continue
@@ -277,7 +286,10 @@ class LazyFallbackProvider(LLMProvider):
         except Exception as e:
             if not should_trigger_fallback(e) or not self.fallback:
                 raise e
-            logger.warning("Primary pool exhausted. Triggering fallback...")
+            logger.info(
+                f"Primary pool exhausted ({type(e).__name__}: {e}) — "
+                "triggering fallback"
+            )
             return await self.fallback.generate(prompt, options)
 
     async def generate_stream(
@@ -289,7 +301,9 @@ class LazyFallbackProvider(LLMProvider):
         except Exception as e:
             if not should_trigger_fallback(e) or not self.fallback:
                 raise e
-            logger.warning("Primary stream failed. Triggering fallback...")
+            logger.info(
+                f"Primary stream failed ({type(e).__name__}: {e}) — triggering fallback"
+            )
             async for chunk in self.fallback.generate_stream(prompt, options):
                 yield chunk
 
@@ -315,7 +329,7 @@ def get_provider(
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
 
     if shared and cache_key in _provider_registry:
-        logger.debug(f"Returning cached provider for {cache_key}")
+        logger.debug(f"Provider cache hit: {cache_key}")
         provider = _provider_registry[cache_key]
         if live and registry and hasattr(provider, "registry"):
             provider.registry.update(registry)
@@ -339,7 +353,7 @@ def get_provider(
 
             def live_primary_factory() -> LLMProvider:
                 target_model = model_name or config.gemini_live_model
-                logger.info(f"Creating Live Primary Provider: {target_model}")
+                logger.info(f"Constructing Live Primary provider: model={target_model}")
                 return GeminiLiveProvider(
                     keys, model_name=target_model, registry=registry
                 )
@@ -348,8 +362,8 @@ def get_provider(
                 if not config.gemini_live_fallback_model:
                     return None
                 logger.info(
-                    "Creating Live Fallback Provider: "
-                    f"{config.gemini_live_fallback_model}"
+                    f"Constructing Live Fallback provider: "
+                    f"model={config.gemini_live_fallback_model}"
                 )
                 return GeminiLiveProvider(
                     keys,

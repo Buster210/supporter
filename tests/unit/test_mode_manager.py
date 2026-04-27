@@ -114,17 +114,14 @@ async def test_toggle_mode_logic() -> None:
     manager = ModeManager(app)
     assert app.live_mode is True
     with patch.object(manager, "setup_agent") as mock_setup:
-        # Test explicit set to False
         await manager.toggle_mode(live=False)
         assert app.live_mode is False
         mock_setup.assert_called_with(use_live=False)
 
-        # Test explicit set to True
         await manager.toggle_mode(live=True)
         assert app.live_mode is True
         mock_setup.assert_called_with(use_live=True)
 
-        # Test toggle (no args)
         await manager.toggle_mode()
         assert app.live_mode is False
         mock_setup.assert_called_with(use_live=False)

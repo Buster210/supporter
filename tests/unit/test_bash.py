@@ -625,8 +625,11 @@ async def test_execute_subprocess_generic_exception() -> None:
         patch(
             "supporter.tools.bash._verify_binary",
             return_value=Path("/bin/ls"),
+            autospec=True,
         ),
-        patch("subprocess.run", side_effect=Exception("General failure")),
+        patch(
+            "subprocess.run", side_effect=Exception("General failure"), autospec=True
+        ),
     ):
         mock_notify = MagicMock()
         set_bash_notification_callback(mock_notify)
@@ -671,7 +674,6 @@ async def test_tier3_block_cases(
 
 @pytest.mark.asyncio
 async def test_tier3_block_temp_dir_exec(mock_config: MagicMock) -> None:
-    # Use real /tmp here to trigger S108 rule in source, but bypass ruff in test
     with patch("shutil.which", return_value="/tmp/bad_bin"):  # noqa: S108
         res = await execute_bash("bad_bin")
         assert "Tier 3 BLOCK" in res
@@ -832,9 +834,9 @@ def test_apply_path_security_with_eq_flag(mock_config: Any, project_root: Any) -
 
 
 def test_apply_path_security_with_at_flag(mock_config: Any, project_root: Any) -> None:
-    token = "file@data.txt"  # noqa: S105
+    at_delimited_path = "file@data.txt"
     _tier, _ = _apply_path_security(
-        "cmd file@x", ["cmd", token], project_root, project_root
+        "cmd file@x", ["cmd", at_delimited_path], project_root, project_root
     )
 
 

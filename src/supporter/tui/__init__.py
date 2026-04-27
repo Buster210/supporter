@@ -77,7 +77,7 @@ class SupporterApp(App[None]):
             await self._setup_agent(use_live=True)
             self.query_one("#user-input").focus()
         except Exception as e:
-            msg = f"Startup failure: {e}"
+            msg = f"Startup failure [{type(e).__name__}]: {e}"
             logger.error(msg)
             self._toast_manager.notify(self, msg, type="system")
 
@@ -213,6 +213,7 @@ class SupporterApp(App[None]):
                 text, target_container, start_time, self.agent
             )
         except Exception as e:
+            logger.error(f"UI Message Cycle Error [{type(e).__name__}]: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
         finally:
             self._is_processing = False

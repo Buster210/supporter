@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
+if TYPE_CHECKING:
+    from . import SupporterApp
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -10,6 +12,7 @@ from textual.reactive import reactive
 from textual.widgets import Label, Static
 
 from ..config import SCROLL_STEP, SPINNER_FRAMES
+from ..logger import logger
 from .bubble import MessageBubble
 from .utils import apply_crystal_gradient
 
@@ -58,8 +61,8 @@ class ChatContainer(Vertical):
             else:
                 if not wrapper.has_class("hidden"):
                     wrapper.add_class("hidden")
-        except Exception:  # nosec B110 # noqa: S110
-            pass
+        except (KeyError, Exception) as e:
+            logger.debug(f"Scroll button update failed: {e}")
 
 
 class ChatTurn(Vertical):
@@ -79,7 +82,7 @@ class ChatTurn(Vertical):
 
     def on_mount(self) -> None:
         self.watch(self.app, "active_turn", self._on_active_turn_change)
-        self._on_active_turn_change(self.app.active_turn)  # type: ignore
+        self._on_active_turn_change(cast("SupporterApp", self.app).active_turn)
 
     def _on_active_turn_change(self, active_turn: ChatTurn | None) -> None:
         is_active = active_turn is self
@@ -110,11 +113,11 @@ class ChatTurn(Vertical):
             self.collapsed = True
 
     def expand_turn(self) -> None:
-        self.app.active_turn = self  # type: ignore
+        cast("SupporterApp", self.app).active_turn = self
 
     async def mount_bubble(self, bubble: MessageBubble) -> None:
         bubble.collapsed = self.collapsed
-        bubble.is_active = self.app.active_turn is self  # type: ignore
+        bubble.is_active = cast("SupporterApp", self.app).active_turn is self
         self.agent_bubbles.append(bubble)
         await self.mount(bubble)
 
@@ -141,15 +144,15 @@ class ThinkingIndicator(Static):
         self._sync_app_prop(None)
 
     def _sync_app_prop(self, _: Any) -> None:
-        self.status_label = self.app.status_label  # type: ignore
-        self.active_queries = self.app.active_queries  # type: ignore
-        self.is_activating_mode = self.app.is_activating_mode  # type: ignore
+        app = cast("SupporterApp", self.app)
+        self.status_label = app.status_label
+        self.active_queries = app.active_queries
+        self.is_activating_mode = app.is_activating_mode
 
     def _tick(self) -> None:
         self._update_display(None)
 
     def _update_display(self, _: Any) -> None:
-
         if self.active_queries == 0 and not self.is_activating_mode:
             self.update("")
             self.display = False

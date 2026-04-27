@@ -87,9 +87,7 @@ async def read_file(
     limit: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
-    logger.info(
-        f"Tool Execute: read_file(path='{path}', offset={offset}, limit={limit})"
-    )
+    logger.info(f"Tool: read_file — path='{path}', offset={offset}, limit={limit}")
 
     def _sync_read() -> str:
         p = _validate_path(path)
@@ -100,13 +98,17 @@ async def read_file(
             if offset is not None:
                 f.seek(offset)
             if limit is not None:
-                return f.read(limit)
-            return f.read()
+                content = f.read(limit)
+                logger.debug(f"read_file full content: {content!r}")
+                return content
+            content = f.read()
+            logger.debug(f"read_file full content: {content!r}")
+            return content
 
     try:
         return await asyncio.to_thread(_sync_read)
     except Exception as e:
-        logger.error(f"Tool Failure: read_file failed: {e}")
+        logger.error(f"Tool Failure: read_file [{type(e).__name__}]: {e}")
         return f"Error reading file: {e!s}"
 
 
@@ -118,12 +120,13 @@ async def write_file(
     encoding: str = "utf-8",
 ) -> str:
     logger.info(
-        f"Tool Execute: write_file(path='{path}', content_len={len(content)}, "
-        f"offset={offset}, limit={limit})"
+        f"Tool: write_file — path='{path}', content_len={len(content)}, "
+        f"offset={offset}, limit={limit}"
     )
 
     def _sync_write() -> str:
         p = _validate_path(path)
+        logger.debug(f"write_file full input: {content!r}")
 
         if config.require_write_confirmation:
             import difflib
@@ -211,12 +214,12 @@ async def write_file(
     try:
         return await asyncio.to_thread(_sync_write)
     except Exception as e:
-        logger.error(f"Tool Failure: write_file failed: {e}")
+        logger.error(f"Tool Failure: write_file [{type(e).__name__}]: {e}")
         return f"Error writing file: {e!s}"
 
 
 async def list_dir(path: str) -> str:
-    logger.info(f"Tool Execute: list_dir(path='{path}')")
+    logger.info(f"Tool: list_dir — path='{path}'")
 
     def _sync_list() -> str:
         target_path = _validate_path(path)
@@ -250,10 +253,11 @@ async def list_dir(path: str) -> str:
             return "Directory is empty or all items are restricted."
 
         items.sort()
+        logger.debug(f"list_dir results: {items!r}")
         return "\n".join(items)
 
     try:
         return await asyncio.to_thread(_sync_list)
     except Exception as e:
-        logger.error(f"Tool Failure: list_dir failed: {e}")
+        logger.error(f"Tool Failure: list_dir [{type(e).__name__}]: {e}")
         return f"Error listing directory: {e!s}"

@@ -391,7 +391,9 @@ async def test_provider_wrap_tool_async_exception() -> None:
         pytest.raises(RuntimeError, match="async boom"),
     ):
         await wrapped_async()
-    mock_error.assert_called_once_with("Async tool 'async_tool' failed: async boom")
+    mock_error.assert_called_once_with(
+        "Async tool 'async_tool' failed [RuntimeError]: async boom"
+    )
 
 
 def test_provider_wrap_tool_sync_exception() -> None:
@@ -406,7 +408,9 @@ def test_provider_wrap_tool_sync_exception() -> None:
         pytest.raises(RuntimeError, match="sync boom"),
     ):
         wrapped_sync()
-    mock_error.assert_called_once_with("Sync tool 'sync_tool' failed: sync boom")
+    mock_error.assert_called_once_with(
+        "Sync tool 'sync_tool' failed [RuntimeError]: sync boom"
+    )
 
 
 def test_provider_get_name_returns_model_name() -> None:

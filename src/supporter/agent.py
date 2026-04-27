@@ -25,7 +25,7 @@ class ChatAgent:
         self.use_search = use_search
         self.use_code_execution = use_code_execution
         self.system_instruction = system_instruction
-        logger.debug(f"ChatAgent initialized with provider: {provider.get_name()}")
+        logger.info(f"ChatAgent initialized with provider: {provider.get_name()}")
 
     def _prepare_execution_context(self) -> LLMOptions:
         return {
@@ -39,16 +39,26 @@ class ChatAgent:
         }
 
     async def execute(self, prompt: str) -> LLMResult:
+        logger.info(f"Agent: executing prompt — length={len(prompt)}")
+        logger.debug(f"Agent: full prompt: {prompt!r}")
         user_message = Content(role="user", parts=[Part(text=prompt)])
         result = await self.provider.generate(prompt, self._prepare_execution_context())
 
         self.current_interaction_id = result.interaction_id
         self._sync_history(user_message, result)
 
+        duration_str = (
+            f"{result.duration:.3f}s" if result.duration is not None else "unknown"
+        )
+        logger.info(
+            f"Agent: execution complete — duration={duration_str}, "
+            f"history_size={len(self.history)}"
+        )
         return result
 
     def _sync_history(self, user_message: Content, result: LLMResult) -> None:
         if result.automatic_function_calling_history:
+            logger.info("Agent: syncing history from automatic function calling")
             self.history = result.automatic_function_calling_history
             return
 
@@ -60,8 +70,11 @@ class ChatAgent:
         self.history.append(
             Content(role="model", parts=result.candidates[0].content.parts)
         )
+        logger.info(f"Agent: history synced — new size={len(self.history)}")
 
     async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
+        logger.info(f"Agent: executing streaming prompt — length={len(prompt)}")
+        logger.debug(f"Agent: full streaming prompt: {prompt!r}")
         user_message = Content(role="user", parts=[Part(text=prompt)])
         accumulated_text = ""
 
@@ -73,6 +86,7 @@ class ChatAgent:
 
         self.history.append(user_message)
         self.history.append(Content(role="model", parts=[Part(text=accumulated_text)]))
+        logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
     def clear_history(self) -> None:
         logger.info("Clearing agent session history")

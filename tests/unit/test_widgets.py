@@ -79,7 +79,7 @@ class TestMessageBubble:
 
     def test_format_tool_calls_long_args_truncated(self) -> None:
         bubble = MessageBubble(role="agent", content="")
-        calls = [{"name": "write_file", "args": {"content": "x" * 50}}]
+        calls = [{"name": "write_file", "args": {"content": "x" * 100}}]
         result = bubble._format_tool_calls(calls)
         assert "..." in result
 

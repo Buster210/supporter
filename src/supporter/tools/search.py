@@ -3,7 +3,7 @@ from ..logger import logger
 
 
 async def google_search(query: str) -> str:
-    logger.info(f"Tool Execute: google_search(query='{query}')")
+    logger.info(f"Tool: google_search — query='{query}'")
 
     from ..index import get_provider
 
@@ -47,9 +47,13 @@ async def google_search(query: str) -> str:
             return result.text
 
         full_response = f"{result.text}\n\n\nSOURCES FOUND:\n" + "\n".join(sources)
-        logger.debug(f"Tool Success: google_search returned {len(full_response)} chars")
+        logger.info(
+            f"Tool: google_search succeeded — text_len={len(result.text)}, "
+            f"sources={len(sources)}"
+        )
+        logger.debug(f"Tool: google_search full sources: {sources!r}")
         return full_response
 
     except Exception as e:
-        logger.error(f"Tool Failure: google_search failed: {e}")
+        logger.error(f"Tool Failure: google_search [{type(e).__name__}]: {e}")
         return f"Error performing search: {e!s}"

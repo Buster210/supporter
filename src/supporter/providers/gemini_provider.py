@@ -33,7 +33,9 @@ class GeminiProvider:
 
         self._tool_cache: list[Any] | None = None
         self._last_tool_key: Any = None
-        logger.debug(f"GeminiProvider initialized (model: {target_model})")
+        logger.info(
+            f"GeminiProvider initialized: model={target_model}, http_retry_attempts=2"
+        )
 
     def _prepare_contents(
         self,
@@ -52,20 +54,30 @@ class GeminiProvider:
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Executing tool: {name}")
+            logger.info(
+                f"Tool '{name}' invoked (async): args={args!r}, kwargs={kwargs!r}"
+            )
             try:
-                return await func(*args, **kwargs)
+                result = await func(*args, **kwargs)
+                logger.info(f"Tool '{name}' completed successfully")
+                logger.debug(f"Tool '{name}' full result: {result!r}")
+                return result
             except Exception as e:
-                logger.error(f"Async tool '{name}' failed: {e}")
+                logger.error(f"Async tool '{name}' failed [{type(e).__name__}]: {e}")
                 raise
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Executing tool: {name}")
+            logger.info(
+                f"Tool '{name}' invoked (sync): args={args!r}, kwargs={kwargs!r}"
+            )
             try:
-                return func(*args, **kwargs)
+                result = func(*args, **kwargs)
+                logger.info(f"Tool '{name}' completed successfully")
+                logger.debug(f"Tool '{name}' full result: {result!r}")
+                return result
             except Exception as e:
-                logger.error(f"Sync tool '{name}' failed: {e}")
+                logger.error(f"Sync tool '{name}' failed [{type(e).__name__}]: {e}")
                 raise
 
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
@@ -154,6 +166,14 @@ class GeminiProvider:
         )
 
         start_time = time.perf_counter()
+        history = options.get("history") or []
+        logger.info(
+            f"generate(): model={self.model_name}, history_turns={len(history)}, "
+            f"tools={len(transformed_tools) if transformed_tools else 0}"
+        )
+        sys_inst = options.get("system_instruction") or DEFAULT_SYSTEM_INSTRUCTION
+        logger.debug(f"generate() system_instruction: {sys_inst}")
+        logger.debug(f"generate() context options: {options!r}")
         result: Any = None
 
         if interaction_id:
@@ -165,9 +185,9 @@ class GeminiProvider:
                     generation_config=cast(Any, generation_config),
                 )
             except Exception as e:
-                logger.warning(
-                    f"Resumption of interaction {interaction_id} failed; "
-                    f"falling back to standard generation. Reason: {e}"
+                logger.info(
+                    f"Interaction resumption failed (id={interaction_id}, "
+                    f"{type(e).__name__}: {e}) — falling back to standard generation"
                 )
 
         if not result:
@@ -181,10 +201,10 @@ class GeminiProvider:
 
         end_time = time.perf_counter()
 
-        history = getattr(result, "automatic_function_calling_history", None)
-        if not history and interaction_id:
+        afc_history = getattr(result, "automatic_function_calling_history", None)
+        if not afc_history and interaction_id:
             response = getattr(result, "response", None)
-            history = getattr(
+            afc_history = getattr(
                 response, "automatic_function_calling_history", None
             ) or getattr(result, "history", None)
 
@@ -212,6 +232,18 @@ class GeminiProvider:
                     ]
                 )
 
+        duration = end_time - start_time
+        logger.info(
+            f"generate() done: model={self.model_name}, duration={duration:.3f}s, "
+            f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"completion_tokens={usage.get('completion_tokens', '?')}"
+        )
+        if result.candidates:
+            cand = result.candidates[0]
+            logger.debug(f"generate() candidate[0] parts: {cand.content.parts!r}")
+            meta = getattr(cand, "grounding_metadata", None)
+            if meta:
+                logger.debug(f"generate() grounding_metadata: {meta!r}")
         return LLMResult(
             text=result.text or "",
             thoughts=thoughts,
@@ -221,7 +253,7 @@ class GeminiProvider:
             usage=usage,
             raw=result,
             candidates=getattr(result, "candidates", []),
-            automatic_function_calling_history=history,
+            automatic_function_calling_history=afc_history,
         )
 
     async def generate_stream(
@@ -244,6 +276,12 @@ class GeminiProvider:
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
+        history = options.get("history") or []
+        logger.info(
+            f"generate_stream(): model={self.model_name}, "
+            f"history_turns={len(history)}, "
+            f"tools={len(transformed_tools) if transformed_tools else 0}"
+        )
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
             contents=cast(Any, self._prepare_contents(prompt, options.get("history"))),

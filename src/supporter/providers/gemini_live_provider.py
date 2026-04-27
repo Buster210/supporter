@@ -99,10 +99,20 @@ class GeminiLiveProvider:
 
             for attempt in range(len(self.api_keys)):
                 try:
+                    logger.info(
+                        f"Live session connect attempt "
+                        f"{attempt + 1}/{len(self.api_keys)}: "
+                        f"model={self.model_name}, "
+                        f"key_index={self._current_key_index}"
+                    )
                     self._session_manager = self.client.aio.live.connect(
                         model=self.model_name, config=session_config
                     )
                     self._session = await self._session_manager.__aenter__()
+                    logger.info(
+                        f"Live session established: model={self.model_name}, "
+                        f"key_index={self._current_key_index}"
+                    )
                     return self._session
                 except Exception as error:
                     error_detail = str(error).lower()
@@ -110,6 +120,10 @@ class GeminiLiveProvider:
                         any(code in error_detail for code in config.retriable_codes)
                         and attempt < len(self.api_keys) - 1
                     ):
+                        logger.info(
+                            f"Live connect retriable error (attempt {attempt + 1}): "
+                            f"{type(error).__name__}: {error} — rotating key"
+                        )
                         self._rotate_key()
                         continue
                     raise error
@@ -123,6 +137,7 @@ class GeminiLiveProvider:
         function_responses = []
         for call in tool_call.function_calls:
             name, args, call_id = call.name, call.args or {}, call.id
+            logger.info(f"Live tool call: '{name}' id={call_id} args={args!r}")
             if name not in self.registry:
                 function_responses.append(
                     types.FunctionResponse(
@@ -142,10 +157,13 @@ class GeminiLiveProvider:
                 )
                 if not isinstance(result, dict):
                     result = {"result": result}
+                logger.info(f"Live tool '{name}' succeeded")
+                logger.debug(f"Live tool '{name}' result payload: {result!r}")
                 function_responses.append(
                     types.FunctionResponse(name=name, id=call_id, response=result)
                 )
             except Exception as e:
+                logger.error(f"Live tool '{name}' failed [{type(e).__name__}]: {e}")
                 function_responses.append(
                     types.FunctionResponse(
                         name=name, id=call_id, response={"error": str(e)}
@@ -189,6 +207,7 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
+                    logger.debug(f"Live stream receive: {response!r}")
                     if response.tool_call:
                         await self._handle_tool_call(session, response.tool_call)
                         continue
@@ -233,7 +252,7 @@ class GeminiLiveProvider:
                         self._last_turn_complete = bool(content.turn_complete)
                         break
             except Exception as e:
-                logger.error(f"Error in generate: {e}")
+                logger.error(f"generate() error [{type(e).__name__}]: {e}")
 
             return LLMResult(
                 text="".join(full_response),
@@ -252,6 +271,7 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
+                    logger.debug(f"Live stream receive: {response!r}")
                     if response.tool_call:
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(
@@ -322,7 +342,7 @@ class GeminiLiveProvider:
                         yield LLMChunk(text="", is_last=True, model=self.model_name)
                         break
             except Exception as e:
-                logger.error(f"Stream error: {e}")
+                logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
                 yield LLMChunk(text="", is_last=True, model=self.model_name)
 
     async def close(self) -> None:

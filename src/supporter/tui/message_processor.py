@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
+from ..logger import logger
+
 if TYPE_CHECKING:
     from ..agent import ChatAgent
 
@@ -30,11 +32,13 @@ class ChatMessageProcessor:
         state = StreamingState()
 
         try:
+            logger.info(f"UI: starting stream process — text_len={len(text)}")
             async for chunk in agent.execute_stream(text):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
             if state.bubble:
                 duration = time.perf_counter() - start_time
+                logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
 
         return state.bubble
@@ -59,6 +63,7 @@ class ChatMessageProcessor:
         if not chunk.text.strip() and not chunk.is_thought:
             return
 
+        logger.info("UI: creating first content bubble")
         await self._create_and_append_first_chunk(chunk, container, state, bubble_class)
 
     def _append_to_existing_bubble(self, chunk: Any, state: StreamingState) -> None:
@@ -79,6 +84,7 @@ class ChatMessageProcessor:
     ) -> None:
         self._handle_tool_call_status(chunk.tool_name)
         if state.is_first_chunk:
+            logger.info(f"UI: initializing tool bubble — tool={chunk.tool_name}")
             state.is_first_chunk = False
             state.bubble = await self._initialize_bubble(container, bubble_class)
 
