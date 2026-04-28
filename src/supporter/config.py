@@ -12,6 +12,7 @@ load_dotenv()
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
 HTTP_SERVICE_UNAVAILABLE = 503
+HTTP_RETRY_ATTEMPTS = 2
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -145,6 +146,7 @@ def load_config() -> AppConfig:
         drain_timeout=DRAIN_TIMEOUT,
         context_trigger_tokens=CONTEXT_TRIGGER_TOKENS,
         context_target_tokens=CONTEXT_TARGET_TOKENS,
+        http_retry_attempts=int(os.getenv("HTTP_RETRY_ATTEMPTS", HTTP_RETRY_ATTEMPTS)),
     )
 
 

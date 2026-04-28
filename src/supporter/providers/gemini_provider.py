@@ -1,13 +1,16 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import re
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from google import genai
-from google.genai import types
-from google.genai.types import Content, GenerateContentConfig, Part
+if TYPE_CHECKING:
+    from google import genai
+    from google.genai.types import Content
+
 
 from ..config import DEFAULT_SYSTEM_INSTRUCTION, config
 from ..logger import logger
@@ -19,31 +22,54 @@ from ..types import (
 )
 
 
+def __getattr__(name: str) -> Any:
+    if name == "genai":
+        from google import genai
+
+        return genai
+    if name == "types":
+        from google.genai import types
+
+        return types
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 class GeminiProvider:
     def __init__(
         self,
         api_key: str,
         model_name: str | None = None,
     ):
-        target_model = model_name or config.gemini_model
-        retry_options = types.HttpRetryOptions(attempts=2)
-
-        self.client = genai.Client(
-            api_key=api_key, http_options=types.HttpOptions(retry_options=retry_options)
-        )
-        self.model_name = target_model
-
+        self.api_key = api_key
+        self.model_name = model_name or config.gemini_model
+        self._client: genai.Client | None = None
         self._tool_cache: list[Any] | None = None
         self._last_tool_key: Any = None
         logger.info(
-            f"GeminiProvider initialized: model={target_model}, http_retry_attempts=2"
+            f"GeminiProvider initialized: model={self.model_name}, "
+            f"http_retry_attempts={config.http_retry_attempts}"
         )
+
+    @property
+    def client(self) -> genai.Client:
+        if self._client is None:
+            from google import genai
+            from google.genai import types
+
+            retry_options = types.HttpRetryOptions(attempts=config.http_retry_attempts)
+            self._client = genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(retry_options=retry_options),
+            )
+        return self._client
 
     def _prepare_contents(
         self,
         prompt: str | list[Content],
         history: list[Content] | None = None,
     ) -> list[Content]:
+        from google.genai.types import Content, Part
+
         history = history or []
         fresh_content = (
             [Content(role="user", parts=[Part(text=prompt)])]
@@ -85,7 +111,6 @@ class GeminiProvider:
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
 
     def _needs_function_search(self) -> bool:
-        """True for Gemini 3.x models which lack a built-in grounding tool."""
         return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
 
     def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
@@ -111,6 +136,8 @@ class GeminiProvider:
 
         if self._last_tool_key == current_identity_key:
             return self._tool_cache
+
+        from google.genai import types
 
         final_tools: list[Any] = list(tools) if tools else []
         declared_names = self._extract_declared_tool_names(final_tools)
@@ -154,6 +181,9 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: LLMOptions | None = None,
     ) -> LLMResult:
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig
+
         options = options or {}
         interaction_id = options.get("interaction_id")
         transformed_tools = self._transform_tools(options)
@@ -273,6 +303,9 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: LLMOptions | None = None,
     ) -> AsyncIterator[LLMChunk]:
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig
+
         options = options or {}
         transformed_tools = self._transform_tools(options)
         generation_config = GenerateContentConfig(

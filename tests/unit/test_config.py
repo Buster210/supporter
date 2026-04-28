@@ -128,6 +128,7 @@ class TestAppConfig:
             drain_timeout=2.0,
             context_trigger_tokens=100000,
             context_target_tokens=4000,
+            http_retry_attempts=2,
         )
         assert config.log_level == "DEBUG"
         assert config.provider == "gemini"

@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import threading
 import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from google.genai.types import Content
+if TYPE_CHECKING:
+    from google.genai.types import Content
 
 from .config import (
     HTTP_RATE_LIMIT,
@@ -87,7 +90,7 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
 
 
 class DynamicPool(LLMProvider):
-    _instances: ClassVar[weakref.WeakSet["DynamicPool"]] = weakref.WeakSet()
+    _instances: ClassVar[weakref.WeakSet[DynamicPool]] = weakref.WeakSet()
 
     @classmethod
     async def shutdown_all(cls) -> None:
@@ -152,6 +155,14 @@ class DynamicPool(LLMProvider):
             coro.close()
             self._fill_slot()
 
+    async def _backoff(self, attempt: int, base: float = 0.5) -> None:
+        delay = min(10.0, base * (2**attempt))
+        logger.info(
+            f"Pool '{self.model_name}': backing off for {delay:.2f}s "
+            f"(attempt {attempt + 1})"
+        )
+        await asyncio.sleep(delay)
+
     async def shutdown(self) -> None:
         if self.background_tasks:
             logger.info(
@@ -196,7 +207,7 @@ class DynamicPool(LLMProvider):
                             f"{attempt + 1}: {e}"
                         )
                     self._replace_instance(provider)
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await self._backoff(attempt)
                     continue
                 raise e
 
@@ -243,7 +254,7 @@ class DynamicPool(LLMProvider):
                             f"[{self.model_name}] Stream failed before first chunk — "
                             f"retrying (attempt {attempt + 1}/{len(self.keys)})"
                         )
-                        await asyncio.sleep(0.2 * (attempt + 1))
+                        await self._backoff(attempt)
                         continue
                 raise e
 

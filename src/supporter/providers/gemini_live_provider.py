@@ -51,7 +51,6 @@ class GeminiLiveProvider:
         self.client = genai.Client(api_key=self.api_keys[self._current_key_index])
 
     def _needs_function_search(self) -> bool:
-        """True for Gemini 3.x models which lack a built-in grounding tool."""
         return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
 
     def _resolve_tools(self) -> list[Any]:

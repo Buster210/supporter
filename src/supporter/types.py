@@ -46,6 +46,7 @@ class AppConfig:
     drain_timeout: float
     context_trigger_tokens: int
     context_target_tokens: int
+    http_retry_attempts: int
 
 
 @dataclass

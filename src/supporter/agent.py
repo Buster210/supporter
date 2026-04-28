@@ -1,7 +1,10 @@
-from collections.abc import AsyncIterator, Callable
-from typing import Any
+from __future__ import annotations
 
-from google.genai.types import Content, Part, Tool
+from collections.abc import AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from google.genai.types import Content, Tool
 
 from .logger import logger
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
@@ -41,6 +44,8 @@ class ChatAgent:
     async def execute(self, prompt: str) -> LLMResult:
         logger.info(f"Agent: executing prompt — length={len(prompt)}")
         logger.debug(f"Agent: full prompt: {prompt!r}")
+        from google.genai.types import Content, Part
+
         user_message = Content(role="user", parts=[Part(text=prompt)])
         result = await self.provider.generate(prompt, self._prepare_execution_context())
 
@@ -67,6 +72,8 @@ class ChatAgent:
         if not result.candidates or not result.candidates[0].content:
             return
 
+        from google.genai.types import Content
+
         self.history.append(
             Content(role="model", parts=result.candidates[0].content.parts)
         )
@@ -75,6 +82,8 @@ class ChatAgent:
     async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
         logger.info(f"Agent: executing streaming prompt — length={len(prompt)}")
         logger.debug(f"Agent: full streaming prompt: {prompt!r}")
+        from google.genai.types import Content, Part
+
         user_message = Content(role="user", parts=[Part(text=prompt)])
         accumulated_text = ""
 
@@ -85,6 +94,8 @@ class ChatAgent:
             yield chunk
 
         self.history.append(user_message)
+        from google.genai.types import Content, Part
+
         self.history.append(Content(role="model", parts=[Part(text=accumulated_text)]))
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
