@@ -91,7 +91,6 @@ class DynamicPool(LLMProvider):
 
     @classmethod
     async def shutdown_all(cls) -> None:
-
         for pool in list(cls._instances):
             await pool.shutdown()
 

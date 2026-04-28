@@ -1,7 +1,7 @@
 (version 1)
 (deny default)
 
-;; Process execution - restricted to trusted locations
+;; PROCESS EXECUTION - Restricted to trusted binary locations only.
 (allow process-exec (subpath "/usr/bin"))
 (allow process-exec (subpath "/bin"))
 (allow process-exec (subpath "/usr/local/bin"))
@@ -12,55 +12,70 @@
 
 (allow process-fork)
 
-;; --------------------------------------------------------
-;; EXPLICIT SENSITIVE DENIES (High Priority)
-;; --------------------------------------------------------
-(deny file-read* file-write* (subpath "/etc"))
-(deny file-read* file-write* (subpath "/var/log"))
-(deny file-read* file-write* (subpath (string-append (get-env "HOME") "/.ssh")))
-(deny file-read* file-write* (literal (string-append (get-env "HOME") "/.bashrc")))
-(deny file-read* file-write* (literal (string-append (get-env "HOME") "/.zshrc")))
-(deny file-read* file-write* (literal (string-append (get-env "HOME") "/.profile")))
+;; FILE READ — broad allow, then deny secret directories
+(allow file-read*)
 
-;; --------------------------------------------------------
-;; READ PERMISSIONS
-;; --------------------------------------------------------
+;; Credential stores
+(deny file-read* (subpath "{{HOME}}/.ssh"))
+(deny file-read* (subpath "{{HOME}}/.aws"))
+(deny file-read* (subpath "{{HOME}}/.gnupg"))
+(deny file-read* (subpath "{{HOME}}/.docker"))
+(deny file-read* (subpath "{{HOME}}/.kube"))
+(deny file-read* (subpath "{{HOME}}/.config/gcloud"))
+(deny file-read* (subpath "{{HOME}}/.config/op"))
+(deny file-read* (subpath "{{HOME}}/.gnome"))
+(deny file-read* (subpath "{{HOME}}/Library/Keychains"))
+(deny file-read* (subpath "{{HOME}}/Library/Application Support/1Password"))
 
-;; Project root - full read access
-(allow file-read* (subpath "{{PROJECT_ROOT}}"))
+;; Standalone credential files
+(deny file-read* (literal "{{HOME}}/.netrc"))
+(deny file-read* (literal "{{HOME}}/.npmrc"))
+(deny file-read* (literal "{{HOME}}/.pypirc"))
+(deny file-read* (literal "{{HOME}}/.git-credentials"))
+(deny file-read* (literal "{{HOME}}/.gitconfig"))
+(deny file-read* (literal "{{HOME}}/.bashrc"))
+(deny file-read* (literal "{{HOME}}/.zshrc"))
+(deny file-read* (literal "{{HOME}}/.profile"))
+(deny file-read* (literal "{{HOME}}/.bash_profile"))
+(deny file-read* (literal "{{HOME}}/.zprofile"))
 
-;; Essential system libraries and binaries for execution
-(allow file-read* (subpath "/usr/lib"))
-(allow file-read* (subpath "/System/Library"))
-(allow file-read* (subpath "/usr/local/lib"))
-(allow file-read* (subpath "/opt/homebrew"))
-(allow file-read* (subpath "/usr/bin"))
-(allow file-read* (subpath "/bin"))
+;; FILE READ METADATA - mirrors file-read* denies
+(deny file-read-metadata (subpath "{{HOME}}/.ssh"))
+(deny file-read-metadata (subpath "{{HOME}}/.aws"))
+(deny file-read-metadata (subpath "{{HOME}}/.gnupg"))
+(deny file-read-metadata (subpath "{{HOME}}/.docker"))
+(deny file-read-metadata (subpath "{{HOME}}/.kube"))
+(deny file-read-metadata (subpath "{{HOME}}/.config/gcloud"))
+(deny file-read-metadata (subpath "{{HOME}}/.config/op"))
+(deny file-read-metadata (subpath "{{HOME}}/Library/Keychains"))
+(deny file-read-metadata (subpath "{{HOME}}/Library/Application Support/1Password"))
+(deny file-read-metadata (literal "{{HOME}}/.netrc"))
+(deny file-read-metadata (literal "{{HOME}}/.npmrc"))
+(deny file-read-metadata (literal "{{HOME}}/.pypirc"))
+(deny file-read-metadata (literal "{{HOME}}/.git-credentials"))
+(deny file-read-metadata (literal "{{HOME}}/.gitconfig"))
+(deny file-read-metadata (literal "{{HOME}}/.bashrc"))
+(deny file-read-metadata (literal "{{HOME}}/.zshrc"))
+(deny file-read-metadata (literal "{{HOME}}/.profile"))
+(deny file-read-metadata (literal "{{HOME}}/.bash_profile"))
+(deny file-read-metadata (literal "{{HOME}}/.zprofile"))
 
-;; dyld & process bootstrap minimums
-(allow file-read* (subpath "/private/var/db/dyld"))
-(allow file-read* (literal "/dev/random"))
-(allow file-read* (literal "/dev/urandom"))
-
-;; --------------------------------------------------------
-;; STRICT WRITE PERMISSIONS
-;; --------------------------------------------------------
-
-;; Project root - full write access
+;; FILE WRITE - strictly locked
 (allow file-write* (subpath "{{PROJECT_ROOT}}"))
-
-;; Device files (stdout, stderr, /dev/null, /dev/fd)
-(allow file-write* (subpath "/dev"))
-
-;; Temp directories
-(allow file-write* (subpath "/private/var/folders"))
 (allow file-write* (subpath "/tmp"))
 (allow file-write* (subpath "/private/tmp"))
+(allow file-write* (subpath "/private/var/folders"))
+(allow file-write* (subpath "/dev"))
 
-;; --------------------------------------------------------
-;; SYSTEM OPERATIONS
-;; --------------------------------------------------------
+;; SYSTEM OPERATIONS - Deny Keychain Mach services — prevents securityd credential access
 (allow mach-lookup)
+(deny mach-lookup (global-name "com.apple.SecurityServer"))
+(deny mach-lookup (global-name "com.apple.securityd"))
+(deny mach-lookup (global-name "com.apple.securityd.xpc"))
+
 (allow sysctl-read)
 (allow file-read-metadata)
-(allow network*)
+
+;; Outbound network only
+(deny network*)
+(allow network-outbound)

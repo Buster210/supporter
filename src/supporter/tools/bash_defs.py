@@ -216,6 +216,14 @@ RISKY_PYTHON_MODULES = {
     "subprocess",
     "socket",
     "importlib",
+    "urllib",
+    "http",
+    "httplib",
+    "httpx",
+    "requests",
+    "aiohttp",
+    "websocket",
+    "websockets",
 }
 
 TIER3_PYTHON_MODULES = {

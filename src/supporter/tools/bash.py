@@ -44,7 +44,6 @@ _bash_execution_history: deque[float] = deque(maxlen=50)
 
 
 def _detect_sandbox() -> tuple[str | None, str | None]:
-
     if sys.platform == "darwin":
         bin_path = shutil.which("sandbox-exec")
         if bin_path:
@@ -60,7 +59,6 @@ _SB_TYPE, _SB_BIN = _detect_sandbox()
 
 
 def _wrap_in_sandbox(tokens: list[str], cwd: Path, project_root: Path) -> list[str]:
-
     if not _SB_BIN:
         raise RuntimeError(
             "Security Block: Sandbox execution is required but no sandbox tool "
@@ -78,6 +76,8 @@ def _wrap_in_sandbox(tokens: list[str], cwd: Path, project_root: Path) -> list[s
             profile_content = f.read()
 
         profile_content = profile_content.replace("{{PROJECT_ROOT}}", str(project_root))
+        home_dir = os.environ.get("HOME", str(Path.home()))
+        profile_content = profile_content.replace("{{HOME}}", home_dir)
 
         return [_SB_BIN, "-p", profile_content, *tokens]
     if _SB_TYPE == "linux":
@@ -107,12 +107,10 @@ def set_bash_notification_callback(
 
 
 def check_bash_availability() -> bool:
-
     return _SB_BIN is not None
 
 
 def notify_bash_unavailable() -> None:
-
     if _BASH_NOTIFICATION_CALLBACK:
         _BASH_NOTIFICATION_CALLBACK(
             "BASH TOOL DISABLED: Sandbox execution is required but no sandbox tool "
@@ -155,7 +153,6 @@ def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
 
 
 def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
-
     cmd_str = " ".join(tokens)
 
     if any(
@@ -276,7 +273,6 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
 def _inspect_interpreter_payload(
     binary_name: str, tokens: list[str], depth: int = 0
 ) -> int:
-
     if depth > 1:
         return 3
 
