@@ -5,7 +5,7 @@ import pytest
 from textual.geometry import Size
 
 from supporter.tui.bubble import SectionHeader
-from supporter.tui.modals import BashConfirmationModal
+from supporter.tui.modals import ConfirmationModal
 
 
 @pytest.fixture
@@ -17,32 +17,32 @@ def mock_app() -> Any:
 
 class TestBashConfirmationModal:
     def test_init_stores_command_and_cwd(self) -> None:
-        modal = BashConfirmationModal(command=["ls", "-la"], cwd="/home/user")
-        assert modal.command == ["ls", "-la"]
-        assert modal.cwd == "/home/user"
+        modal = ConfirmationModal(
+            title="Test", content="ls -la", meta="Working Dir: /home/user"
+        )
+        assert modal.modal_title == "Test"
+        assert modal.content == "ls -la"
+        assert modal.meta == "Working Dir: /home/user"
 
     def test_command_joined_for_display(self) -> None:
-        modal = BashConfirmationModal(
-            command=["git", "commit", "-m", "test"], cwd="/repo"
-        )
-        cmd_str = " ".join(modal.command)
-        assert cmd_str == "git commit -m test"
+        modal = ConfirmationModal(title="Git", content="git commit -m test")
+        assert modal.content == "git commit -m test"
 
     def test_modal_compose_displays_command(self, mock_app: Any) -> None:
-        modal = BashConfirmationModal(command=["echo", "hello"], cwd="/fake_tmp")
+        modal = ConfirmationModal(title="Bash", content="echo hello", meta="/fake_tmp")
         with patch.object(
-            BashConfirmationModal,
+            ConfirmationModal,
             "app",
             new_callable=PropertyMock,
             return_value=mock_app,
         ):
-            assert modal.command == ["echo", "hello"]
-            assert modal.cwd == "/fake_tmp"
+            assert modal.content == "echo hello"
+            assert modal.meta == "/fake_tmp"
 
     def test_modal_compose_has_allow_button(self, mock_app: Any) -> None:
-        _modal = BashConfirmationModal(command=["ls"], cwd="/")
+        _modal = ConfirmationModal(title="Bash", content="ls", meta="/")
         with patch.object(
-            BashConfirmationModal,
+            ConfirmationModal,
             "app",
             new_callable=PropertyMock,
             return_value=mock_app,
@@ -50,7 +50,7 @@ class TestBashConfirmationModal:
             pass
 
     def test_modal_allow_button_resolves_correctly(self) -> None:
-        modal = BashConfirmationModal(command=["ls"], cwd="/")
+        modal = ConfirmationModal(title="Bash", content="ls", meta="/")
         allow_button = MagicMock()
         allow_button.id = "allow"
         event = MagicMock()
@@ -66,7 +66,7 @@ class TestBashConfirmationModal:
             assert result is True
 
     def test_modal_deny_button_resolves_correctly(self) -> None:
-        modal = BashConfirmationModal(command=["rm", "-rf"], cwd="/")
+        modal = ConfirmationModal(title="Bash", content="rm -rf", meta="/")
         deny_button = MagicMock()
         deny_button.id = "cancel"
         event = MagicMock()
@@ -82,8 +82,8 @@ class TestBashConfirmationModal:
             assert result is False
 
     def test_modal_displays_working_directory(self, mock_app: Any) -> None:
-        modal = BashConfirmationModal(command=["pwd"], cwd="/home/testuser")
-        assert modal.cwd == "/home/testuser"
+        modal = ConfirmationModal(title="Bash", content="pwd", meta="/home/testuser")
+        assert modal.meta == "/home/testuser"
 
 
 class TestSectionHeader:

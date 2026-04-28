@@ -249,8 +249,11 @@ class SupporterApp(App[None]):
             result[0] = value
             event.set()
 
+        title = f"Write {path.name}?"
         self.call_from_thread(
-            self.push_screen, ConfirmationModal(str(path), content), callback
+            self.push_screen,
+            ConfirmationModal(title=title, content=content, language="diff"),
+            callback,
         )
         event.wait()
         return result[0]
@@ -258,7 +261,7 @@ class SupporterApp(App[None]):
     def _confirm_bash(self, tokens: list[str], cwd: str) -> bool:
         import threading
 
-        from .modals import BashConfirmationModal
+        from .modals import ConfirmationModal
 
         event = threading.Event()
         result = [False]
@@ -267,8 +270,16 @@ class SupporterApp(App[None]):
             result[0] = value
             event.set()
 
+        cmd_str = " ".join(tokens)
         self.call_from_thread(
-            self.push_screen, BashConfirmationModal(tokens, cwd), callback
+            self.push_screen,
+            ConfirmationModal(
+                title="Authorize Bash Execution?",
+                content=cmd_str,
+                language="bash",
+                meta=f"Working Dir: {cwd}",
+            ),
+            callback,
         )
         event.wait()
         return result[0]

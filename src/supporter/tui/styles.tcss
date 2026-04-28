@@ -212,6 +212,13 @@ ConfirmationModal {
     margin-bottom: 1;
 }
 
+.modal-meta {
+    color: $accent;
+    text-style: dim italic;
+    margin-bottom: 1;
+    text-align: center;
+}
+
 #modal-content {
     height: auto;
     max-height: 30;

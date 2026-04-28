@@ -1,7 +1,7 @@
 from typing import Any
 from unittest.mock import MagicMock
 
-from supporter.tui.modals import BashConfirmationModal, ConfirmationModal
+from supporter.tui.modals import ConfirmationModal
 from supporter.tui.utils import ToastManager
 from tests.tui_mocks import MockApp, MockWidget
 
@@ -100,22 +100,20 @@ class TestMessageQueuing:
 
 class TestConfirmationWrite:
     def test_confirmation_modal_path(self) -> None:
-        modal = ConfirmationModal("/test.txt", "content")
-        assert "/test.txt" in modal.path
+        modal = ConfirmationModal("Write", "content")
+        assert modal.modal_title == "Write"
 
     def test_confirmation_modal_content(self) -> None:
-        modal = ConfirmationModal("/test.txt", "some content")
+        modal = ConfirmationModal("Write", "some content")
         assert "some content" in modal.content
 
 
 class TestConfirmationBash:
     def test_bash_confirmation_modal_command(self) -> None:
-        modal = BashConfirmationModal(["ls", "-la"], "/home")
-        assert "ls" in modal.command
-
-    def test_bash_confirmation_modal_cwd(self) -> None:
-        modal = BashConfirmationModal(["ls"], "/home")
-        assert "/home" in modal.cwd
+        modal = ConfirmationModal("Bash", "ls -la", meta="/home")
+        assert "ls -la" in modal.content
+        assert modal.meta is not None
+        assert "/home" in modal.meta
 
 
 class TestFlushQueuedMessages:
