@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -87,6 +86,15 @@ async def read_file(
     limit: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
+    """Reads file content safely within project boundaries.
+    Args:
+        path: File path (abs/rel).
+        offset: Start byte offset.
+        limit: Max bytes to read.
+        encoding: Text encoding (default: 'utf-8').
+    Returns:
+        File content as string, or error message.
+    """
     logger.info(f"Tool: read_file — path='{path}', offset={offset}, limit={limit}")
 
     def _sync_read() -> str:
@@ -119,6 +127,16 @@ async def write_file(
     limit: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
+    """Writes/updates file content securely. Creates parents if missing.
+    Args:
+        path: Target file path.
+        content: Data to write.
+        offset: Byte offset for partial writes.
+        limit: Bytes to replace (retains tail).
+        encoding: Text encoding (default: 'utf-8').
+    Returns:
+        Success/error message. Triggers UI confirmation if required.
+    """
     logger.info(
         f"Tool: write_file — path='{path}', content_len={len(content)}, "
         f"offset={offset}, limit={limit}"
@@ -216,48 +234,3 @@ async def write_file(
     except Exception as e:
         logger.error(f"Tool Failure: write_file [{type(e).__name__}]: {e}")
         return f"Error writing file: {e!s}"
-
-
-async def list_dir(path: str) -> str:
-    logger.info(f"Tool: list_dir — path='{path}'")
-
-    def _sync_list() -> str:
-        target_path = _validate_path(path)
-        if not target_path.is_dir():
-            return f"Error: Path is not a directory: {target_path}"
-
-        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
-        relative_parent = target_path.relative_to(project_root)
-        spec = _get_gitignore_spec(project_root)
-
-        items = []
-        try:
-            with os.scandir(target_path) as it:
-                for entry in it:
-                    relative_item_path = str(relative_parent / entry.name)
-
-                    if _is_blacklisted(relative_item_path):
-                        continue
-                    if spec and spec.match_file(relative_item_path):
-                        continue
-
-                    try:
-                        tag = "[DIR]" if entry.is_dir() else "[FILE]"
-                        items.append(f"{tag} {entry.name}")
-                    except OSError:
-                        continue
-        except OSError as e:
-            return f"Error accessing directory: {e!s}"
-
-        if not items:
-            return "Directory is empty or all items are restricted."
-
-        items.sort()
-        logger.debug(f"list_dir results: {items!r}")
-        return "\n".join(items)
-
-    try:
-        return await asyncio.to_thread(_sync_list)
-    except Exception as e:
-        logger.error(f"Tool Failure: list_dir [{type(e).__name__}]: {e}")
-        return f"Error listing directory: {e!s}"

@@ -19,7 +19,6 @@ class ModeManager:
         from ..tools import (
             check_bash_availability,
             execute_bash,
-            list_dir,
             notify_bash_unavailable,
             read_file,
             write_file,
@@ -28,7 +27,6 @@ class ModeManager:
         tools_registry: dict[str, Callable[..., Any]] = {
             "read_file": read_file,
             "write_file": write_file,
-            "list_dir": list_dir,
         }
 
         if check_bash_availability():

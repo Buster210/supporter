@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -42,16 +43,24 @@ class GeminiLiveProvider:
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._last_turn_complete = True
 
-        if "3.1" in self.model_name and "google_search" not in self.registry:
+        if self._needs_function_search() and "google_search" not in self.registry:
             self.registry["google_search"] = google_search
 
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
         self.client = genai.Client(api_key=self.api_keys[self._current_key_index])
 
+    def _needs_function_search(self) -> bool:
+        """True for Gemini 3.x models which lack a built-in grounding tool."""
+        return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
+
     def _resolve_tools(self) -> list[Any]:
         final_tools = list(self.tools) + list(self.registry.values())
-        needs_search = "2.5" in self.model_name or "fallback" in self.model_name.lower()
+        needs_search = (
+            "2.5" in self.model_name
+            or "gemma" in self.model_name.lower()
+            or "fallback" in self.model_name.lower()
+        )
         has_search = any(hasattr(t, "google_search") for t in final_tools)
         if needs_search and not has_search:
             final_tools.append(types.Tool(google_search=types.GoogleSearch()))

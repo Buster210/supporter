@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
@@ -10,6 +11,7 @@ from google.genai.types import Content, GenerateContentConfig, Part
 
 from ..config import DEFAULT_SYSTEM_INSTRUCTION, config
 from ..logger import logger
+from ..tools.search import google_search
 from ..types import (
     LLMChunk,
     LLMOptions,
@@ -82,6 +84,10 @@ class GeminiProvider:
 
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
 
+    def _needs_function_search(self) -> bool:
+        """True for Gemini 3.x models which lack a built-in grounding tool."""
+        return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
+
     def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
         if not options:
             return None
@@ -114,7 +120,11 @@ class GeminiProvider:
                 final_tools.append(self._wrap_tool(name, func))
 
         if use_search:
-            final_tools.append(types.Tool(google_search=types.GoogleSearch()))
+            if self._needs_function_search():
+                if "google_search" not in registry:
+                    final_tools.append(self._wrap_tool("google_search", google_search))
+            else:
+                final_tools.append(types.Tool(google_search=types.GoogleSearch()))
         if use_code_execution:
             final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
 
@@ -161,7 +171,9 @@ class GeminiProvider:
             if transformed_tools
             else None,
             tools=transformed_tools,
-            tool_config=types.ToolConfig(include_server_side_tool_invocations=True) if transformed_tools else None,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
+            if transformed_tools
+            else None,
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
@@ -272,7 +284,9 @@ class GeminiProvider:
             )
             if transformed_tools
             else None,
-            tool_config=types.ToolConfig(include_server_side_tool_invocations=True) if transformed_tools else None,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
+            if transformed_tools
+            else None,
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 

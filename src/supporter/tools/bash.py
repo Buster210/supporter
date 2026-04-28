@@ -404,6 +404,14 @@ def _inspect_interpreter_payload(
 
 
 async def execute_bash(command: str, working_directory: str | None = None) -> str:
+    """Executes a shell command in a sandboxed, restricted environment.
+    Args:
+        command: Shell command to execute.
+        working_directory: Optional execution cwd (defaults to project root).
+    Returns:
+        Command stdout/stderr combined, or error message.
+        Triggers UI confirmation for risky commands.
+    """
     logger.info(f"Tool: execute_bash — command='{command}'")
 
     def _sync_execute() -> str:

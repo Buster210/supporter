@@ -138,7 +138,7 @@ async def test_setup_agent_dispatch() -> None:
         patch("supporter.tools.execute_bash"),
         patch("supporter.tools.read_file"),
         patch("supporter.tools.write_file"),
-        patch("supporter.tools.list_dir"),
+        patch("supporter.tools.google_search"),
     ):
         mock_provider = MagicMock()
         mock_get_provider.return_value = mock_provider

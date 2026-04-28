@@ -3,6 +3,12 @@ from ..logger import logger
 
 
 async def google_search(query: str) -> str:
+    """Performs a Google Search to retrieve accurate, up-to-date internet data.
+    Args:
+        query: The search query string.
+    Returns:
+        Detailed answer compiled from search results, including source URLs.
+    """
     logger.info(f"Tool: google_search — query='{query}'")
 
     from ..index import get_provider

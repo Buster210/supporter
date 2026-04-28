@@ -6,7 +6,6 @@ from .bash import (
     set_bash_notification_callback,
 )
 from .file_ops import (
-    list_dir,
     read_file,
     set_confirmation_callback,
     write_file,
@@ -17,7 +16,6 @@ __all__ = [
     "check_bash_availability",
     "execute_bash",
     "google_search",
-    "list_dir",
     "notify_bash_unavailable",
     "read_file",
     "set_bash_confirmation_callback",
