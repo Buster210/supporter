@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import time
 from typing import Any, cast
 
 from rich.markdown import Markdown as RichMarkdown
@@ -76,6 +77,7 @@ class MessageBubble(Vertical):
         self.thoughts = ""
         self.tool_calls: list[dict[str, Any]] = []
         self.elements: list[dict[str, Any]] = []
+        self._last_update_time = 0.0
 
         if self.content:
             self.elements.append(
@@ -336,7 +338,11 @@ class MessageBubble(Vertical):
             )
         else:
             self.elements[-1]["content"] += token
-        self._update_ui_content()
+
+        now = time.time()
+        if now - self._last_update_time >= 0.2:
+            self._update_ui_content()
+            self._last_update_time = now
 
     def add_tool_call(
         self, tool_name: str, tool_args: dict[str, Any] | None = None

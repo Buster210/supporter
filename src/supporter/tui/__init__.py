@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -12,23 +12,17 @@ from textual.widgets import Button, Input, Label
 
 from .. import ChatAgent, DynamicPool
 from ..logger import init_logger, logger
-from ..tools import (
-    set_bash_confirmation_callback,
-    set_bash_notification_callback,
-    set_confirmation_callback,
-)
 from ..types import ModeChanged
-from .bubble import MessageBubble
-from .chat import (
-    ChatContainer,
-    ChatTurn,
-    QueuedMessagesDisplay,
-    SupporterHeader,
-    ThinkingIndicator,
-)
-from .message_processor import ChatMessageProcessor
-from .mode_manager import ModeManager
-from .utils import ToastManager
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from textual.app import ComposeResult
+    from textual.binding import Binding
+    from textual.widgets import Button, Input
+
+    from .. import ChatAgent
+    from .chat import ChatTurn
 
 CSS = (Path(__file__).parent / "styles.tcss").read_text()
 
@@ -49,6 +43,10 @@ class SupporterApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
+        from .message_processor import ChatMessageProcessor
+        from .mode_manager import ModeManager
+        from .utils import ToastManager
+
         self.agent: ChatAgent | None = None
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
@@ -62,11 +60,19 @@ class SupporterApp(App[None]):
         status = "ENABLED" if event.enabled else "DISABLED"
 
         target = self.active_turn or self.query_one("#chat-view")
+        from .bubble import MessageBubble
+
         await target.mount(
             MessageBubble(role="agent", content=f"Single Agent {status}")
         )
 
     async def on_mount(self) -> None:
+        from ..tools import (
+            set_bash_confirmation_callback,
+            set_bash_notification_callback,
+            set_confirmation_callback,
+        )
+
         init_logger()
         set_confirmation_callback(self._confirm_write)
         set_bash_confirmation_callback(self._confirm_bash)
@@ -82,6 +88,12 @@ class SupporterApp(App[None]):
             self._toast_manager.notify(self, msg, type="system")
 
     async def on_unmount(self) -> None:
+        from ..tools import (
+            set_bash_confirmation_callback,
+            set_bash_notification_callback,
+            set_confirmation_callback,
+        )
+
         set_confirmation_callback(None)
         set_bash_confirmation_callback(None)
         set_bash_notification_callback(None)
@@ -99,6 +111,13 @@ class SupporterApp(App[None]):
         await self._mode_manager.setup_agent(use_live=use_live)
 
     def compose(self) -> ComposeResult:
+        from .chat import (
+            ChatContainer,
+            QueuedMessagesDisplay,
+            SupporterHeader,
+            ThinkingIndicator,
+        )
+
         with Vertical(id="main-container"):
             yield SupporterHeader(id="supporter-header")
             with ChatContainer(id="chat-view"):
@@ -127,6 +146,8 @@ class SupporterApp(App[None]):
             self._toast_manager.notify(self, "Session already clear", type="system")
             return
 
+        from .chat import QueuedMessagesDisplay
+
         if self.agent:
             self.agent.clear_history()
         chat_view.query("*").remove()
@@ -152,6 +173,8 @@ class SupporterApp(App[None]):
             return
 
         if self._is_processing:
+            from .chat import QueuedMessagesDisplay
+
             self._user_message_queue.append(user_text)
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
                 self._user_message_queue
@@ -160,6 +183,9 @@ class SupporterApp(App[None]):
                 self, f"Message queued ({len(self._user_message_queue)})", type="queue"
             )
             return
+
+        from .bubble import MessageBubble
+        from .chat import ChatTurn
 
         chat_view = self.query_one("#chat-view", Vertical)
         user_bubble = MessageBubble(role="user", content=user_text)
@@ -184,6 +210,9 @@ class SupporterApp(App[None]):
     async def _process_message_cycle(
         self, text: str, mount_user: bool = True, target: Vertical | None = None
     ) -> None:
+        from .bubble import MessageBubble
+        from .chat import ChatTurn
+
         self._is_processing = True
         chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
@@ -213,6 +242,8 @@ class SupporterApp(App[None]):
                 text, target_container, start_time, self.agent
             )
         except Exception as e:
+            from .bubble import MessageBubble
+
             logger.error(f"UI Message Cycle Error [{type(e).__name__}]: {e}")
             await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
         finally:
@@ -221,6 +252,8 @@ class SupporterApp(App[None]):
             await self._flush_queued_messages()
 
     async def _flush_queued_messages(self) -> None:
+        from .chat import QueuedMessagesDisplay
+
         if not self._user_message_queue:
             return
 

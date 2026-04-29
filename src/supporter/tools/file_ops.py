@@ -142,62 +142,63 @@ async def write_file(
         f"offset={offset}, limit={limit}"
     )
 
+    def _confirm_write(p: Path, content: str, encoding: str) -> str | None:
+        if not config.require_write_confirmation:
+            return None
+
+        import difflib
+
+        if p.exists():
+            try:
+                with p.open("r", encoding=encoding) as f:
+                    old_content = f.read()
+                diff = difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    content.splitlines(keepends=True),
+                    fromfile=f"a/{p.name}",
+                    tofile=f"b/{p.name}",
+                    n=3,
+                )
+                display_diff = "".join(diff) or "(No changes detected)"
+            except Exception as e:
+                display_diff = (
+                    f"Error generating diff: {e}\n\nProposed Content:\n{content}"
+                )
+        else:
+            lines = content.splitlines(keepends=True)
+            diff = difflib.unified_diff(
+                [], lines, fromfile="/dev/null", tofile=f"b/{p.name}", n=len(lines)
+            )
+            display_diff = "".join(diff)
+
+        if _CONFIRMATION_CALLBACK:
+            if not _CONFIRMATION_CALLBACK(p, display_diff):
+                return "Write operation cancelled by user security preference."
+        elif sys.stdin.isatty():
+            print("\n" + "=" * 60)
+            print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
+            print(f" TARGET FILE: {p}")
+            print("-" * 60)
+            print(" PROPOSED DIFF ".center(60, "-"))
+            print(display_diff)
+            print("-" * 60)
+            confirm = input(" Proceed with write? (y/n): ").lower().strip()
+            print("=" * 60 + "\n")
+            if confirm not in ("y", "yes"):
+                return "Write operation cancelled by user security preference."
+        else:
+            logger.warning(
+                f"Write confirmation required for {p} but no TTY or callback. Skipping."
+            )
+            return "Error: Interactive confirmation required but unavailable."
+        return None
+
     def _sync_write() -> str:
         p = _validate_path(path)
-        logger.debug(f"write_file full input: {content!r}")
+        logger.debug(f"write_file input: {content!r}")
 
-        if config.require_write_confirmation:
-            import difflib
-
-            if p.exists():
-                try:
-                    with p.open("r", encoding=encoding) as f:
-                        old_content = f.read()
-
-                    diff = difflib.unified_diff(
-                        old_content.splitlines(keepends=True),
-                        content.splitlines(keepends=True),
-                        fromfile=f"a/{p.name}",
-                        tofile=f"b/{p.name}",
-                        n=3,
-                    )
-                    display_diff = "".join(diff) or "(No changes detected)"
-                except Exception as e:
-                    display_diff = (
-                        f"Error generating diff: {e}\n\nProposed Content:\n{content}"
-                    )
-            else:
-                lines = content.splitlines(keepends=True)
-                diff = difflib.unified_diff(
-                    [],
-                    lines,
-                    fromfile="/dev/null",
-                    tofile=f"b/{p.name}",
-                    n=len(lines),
-                )
-                display_diff = "".join(diff)
-
-            if _CONFIRMATION_CALLBACK:
-                if not _CONFIRMATION_CALLBACK(p, display_diff):
-                    return "Write operation cancelled by user security preference."
-            elif sys.stdin.isatty():
-                print("\n" + "=" * 60)
-                print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
-                print(f" TARGET FILE: {p}")
-                print("-" * 60)
-                print(" PROPOSED DIFF ".center(60, "-"))
-                print(display_diff)
-                print("-" * 60)
-                confirm = input(" Proceed with write? (y/n): ").lower().strip()
-                print("=" * 60 + "\n")
-                if confirm not in ("y", "yes"):
-                    return "Write operation cancelled by user security preference."
-            else:
-                logger.warning(
-                    f"Write confirmation required for {p} but no interactive TTY "
-                    "or callback available. Skipping write for safety."
-                )
-                return "Error: Interactive confirmation required but unavailable."
+        if error_msg := _confirm_write(p, content, encoding):
+            return error_msg
 
         p.parent.mkdir(parents=True, exist_ok=True)
 
