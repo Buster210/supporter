@@ -18,6 +18,8 @@ class ModeManager:
         from ..config import config
         from ..tools import (
             check_bash_availability,
+            collect_delegation,
+            delegate_tasks,
             execute_bash,
             notify_bash_unavailable,
             read_file,
@@ -27,6 +29,8 @@ class ModeManager:
         tools_registry: dict[str, Callable[..., Any]] = {
             "read_file": read_file,
             "write_file": write_file,
+            "delegate_tasks": delegate_tasks,
+            "collect_delegation": collect_delegation,
         }
 
         if check_bash_availability():

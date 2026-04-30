@@ -129,6 +129,21 @@ class TestAppConfig:
             context_trigger_tokens=100000,
             context_target_tokens=4000,
             http_retry_attempts=2,
+            delegate_max_hard_cap=5,
+            delegate_default_parallel=3,
+            delegate_default_timeout=180,
+            delegate_max_timeout=600,
+            delegate_max_tasks=10,
+            delegate_max_output_chars=10000,
+            delegate_heartbeat_interval=30.0,
+            delegate_allowed_tools={
+                "read_file",
+                "write_file",
+                "execute_bash",
+                "google_search",
+            },
+            delegate_default_persona="Default persona",
+            delegate_agent_roster={},
         )
         assert config.log_level == "DEBUG"
         assert config.provider == "gemini"

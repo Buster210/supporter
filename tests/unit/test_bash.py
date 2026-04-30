@@ -98,6 +98,7 @@ async def test_execute_bash_full_path_prohibited() -> None:
 
 def test_execute_bash_success(project_root: Any) -> None:
     import asyncio
+
     with patch("supporter.tools.bash.config") as mock_config:
         mock_config.allowed_directories = [str(project_root)]
         with patch("supporter.tools.bash._verify_binary") as mock_verify:
@@ -599,6 +600,7 @@ def test_execute_subprocess_complex_failure(
     mock_open: MagicMock,
 ) -> None:
     import asyncio
+
     from supporter.tools import bash
 
     bash._SB_BIN = "/usr/bin/sandbox-exec"
@@ -622,6 +624,7 @@ def test_execute_subprocess_generic_exception(
     mock_run: MagicMock, mock_verify: MagicMock
 ) -> None:
     import asyncio
+
     with (
         patch("supporter.tools.bash._SB_BIN", "/bin/ls"),
         patch("supporter.tools.bash._SB_TYPE", "macos"),

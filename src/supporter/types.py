@@ -47,6 +47,16 @@ class AppConfig:
     context_trigger_tokens: int
     context_target_tokens: int
     http_retry_attempts: int
+    delegate_max_hard_cap: int
+    delegate_default_parallel: int
+    delegate_default_timeout: int
+    delegate_max_timeout: int
+    delegate_max_tasks: int
+    delegate_max_output_chars: int
+    delegate_heartbeat_interval: float
+    delegate_allowed_tools: set[str]
+    delegate_default_persona: str
+    delegate_agent_roster: dict[str, dict[str, Any]]
 
 
 @dataclass
