@@ -96,8 +96,8 @@ async def test_execute_bash_full_path_prohibited() -> None:
     assert "Tier 3 BLOCK: Command invocation via full path prohibited" in result
 
 
-@pytest.mark.asyncio
-async def test_execute_bash_success(project_root: Any) -> None:
+def test_execute_bash_success(project_root: Any) -> None:
+    import asyncio
     with patch("supporter.tools.bash.config") as mock_config:
         mock_config.allowed_directories = [str(project_root)]
         with patch("supporter.tools.bash._verify_binary") as mock_verify:
@@ -117,7 +117,7 @@ async def test_execute_bash_success(project_root: Any) -> None:
                     patch("supporter.tools.bash._apply_rate_limiting"),
                     patch("supporter.tools.bash._get_fs_state", return_value={}),
                 ):
-                    result = await execute_bash("ls")
+                    result = asyncio.run(execute_bash("ls"))
                     assert result == "file1\nfile2"
 
 
@@ -582,55 +582,55 @@ async def test_execute_bash_wd_failure() -> None:
         assert "WD Error" in result
 
 
-@pytest.mark.asyncio
-async def test_execute_subprocess_complex_failure() -> None:
+@patch("builtins.open", new_callable=MagicMock)
+@patch("supporter.tools.bash._evaluate_final_tier")
+@patch("supporter.tools.bash._verify_binary")
+@patch("subprocess.run")
+@patch("supporter.tools.bash._apply_path_security")
+@patch("resource.setrlimit")
+@patch("supporter.tools.bash._get_fs_state")
+def test_execute_subprocess_complex_failure(
+    mock_get_fs: MagicMock,
+    mock_setlimit: MagicMock,
+    mock_path_sec: MagicMock,
+    mock_run: MagicMock,
+    mock_verify: MagicMock,
+    mock_eval: MagicMock,
+    mock_open: MagicMock,
+) -> None:
+    import asyncio
     from supporter.tools import bash
 
     bash._SB_BIN = "/usr/bin/sandbox-exec"
     bash._SB_TYPE = "macos"
     mock_pre = {"f": 1.0}
-    with (
-        patch(
-            "supporter.tools.bash._get_fs_state",
-            side_effect=[mock_pre, {"f": 1.0, "new": 2.0}],
-            autospec=True,
-        ),
-        patch("resource.setrlimit", side_effect=Exception("limit failed")),
-        patch(
-            "supporter.tools.bash._apply_path_security",
-            return_value=(2, False),
-            autospec=True,
-        ),
-    ):
-        mock_res = MagicMock(returncode=0, stdout=b"out", stderr=b"")
-        with (
-            patch("subprocess.run", return_value=mock_res, autospec=True),
-            patch(
-                "supporter.tools.bash._verify_binary",
-                return_value=Path("/usr/bin/touch"),
-                autospec=True,
-            ),
-            patch("supporter.tools.bash._evaluate_final_tier", autospec=True),
-            patch("builtins.open", MagicMock()),
-        ):
-            result = await execute_bash("touch mutation_test")
-            assert "[WARNING] Files mutated" in result
+    mock_get_fs.side_effect = [mock_pre, {"f": 1.0, "new": 2.0}]
+    mock_setlimit.side_effect = Exception("limit failed")
+    mock_path_sec.return_value = (2, False)
+
+    mock_res = MagicMock(returncode=0, stdout=b"out", stderr=b"")
+    mock_run.return_value = mock_res
+    mock_verify.return_value = Path("/usr/bin/touch")
+
+    result = asyncio.run(execute_bash("touch mutation_test"))
+    assert "[WARNING] Files mutated" in result
 
 
-@pytest.mark.asyncio
-async def test_execute_subprocess_generic_exception() -> None:
+@patch("supporter.tools.bash._verify_binary")
+@patch("subprocess.run")
+def test_execute_subprocess_generic_exception(
+    mock_run: MagicMock, mock_verify: MagicMock
+) -> None:
+    import asyncio
     with (
         patch("supporter.tools.bash._SB_BIN", "/bin/ls"),
         patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch(
-            "supporter.tools.bash._verify_binary",
-            return_value=Path("/bin/ls"),
-        ),
-        patch("subprocess.run", side_effect=Exception("General failure")),
     ):
+        mock_verify.return_value = Path("/bin/ls")
+        mock_run.side_effect = Exception("General failure")
         mock_notify = MagicMock()
         set_bash_notification_callback(mock_notify)
-        result = await execute_bash("ls")
+        result = asyncio.run(execute_bash("ls"))
         assert "Error executing command: General failure" in result
 
 
@@ -671,7 +671,6 @@ async def test_tier3_block_cases(
 
 @pytest.mark.asyncio
 async def test_tier3_block_temp_dir_exec(mock_config: MagicMock) -> None:
-    # Use real /tmp here to trigger S108 rule in source, but bypass ruff in test
     with patch("shutil.which", return_value="/tmp/bad_bin"):  # noqa: S108
         res = await execute_bash("bad_bin")
         assert "Tier 3 BLOCK" in res
@@ -832,9 +831,9 @@ def test_apply_path_security_with_eq_flag(mock_config: Any, project_root: Any) -
 
 
 def test_apply_path_security_with_at_flag(mock_config: Any, project_root: Any) -> None:
-    token = "file@data.txt"  # noqa: S105
+    at_delimited_path = "file@data.txt"
     _tier, _ = _apply_path_security(
-        "cmd file@x", ["cmd", token], project_root, project_root
+        "cmd file@x", ["cmd", at_delimited_path], project_root, project_root
     )
 
 

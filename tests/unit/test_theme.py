@@ -1,4 +1,5 @@
-from supporter.tui.theme import CRYSTAL_GRADIENT_STOPS, THEME, apply_crystal_gradient
+from supporter.config import CRYSTAL_GRADIENT_STOPS, THEME
+from supporter.tui.utils import apply_crystal_gradient
 
 
 def test_theme_dict() -> None:

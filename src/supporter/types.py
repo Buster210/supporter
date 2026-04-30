@@ -3,15 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 
 from google.genai.types import Content, GenerateContentConfig, Tool
-
-DEFAULT_SYSTEM_INSTRUCTION = (
-    "You are an elite technical strategist and principal software architect. "
-    "Your objective is to provide rigorous, high-fidelity, and "
-    "architecturally sound guidance. Analyze complex problems through "
-    "the lens of scalability, maintainability, and efficiency. Always "
-    "anticipate edge cases and performance bottlenecks before "
-    "formulating a response."
-)
+from textual.message import Message
 
 
 class LLMOptions(TypedDict, total=False):
@@ -29,6 +21,48 @@ class LLMOptions(TypedDict, total=False):
     top_k: int
     max_output_tokens: int
     config: GenerateContentConfig
+
+
+@dataclass
+class AppConfig:
+    log_level: str
+    provider: str
+    gemini_api_keys: list[str]
+    gemini_model: str
+    gemini_live_model: str
+    gemini_live_fallback_model: str
+    gemini_fallback_model: str | None
+    log_file: str
+    voice_name: str
+    default_system_instruction: str
+    allowed_directories: list[str]
+    require_write_confirmation: bool
+    live_thinking_level: str
+    retriable_codes: set[str]
+    google_5xx_errors: set[str]
+    transient_signals: set[str]
+    http_errors_5xx: set[int]
+    rate_limit_signals: set[str]
+    drain_timeout: float
+    context_trigger_tokens: int
+    context_target_tokens: int
+    http_retry_attempts: int
+
+
+@dataclass
+class MockCandidate:
+    grounding_metadata: Any
+
+
+@dataclass
+class MockRaw:
+    candidates: list[MockCandidate]
+
+
+@dataclass
+class ModeChanged(Message):
+    mode: str
+    enabled: bool
 
 
 @dataclass

@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -7,20 +6,11 @@ from typing import Any
 
 import pathspec
 
-from ..config import config
+from ..config import INTERNAL_BLACKLIST, config
 from ..logger import logger
 
 _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
-
-_INTERNAL_BLACKLIST = [
-    ".env",
-    ".git",
-    ".venv",
-    ".mypy_cache",
-    ".ruff_cache",
-    "__pycache__",
-]
 
 
 def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> None:
@@ -28,7 +18,7 @@ def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> N
     _CONFIRMATION_CALLBACK = callback
 
 
-def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
+def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
     gitignore_path = project_root / ".gitignore"
     if not gitignore_path.exists():
         return None
@@ -38,7 +28,7 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
         if _GITIGNORE_CACHE["spec"] is not None and _GITIGNORE_CACHE["mtime"] == mtime:
             from typing import cast
 
-            return cast(pathspec.PathSpec, _GITIGNORE_CACHE["spec"])
+            return cast(pathspec.PathSpec[Any], _GITIGNORE_CACHE["spec"])
 
         with gitignore_path.open("r") as f:
             spec = pathspec.PathSpec.from_lines("gitignore", f)
@@ -53,7 +43,7 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec | None:
 def _is_blacklisted(relative_path: str) -> bool:
     return any(
         relative_path == pattern or relative_path.startswith(f"{pattern}/")
-        for pattern in _INTERNAL_BLACKLIST
+        for pattern in INTERNAL_BLACKLIST
     )
 
 
@@ -96,9 +86,16 @@ async def read_file(
     limit: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
-    logger.info(
-        f"Tool Execute: read_file(path='{path}', offset={offset}, limit={limit})"
-    )
+    """Reads file content safely within project boundaries.
+    Args:
+        path: File path (abs/rel).
+        offset: Start byte offset.
+        limit: Max bytes to read.
+        encoding: Text encoding (default: 'utf-8').
+    Returns:
+        File content as string, or error message.
+    """
+    logger.info(f"Tool: read_file — path='{path}', offset={offset}, limit={limit}")
 
     def _sync_read() -> str:
         p = _validate_path(path)
@@ -109,13 +106,17 @@ async def read_file(
             if offset is not None:
                 f.seek(offset)
             if limit is not None:
-                return f.read(limit)
-            return f.read()
+                content = f.read(limit)
+                logger.debug(f"read_file full content: {content!r}")
+                return content
+            content = f.read()
+            logger.debug(f"read_file full content: {content!r}")
+            return content
 
     try:
         return await asyncio.to_thread(_sync_read)
     except Exception as e:
-        logger.error(f"Tool Failure: read_file failed: {e}")
+        logger.error(f"Tool Failure: read_file [{type(e).__name__}]: {e}")
         return f"Error reading file: {e!s}"
 
 
@@ -126,66 +127,78 @@ async def write_file(
     limit: int | None = None,
     encoding: str = "utf-8",
 ) -> str:
+    """Writes/updates file content securely. Creates parents if missing.
+    Args:
+        path: Target file path.
+        content: Data to write.
+        offset: Byte offset for partial writes.
+        limit: Bytes to replace (retains tail).
+        encoding: Text encoding (default: 'utf-8').
+    Returns:
+        Success/error message. Triggers UI confirmation if required.
+    """
     logger.info(
-        f"Tool Execute: write_file(path='{path}', content_len={len(content)}, "
-        f"offset={offset}, limit={limit})"
+        f"Tool: write_file — path='{path}', content_len={len(content)}, "
+        f"offset={offset}, limit={limit}"
     )
+
+    def _confirm_write(p: Path, content: str, encoding: str) -> str | None:
+        if not config.require_write_confirmation:
+            return None
+
+        import difflib
+
+        if p.exists():
+            try:
+                with p.open("r", encoding=encoding) as f:
+                    old_content = f.read()
+                diff = difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    content.splitlines(keepends=True),
+                    fromfile=f"a/{p.name}",
+                    tofile=f"b/{p.name}",
+                    n=3,
+                )
+                display_diff = "".join(diff) or "(No changes detected)"
+            except Exception as e:
+                display_diff = (
+                    f"Error generating diff: {e}\n\nProposed Content:\n{content}"
+                )
+        else:
+            lines = content.splitlines(keepends=True)
+            diff = difflib.unified_diff(
+                [], lines, fromfile="/dev/null", tofile=f"b/{p.name}", n=len(lines)
+            )
+            display_diff = "".join(diff)
+
+        if _CONFIRMATION_CALLBACK:
+            if not _CONFIRMATION_CALLBACK(p, display_diff):
+                return "Write operation cancelled by user security preference."
+        elif sys.stdin.isatty():
+            print("\n" + "=" * 60)
+            print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
+            print(f" TARGET FILE: {p}")
+            print("-" * 60)
+            print(" PROPOSED DIFF ".center(60, "-"))
+            print(display_diff)
+            print("-" * 60)
+            confirm = input(" Proceed with write? (y/n): ").lower().strip()
+            print("=" * 60 + "\n")
+            if confirm not in ("y", "yes"):
+                return "Write operation cancelled by user security preference."
+        else:
+            logger.warning(
+                f"Write confirmation required for {p} but no TTY or callback. Skipping."
+            )
+            return "Error: Interactive confirmation required but unavailable."
+        return None
 
     def _sync_write() -> str:
         p = _validate_path(path)
+        logger.debug(f"write_file input: {content!r}")
 
-        if config.require_write_confirmation:
-            import difflib
-
-            if p.exists():
-                try:
-                    with p.open("r", encoding=encoding) as f:
-                        old_content = f.read()
-
-                    diff = difflib.unified_diff(
-                        old_content.splitlines(keepends=True),
-                        content.splitlines(keepends=True),
-                        fromfile=f"a/{p.name}",
-                        tofile=f"b/{p.name}",
-                        n=3,
-                    )
-                    display_diff = "".join(diff) or "(No changes detected)"
-                except Exception as e:
-                    display_diff = (
-                        f"Error generating diff: {e}\n\nProposed Content:\n{content}"
-                    )
-            else:
-                lines = content.splitlines(keepends=True)
-                diff = difflib.unified_diff(
-                    [],
-                    lines,
-                    fromfile="/dev/null",
-                    tofile=f"b/{p.name}",
-                    n=len(lines),
-                )
-                display_diff = "".join(diff)
-
-            if _CONFIRMATION_CALLBACK:
-                if not _CONFIRMATION_CALLBACK(p, display_diff):
-                    return "Write operation cancelled by user security preference."
-            elif sys.stdin.isatty():
-                print("\n" + "=" * 60)
-                print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
-                print(f" TARGET FILE: {p}")
-                print("-" * 60)
-                print(" PROPOSED DIFF ".center(60, "-"))
-                print(display_diff)
-                print("-" * 60)
-                confirm = input(" Proceed with write? (y/n): ").lower().strip()
-                print("=" * 60 + "\n")
-                if confirm not in ("y", "yes"):
-                    return "Write operation cancelled by user security preference."
-            else:
-                logger.warning(
-                    f"Write confirmation required for {p} but no interactive TTY "
-                    "or callback available. Skipping write for safety."
-                )
-                return "Error: Interactive confirmation required but unavailable."
+        if error_msg := _confirm_write(p, content, encoding):
+            return error_msg
 
         p.parent.mkdir(parents=True, exist_ok=True)
 
@@ -220,49 +233,5 @@ async def write_file(
     try:
         return await asyncio.to_thread(_sync_write)
     except Exception as e:
-        logger.error(f"Tool Failure: write_file failed: {e}")
+        logger.error(f"Tool Failure: write_file [{type(e).__name__}]: {e}")
         return f"Error writing file: {e!s}"
-
-
-async def list_dir(path: str) -> str:
-    logger.info(f"Tool Execute: list_dir(path='{path}')")
-
-    def _sync_list() -> str:
-        target_path = _validate_path(path)
-        if not target_path.is_dir():
-            return f"Error: Path is not a directory: {target_path}"
-
-        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
-        relative_parent = target_path.relative_to(project_root)
-        spec = _get_gitignore_spec(project_root)
-
-        items = []
-        try:
-            with os.scandir(target_path) as it:
-                for entry in it:
-                    relative_item_path = str(relative_parent / entry.name)
-
-                    if _is_blacklisted(relative_item_path):
-                        continue
-                    if spec and spec.match_file(relative_item_path):
-                        continue
-
-                    try:
-                        tag = "[DIR]" if entry.is_dir() else "[FILE]"
-                        items.append(f"{tag} {entry.name}")
-                    except OSError:
-                        continue
-        except OSError as e:
-            return f"Error accessing directory: {e!s}"
-
-        if not items:
-            return "Directory is empty or all items are restricted."
-
-        items.sort()
-        return "\n".join(items)
-
-    try:
-        return await asyncio.to_thread(_sync_list)
-    except Exception as e:
-        logger.error(f"Tool Failure: list_dir failed: {e}")
-        return f"Error listing directory: {e!s}"

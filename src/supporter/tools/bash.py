@@ -6,7 +6,7 @@ import re
 import resource
 import shlex
 import shutil
-import subprocess  # nosec B404
+import subprocess
 import sys
 import time
 from collections import deque
@@ -44,7 +44,6 @@ _bash_execution_history: deque[float] = deque(maxlen=50)
 
 
 def _detect_sandbox() -> tuple[str | None, str | None]:
-
     if sys.platform == "darwin":
         bin_path = shutil.which("sandbox-exec")
         if bin_path:
@@ -60,7 +59,6 @@ _SB_TYPE, _SB_BIN = _detect_sandbox()
 
 
 def _wrap_in_sandbox(tokens: list[str], cwd: Path, project_root: Path) -> list[str]:
-
     if not _SB_BIN:
         raise RuntimeError(
             "Security Block: Sandbox execution is required but no sandbox tool "
@@ -78,6 +76,8 @@ def _wrap_in_sandbox(tokens: list[str], cwd: Path, project_root: Path) -> list[s
             profile_content = f.read()
 
         profile_content = profile_content.replace("{{PROJECT_ROOT}}", str(project_root))
+        home_dir = os.environ.get("HOME", str(Path.home()))
+        profile_content = profile_content.replace("{{HOME}}", home_dir)
 
         return [_SB_BIN, "-p", profile_content, *tokens]
     if _SB_TYPE == "linux":
@@ -107,12 +107,10 @@ def set_bash_notification_callback(
 
 
 def check_bash_availability() -> bool:
-
     return _SB_BIN is not None
 
 
 def notify_bash_unavailable() -> None:
-
     if _BASH_NOTIFICATION_CALLBACK:
         _BASH_NOTIFICATION_CALLBACK(
             "BASH TOOL DISABLED: Sandbox execution is required but no sandbox tool "
@@ -155,7 +153,6 @@ def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
 
 
 def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
-
     cmd_str = " ".join(tokens)
 
     if any(
@@ -276,7 +273,6 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
 def _inspect_interpreter_payload(
     binary_name: str, tokens: list[str], depth: int = 0
 ) -> int:
-
     if depth > 1:
         return 3
 
@@ -408,7 +404,15 @@ def _inspect_interpreter_payload(
 
 
 async def execute_bash(command: str, working_directory: str | None = None) -> str:
-    logger.info(f"Tool Execute: execute_bash(command='{command}')")
+    """Executes a shell command in a sandboxed, restricted environment.
+    Args:
+        command: Shell command to execute.
+        working_directory: Optional execution cwd (defaults to project root).
+    Returns:
+        Command stdout/stderr combined, or error message.
+        Triggers UI confirmation for risky commands.
+    """
+    logger.info(f"Tool: execute_bash — command='{command}'")
 
     def _sync_execute() -> str:
         if "\x00" in command:
@@ -451,6 +455,10 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
         security_tier, is_high_risk = _apply_policy_checks(
             command, tokens, binary_name, security_tier, is_high_risk
         )
+        logger.info(
+            f"Security classification: binary={binary_name}, tier={security_tier}, "
+            f"high_risk={is_high_risk}, tokens={tokens!r}"
+        )
 
         _evaluate_final_tier(
             command, tokens, binary_name, security_tier, is_high_risk, cwd
@@ -470,7 +478,7 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
     try:
         return await asyncio.to_thread(_sync_execute)
     except Exception as e:
-        logger.error(f"Tool Failure: execute_bash failed: {e}")
+        logger.error(f"Tool Failure: execute_bash [{type(e).__name__}]: {e}")
         return f"Error: {e!s}"
 
 
@@ -690,15 +698,22 @@ def _apply_rate_limiting() -> None:
     now = time.time()
     while _bash_execution_history and _bash_execution_history[0] < now - 60:
         _bash_execution_history.popleft()
-    if len(_bash_execution_history) >= 50:
+    current_count = len(_bash_execution_history)
+    if current_count >= 50:
         raise PermissionError("Session command quota exceeded (max 50/min)")
     if _bash_execution_history and now - _bash_execution_history[-1] < 2.0:
-        time.sleep(2.0 - (now - _bash_execution_history[-1]))
+        wait_ms = 2.0 - (now - _bash_execution_history[-1])
+        logger.info(
+            f"Rate limiter: throttling {wait_ms:.2f}s "
+            f"(cmds in window: {current_count}/50)"
+        )
+        time.sleep(wait_ms)
     _bash_execution_history.append(time.time())
+    logger.info(f"Rate limiter: accepted (cmds in window: {current_count + 1}/50)")
 
 
 def _get_fs_state(target_dir: Path) -> dict[str, float]:
-    from .file_ops import _INTERNAL_BLACKLIST as FILE_INTERNAL_BLACKLIST
+    from ..config import INTERNAL_BLACKLIST as FILE_INTERNAL_BLACKLIST
 
     state = {}
     try:
@@ -757,6 +772,12 @@ def _execute_subprocess(
         stdout = result.stdout[: 100 * 1024].decode("utf-8", errors="replace")
         stderr = result.stderr[: 100 * 1024].decode("utf-8", errors="replace")
 
+        logger.info(
+            f"Subprocess exit: binary={binary_path.name}, rc={result.returncode}, "
+            f"stdout_bytes={len(result.stdout)}, stderr_bytes={len(result.stderr)}, "
+            f"sandbox={_SB_TYPE!r}"
+        )
+
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
         stdout = ansi_escape.sub("", stdout)
         stderr = ansi_escape.sub("", stderr)
@@ -773,13 +794,15 @@ def _execute_subprocess(
             changed = [f for f in all_paths if pre_state.get(f) != post_state.get(f)]
             if changed:
                 basenames = [Path(f).name for f in changed]
-                logger.warning(f"Files mutated by bash command in {cwd}: {basenames}")
+                logger.info(f"FS mutation detected by bash in {cwd}: {basenames}")
                 output += f"\n\n[WARNING] Files mutated in cwd: {', '.join(basenames)}"
 
-        log_msg = (
-            f"Bash Exec: cmd={tokens} exit={result.returncode} out_len={len(output)}"
+        logger.debug(f"bash full output: {output!r}")
+        changed_count = len(changed) if is_mutation else 0
+        logger.info(
+            f"bash: rc={result.returncode}, out_len={len(output)}, "
+            f"mutated_files={changed_count}"
         )
-        logger.info(log_msg)
 
         return output
 

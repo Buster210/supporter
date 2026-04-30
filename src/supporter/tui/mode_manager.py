@@ -4,21 +4,21 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from ..llm_types import DEFAULT_SYSTEM_INSTRUCTION
-from .message_processor import ModeChanged
+from ..logger import logger
+from ..types import ModeChanged
 
 
 class ModeManager:
     def __init__(self, app: Any) -> None:
         self._app = app
 
-    async def setup_agent(self, use_crew: bool = False, use_live: bool = False) -> None:
+    async def setup_agent(self, use_live: bool = False) -> None:
         from .. import get_provider
-        from ..agent import ChatAgent, CrewAgent
+        from ..agent import ChatAgent
+        from ..config import config
         from ..tools import (
             check_bash_availability,
             execute_bash,
-            list_dir,
             notify_bash_unavailable,
             read_file,
             write_file,
@@ -27,7 +27,6 @@ class ModeManager:
         tools_registry: dict[str, Callable[..., Any]] = {
             "read_file": read_file,
             "write_file": write_file,
-            "list_dir": list_dir,
         }
 
         if check_bash_availability():
@@ -37,49 +36,49 @@ class ModeManager:
 
         provider = get_provider(live=use_live, registry=tools_registry)
 
-        if use_crew:
-            self._app.agent = CrewAgent(
-                provider=provider, status_callback=self._app._on_agent_active
-            )
-            return
-
+        logger.info(
+            f"ModeManager: setting up agent — use_live={use_live}, "
+            f"tools={list(tools_registry.keys())}"
+        )
         self._app.agent = ChatAgent(
             provider,
             registry=tools_registry,
-            system_instruction=DEFAULT_SYSTEM_INSTRUCTION,
             use_search=True,
             use_code_execution=True,
+            system_instruction=config.default_system_instruction,
         )
 
-    async def toggle_mode(self, crew: bool = False, live: bool = False) -> None:
-        if crew:
-            self._app.crew_mode = not self._app.crew_mode
-            if self._app.crew_mode:
-                self._app.live_mode = False
-        elif live:
-            self._app.live_mode = not self._app.live_mode
-            if self._app.live_mode:
-                self._app.crew_mode = False
+    async def toggle_mode(self, live: bool | None = None) -> None:
+        if live is not None and self._app.live_mode == live:
+            from .bubble import MessageBubble
 
+            mode_name = "LIVE" if live else "SINGLE Agent"
+            target = getattr(self._app, "active_turn", None) or self._app.query_one(
+                "#chat-view"
+            )
+            await target.mount(
+                MessageBubble(role="agent", content=f"Already in {mode_name} mode")
+            )
+            return
+
+        if live is not None:
+            self._app.live_mode = live
+        else:
+            self._app.live_mode = not self._app.live_mode
+
+        logger.info(f"ModeManager: toggling mode — live={self._app.live_mode}")
         self._app._start_thinking()
         self._app.is_activating_mode = True
 
         try:
-            await self.setup_agent(
-                use_crew=self._app.crew_mode, use_live=self._app.live_mode
-            )
+            await self.setup_agent(use_live=self._app.live_mode)
             self._update_ui_state()
         finally:
             self._app.is_activating_mode = False
             self._app._stop_thinking()
 
     def _update_ui_state(self) -> None:
-        mode = "SINGLE"
-        if self._app.crew_mode:
-            mode = "CREW"
-        elif self._app.live_mode:
-            mode = "LIVE"
-
+        mode = "LIVE" if self._app.live_mode else "SINGLE"
         self._app.post_message(ModeChanged(mode=mode, enabled=True))
 
     async def handle_command(self, command: str) -> bool:
@@ -87,15 +86,14 @@ class ModeManager:
         handlers = {
             "/exit": self._app.exit,
             "/clear": self._app.action_clear_screen,
-            "/crew": lambda: self._app._toggle_mode(crew=True),
             "/live": lambda: self._app._toggle_mode(live=True),
+            "/agent": lambda: self._app._toggle_mode(live=False),
         }
 
-        handler = handlers.get(cmd)
-        if not handler:
+        if cmd not in handlers:
             return False
 
-        result = handler()
+        result = handlers[cmd]()
         if asyncio.iscoroutine(result):
             await result
         return True

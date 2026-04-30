@@ -1,21 +1,37 @@
+from __future__ import annotations
+
 import asyncio
 import functools
+import re
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from google import genai
-from google.genai import types
-from google.genai.types import Content, GenerateContentConfig, Part
+if TYPE_CHECKING:
+    from google import genai
+    from google.genai.types import Content
 
-from ..config import config
-from ..llm_types import (
-    DEFAULT_SYSTEM_INSTRUCTION,
+
+from ..config import DEFAULT_SYSTEM_INSTRUCTION, config
+from ..logger import logger
+from ..tools.search import google_search
+from ..types import (
     LLMChunk,
     LLMOptions,
     LLMResult,
 )
-from ..logger import logger
+
+
+def __getattr__(name: str) -> Any:
+    if name == "genai":
+        from google import genai
+
+        return genai
+    if name == "types":
+        from google.genai import types
+
+        return types
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class GeminiProvider:
@@ -23,28 +39,37 @@ class GeminiProvider:
         self,
         api_key: str,
         model_name: str | None = None,
-        system_instruction: str | None = None,
     ):
-        target_model = model_name or config.gemini_model
-        retry_options = types.HttpRetryOptions(attempts=2)
-
-        self.client = genai.Client(
-            api_key=api_key, http_options=types.HttpOptions(retry_options=retry_options)
-        )
-        self.model_name = target_model
-        self.default_system_instruction = (
-            system_instruction or DEFAULT_SYSTEM_INSTRUCTION
-        )
-
+        self.api_key = api_key
+        self.model_name = model_name or config.gemini_model
+        self._client: genai.Client | None = None
         self._tool_cache: list[Any] | None = None
         self._last_tool_key: Any = None
-        logger.debug(f"GeminiProvider initialized (model: {target_model})")
+        logger.info(
+            f"GeminiProvider initialized: model={self.model_name}, "
+            f"http_retry_attempts={config.http_retry_attempts}"
+        )
+
+    @property
+    def client(self) -> genai.Client:
+        if self._client is None:
+            from google import genai
+            from google.genai import types
+
+            retry_options = types.HttpRetryOptions(attempts=config.http_retry_attempts)
+            self._client = genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(retry_options=retry_options),
+            )
+        return self._client
 
     def _prepare_contents(
         self,
         prompt: str | list[Content],
         history: list[Content] | None = None,
     ) -> list[Content]:
+        from google.genai.types import Content, Part
+
         history = history or []
         fresh_content = (
             [Content(role="user", parts=[Part(text=prompt)])]
@@ -57,23 +82,36 @@ class GeminiProvider:
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Executing tool: {name}")
+            logger.info(
+                f"Tool '{name}' invoked (async): args={args!r}, kwargs={kwargs!r}"
+            )
             try:
-                return await func(*args, **kwargs)
+                result = await func(*args, **kwargs)
+                logger.info(f"Tool '{name}' completed successfully")
+                logger.debug(f"Tool '{name}' full result: {result!r}")
+                return result
             except Exception as e:
-                logger.error(f"Async tool '{name}' failed: {e}")
+                logger.error(f"Async tool '{name}' failed [{type(e).__name__}]: {e}")
                 raise
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.debug(f"Executing tool: {name}")
+            logger.info(
+                f"Tool '{name}' invoked (sync): args={args!r}, kwargs={kwargs!r}"
+            )
             try:
-                return func(*args, **kwargs)
+                result = func(*args, **kwargs)
+                logger.info(f"Tool '{name}' completed successfully")
+                logger.debug(f"Tool '{name}' full result: {result!r}")
+                return result
             except Exception as e:
-                logger.error(f"Sync tool '{name}' failed: {e}")
+                logger.error(f"Sync tool '{name}' failed [{type(e).__name__}]: {e}")
                 raise
 
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+
+    def _needs_function_search(self) -> bool:
+        return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
 
     def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
         if not options:
@@ -99,6 +137,8 @@ class GeminiProvider:
         if self._last_tool_key == current_identity_key:
             return self._tool_cache
 
+        from google.genai import types
+
         final_tools: list[Any] = list(tools) if tools else []
         declared_names = self._extract_declared_tool_names(final_tools)
 
@@ -107,7 +147,11 @@ class GeminiProvider:
                 final_tools.append(self._wrap_tool(name, func))
 
         if use_search:
-            final_tools.append(types.Tool(google_search=types.GoogleSearch()))
+            if self._needs_function_search():
+                if "google_search" not in registry:
+                    final_tools.append(self._wrap_tool("google_search", google_search))
+            else:
+                final_tools.append(types.Tool(google_search=types.GoogleSearch()))
         if use_code_execution:
             final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
 
@@ -137,13 +181,16 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: LLMOptions | None = None,
     ) -> LLMResult:
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig
+
         options = options or {}
         interaction_id = options.get("interaction_id")
         transformed_tools = self._transform_tools(options)
 
         generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
-            or self.default_system_instruction,
+            or DEFAULT_SYSTEM_INSTRUCTION,
             temperature=options.get("temperature"),
             top_p=options.get("top_p"),
             top_k=options.get("top_k"),
@@ -154,10 +201,21 @@ class GeminiProvider:
             if transformed_tools
             else None,
             tools=transformed_tools,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
+            if transformed_tools
+            else None,
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
         start_time = time.perf_counter()
+        history = options.get("history") or []
+        logger.info(
+            f"generate(): model={self.model_name}, history_turns={len(history)}, "
+            f"tools={len(transformed_tools) if transformed_tools else 0}"
+        )
+        sys_inst = options.get("system_instruction") or DEFAULT_SYSTEM_INSTRUCTION
+        logger.debug(f"generate() system_instruction: {sys_inst}")
+        logger.debug(f"generate() context options: {options!r}")
         result: Any = None
 
         if interaction_id:
@@ -169,9 +227,9 @@ class GeminiProvider:
                     generation_config=cast(Any, generation_config),
                 )
             except Exception as e:
-                logger.warning(
-                    f"Resumption of interaction {interaction_id} failed; "
-                    f"falling back to standard generation. Reason: {e}"
+                logger.info(
+                    f"Interaction resumption failed (id={interaction_id}, "
+                    f"{type(e).__name__}: {e}) — falling back to standard generation"
                 )
 
         if not result:
@@ -185,10 +243,10 @@ class GeminiProvider:
 
         end_time = time.perf_counter()
 
-        history = getattr(result, "automatic_function_calling_history", None)
-        if not history and interaction_id:
+        afc_history = getattr(result, "automatic_function_calling_history", None)
+        if not afc_history and interaction_id:
             response = getattr(result, "response", None)
-            history = getattr(
+            afc_history = getattr(
                 response, "automatic_function_calling_history", None
             ) or getattr(result, "history", None)
 
@@ -216,6 +274,18 @@ class GeminiProvider:
                     ]
                 )
 
+        duration = end_time - start_time
+        logger.info(
+            f"generate() done: model={self.model_name}, duration={duration:.3f}s, "
+            f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"completion_tokens={usage.get('completion_tokens', '?')}"
+        )
+        if result.candidates:
+            cand = result.candidates[0]
+            logger.debug(f"generate() candidate[0] parts: {cand.content.parts!r}")
+            meta = getattr(cand, "grounding_metadata", None)
+            if meta:
+                logger.debug(f"generate() grounding_metadata: {meta!r}")
         return LLMResult(
             text=result.text or "",
             thoughts=thoughts,
@@ -225,7 +295,7 @@ class GeminiProvider:
             usage=usage,
             raw=result,
             candidates=getattr(result, "candidates", []),
-            automatic_function_calling_history=history,
+            automatic_function_calling_history=afc_history,
         )
 
     async def generate_stream(
@@ -233,20 +303,32 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: LLMOptions | None = None,
     ) -> AsyncIterator[LLMChunk]:
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig
+
         options = options or {}
         transformed_tools = self._transform_tools(options)
         generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
-            or self.default_system_instruction,
+            or DEFAULT_SYSTEM_INSTRUCTION,
             tools=transformed_tools,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
                 disable=False
             )
             if transformed_tools
             else None,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
+            if transformed_tools
+            else None,
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
+        history = options.get("history") or []
+        logger.info(
+            f"generate_stream(): model={self.model_name}, "
+            f"history_turns={len(history)}, "
+            f"tools={len(transformed_tools) if transformed_tools else 0}"
+        )
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
             contents=cast(Any, self._prepare_contents(prompt, options.get("history"))),

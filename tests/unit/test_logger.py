@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from supporter.logger import SupporterFormatter, init_logger, logger, main
 
@@ -64,14 +64,9 @@ def test_init_logger_failure(tmp_path: Any) -> None:
 
 def test_logger_main_runs_init_and_logs_message(tmp_path: Any) -> None:
     with (
-        patch("supporter.config.config.log_file", str(tmp_path / "main.log")),
-        patch("supporter.config.config.log_level", "INFO"),
+        patch("supporter.logger.init_logger") as mock_init,
         patch("supporter.logger.logger") as mock_supporter_logger,
-        patch("supporter.logger.logging.FileHandler") as mock_handler_cls,
     ):
-        mock_handler = MagicMock()
-        mock_handler_cls.return_value = mock_handler
         main()
-        mock_supporter_logger.info.assert_any_call("Logging initialized at level: INFO")
+        mock_init.assert_called_once()
         mock_supporter_logger.info.assert_any_call("Test message")
-        mock_supporter_logger.addHandler.assert_called_once_with(mock_handler)

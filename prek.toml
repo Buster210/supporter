@@ -34,6 +34,7 @@ hooks = [
     { id = "mypy", name = "mypy", entry = "./.venv/bin/mypy src tests", language = "system", types = [
         "python",
     ], require_serial = true, pass_filenames = false, always_run = true },
+    { id = "pytest", name = "pytest", entry = "uv run pytest --cov=src", language = "system", pass_filenames = false, always_run = true },
 ]
 
 [[repos]]

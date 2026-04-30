@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from supporter.tui import SupporterApp
-from supporter.tui.message_processor import ModeChanged
+from supporter.types import ModeChanged
 from tests.tui_mocks import MockWidget
 
 pytestmark = pytest.mark.filterwarnings(
@@ -25,9 +25,6 @@ async def test_mode_changed_handler_updates_indicator_label() -> None:
             mock_indicator if selector == "#mode-indicator" else mock_chat_view
         ),
     ):
-        event = ModeChanged(mode="CREW", enabled=True)
-        await app.on_mode_changed(event)
-        assert mock_indicator.content == "[CREW]"
         mock_indicator.content = ""
         event = ModeChanged(mode="LIVE", enabled=True)
         await app.on_mode_changed(event)
@@ -46,18 +43,6 @@ async def test_mode_changed_handler_mounts_system_messages() -> None:
             mock_indicator if selector == "#mode-indicator" else mock_chat_view
         ),
     ):
-        event = ModeChanged(mode="CREW", enabled=True)
-        await app.on_mode_changed(event)
-        assert len(mock_chat_view.mounted) == 1
-        mounted_bubble = mock_chat_view.mounted[0]
-        assert "Multi-Agent Crew" in mounted_bubble.content
-        assert "ENABLED" in mounted_bubble.content
-        mock_chat_view.mounted.clear()
-        event = ModeChanged(mode="CREW", enabled=False)
-        await app.on_mode_changed(event)
-        assert len(mock_chat_view.mounted) == 1
-        assert "DISABLED" in mock_chat_view.mounted[0].content
-        mock_chat_view.mounted.clear()
         event = ModeChanged(mode="LIVE", enabled=True)
         await app.on_mode_changed(event)
         assert len(mock_chat_view.mounted) == 1
@@ -80,7 +65,7 @@ async def test_mode_changed_uses_active_turn_when_available() -> None:
     mock_active_turn = ActiveTurn()
     from typing import cast
 
-    from supporter.tui.widgets import ChatTurn
+    from supporter.tui.chat import ChatTurn
 
     with patch.object(
         app,
@@ -90,7 +75,7 @@ async def test_mode_changed_uses_active_turn_when_available() -> None:
         ),
     ):
         app.active_turn = cast(ChatTurn, mock_active_turn)
-        event = ModeChanged(mode="CREW", enabled=True)
+        event = ModeChanged(mode="LIVE", enabled=True)
         await app.on_mode_changed(event)
         assert len(mock_active_turn.mounted) == 1
         assert len(mock_chat_view.mounted) == 0

@@ -19,7 +19,7 @@ Screen, #main-container, #chat-view, .chat-turn, #main-content, .main-content, #
     background: transparent;
 }
 
-#main-container, #chat-view {
+#chat-view {
     height: 100%;
     overflow-y: scroll;
     scrollbar-size: 0 0;
@@ -212,6 +212,13 @@ ConfirmationModal {
     margin-bottom: 1;
 }
 
+.modal-meta {
+    color: $accent;
+    text-style: dim italic;
+    margin-bottom: 1;
+    text-align: center;
+}
+
 #modal-content {
     height: auto;
     max-height: 30;
@@ -270,4 +277,28 @@ ConfirmationModal {
     height: 1;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+#scroll-btn-wrapper {
+    dock: bottom;
+    height: auto;
+    width: 100%;
+    align: right middle;
+    margin-bottom: 4;
+    layer: overlay;
+}
+
+#scroll-bottom-btn {
+    background: $primary;
+    color: #000;
+    text-style: bold;
+    border: none;
+    height: 3;
+    width: auto;
+    margin-right: 4;
+    padding: 0 2;
+}
+
+#scroll-btn-wrapper.hidden {
+    display: none;
 }
