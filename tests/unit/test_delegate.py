@@ -11,11 +11,15 @@ from supporter.tools.delegate import (
     _create_sub_agent,
     _execute_dag,
     _format_results,
+    _inject_dependency_context,
     _resolve_agent_profile,
     _run_sub_agent,
+    _should_skip,
     _validate_tasks,
+    cancel_delegation,
     check_delegation,
     delegate_tasks,
+    serialize_results,
 )
 from supporter.types import LLMResult, TaskStatus
 
@@ -581,3 +585,171 @@ class TestEndToEnd:
         results = completed_event.results
         completed = [r for r in results if r["status"] == TaskStatus.COMPLETED]
         assert len(completed) == 2
+
+
+class TestSerializeResults:
+    def test_serializes_summary_and_per_task(self) -> None:
+        results = [
+            {
+                "id": "t1",
+                "status": TaskStatus.COMPLETED,
+                "output": "ok",
+                "model": "m1",
+                "duration": 1.5,
+                "tokens": {"total_tokens": 100},
+            },
+            {
+                "id": "t2",
+                "status": TaskStatus.ERROR,
+                "output": "boom",
+                "duration": 0.5,
+                "tokens": {},
+            },
+            {
+                "id": "t3",
+                "status": TaskStatus.SKIPPED,
+                "output": "Skipped: dep failed",
+                "duration": 0.0,
+            },
+            {
+                "id": "t4",
+                "status": TaskStatus.TIMEOUT,
+                "output": "Error: timed out",
+                "duration": 60.0,
+            },
+        ]
+        payload = serialize_results("M1", results, 62.0, "abc12345")
+
+        assert payload["job_id"] == "abc12345"
+        assert payload["milestone"] == "M1"
+        assert payload["status"] == "completed"
+        assert payload["total_duration"] == 62.0
+        assert payload["totals"] == {
+            "completed": 1,
+            "failed": 1,
+            "skipped": 1,
+            "timed_out": 1,
+            "tokens": 100,
+        }
+        assert len(payload["tasks"]) == 4
+        t1, t2, t3, t4 = payload["tasks"]
+        assert t1["output"] == "ok"
+        assert t1["tokens"] == 100
+        assert t1["model"] == "m1"
+        assert t2["error"] == "boom"
+        assert "output" not in t2
+        assert t3["output"] == "Skipped: dep failed"
+        assert t4["output"] == "Error: timed out"
+
+    def test_status_field_overrides_default(self) -> None:
+        payload = serialize_results("M1", [], 1.23, "j1", status="cancelled")
+        assert payload["status"] == "cancelled"
+        assert payload["tasks"] == []
+        assert payload["totals"]["completed"] == 0
+
+
+class TestToleratesFailures:
+    def test_should_skip_when_dep_failed(self) -> None:
+        task = {"depends_on": ["t1"], "tolerate_failures": False}
+        results = {"t1": {"status": TaskStatus.ERROR, "output": "boom"}}
+        assert _should_skip(task, results) is not None
+
+    def test_tolerate_failures_bypasses_skip(self) -> None:
+        task = {"depends_on": ["t1"], "tolerate_failures": True}
+        results = {"t1": {"status": TaskStatus.ERROR, "output": "boom"}}
+        assert _should_skip(task, results) is None
+
+    def test_no_skip_when_dep_completed(self) -> None:
+        task = {"depends_on": ["t1"], "tolerate_failures": False}
+        results = {"t1": {"status": TaskStatus.COMPLETED, "output": "ok"}}
+        assert _should_skip(task, results) is None
+
+    def test_validation_accepts_tolerate_failures_field(self) -> None:
+        tasks_json = json.dumps(
+            [{"id": "t1", "task": "do it", "tolerate_failures": True}]
+        )
+        validated = _validate_tasks(tasks_json)
+        assert validated[0]["tolerate_failures"] is True
+
+    def test_validation_defaults_tolerate_failures_false(self) -> None:
+        tasks_json = json.dumps([{"id": "t1", "task": "do it"}])
+        validated = _validate_tasks(tasks_json)
+        assert validated[0]["tolerate_failures"] is False
+
+
+class TestDependencyContextStatus:
+    def test_no_tag_for_completed_dep(self) -> None:
+        task = {"depends_on": ["t1"], "context": ""}
+        results = {
+            "t1": {"status": TaskStatus.COMPLETED, "output": "all good"},
+        }
+        enriched = _inject_dependency_context(task, results)
+        assert "[COMPLETED]" not in enriched["context"]
+        assert "Output from 't1'" in enriched["context"]
+        assert "all good" in enriched["context"]
+
+    def test_injects_failed_dep_outputs(self) -> None:
+        task = {"depends_on": ["t1", "t2"], "context": "ctx"}
+        results = {
+            "t1": {"status": TaskStatus.COMPLETED, "output": "ok"},
+            "t2": {"status": TaskStatus.ERROR, "output": "boom"},
+        }
+        enriched = _inject_dependency_context(task, results)
+        assert "[COMPLETED]" not in enriched["context"]
+        assert "[ERROR]" in enriched["context"]
+        assert "boom" in enriched["context"]
+        assert enriched["context"].startswith("ctx")
+
+    def test_no_change_without_dependencies(self) -> None:
+        task = {"depends_on": [], "context": "original"}
+        enriched = _inject_dependency_context(task, {})
+        assert enriched is task
+
+
+class TestCancelDelegation:
+    @pytest.mark.asyncio
+    async def test_cancel_unknown_job(self) -> None:
+        result = await cancel_delegation("nonexistent")
+        assert "nonexistent" in result
+        assert "unknown" in result.lower() or "complete" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_cancel_running_job_publishes_cancelled_event(self) -> None:
+        from supporter.tools.event_bus import get_bus
+        from supporter.types import MilestoneCancelled
+
+        async def slow_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            await asyncio.sleep(5.0)
+            return {
+                "id": "t1",
+                "status": TaskStatus.COMPLETED,
+                "output": "x",
+                "duration": 5.0,
+                "model": "m",
+            }
+
+        tasks_json = json.dumps([{"id": "t1", "task": "slow"}])
+        with patch("supporter.tools.delegate._run_sub_agent", side_effect=slow_run):
+            plan = await delegate_tasks("Cancel Test", tasks_json, max_parallel=1)
+            job_id = next(
+                line for line in plan.splitlines() if "Job ID:" in line
+            ).split("`")[1]
+
+            bus = get_bus(job_id)
+            queue = bus.subscribe()
+            await asyncio.sleep(0.1)
+
+            confirm = await cancel_delegation(job_id)
+            assert "Cancellation requested" in confirm
+
+            cancelled_event = None
+            for _ in range(20):
+                event = await asyncio.wait_for(queue.get(), timeout=2.0)
+                if event is None:
+                    break
+                if isinstance(event, MilestoneCancelled):
+                    cancelled_event = event
+                    break
+
+        assert cancelled_event is not None
+        assert cancelled_event.milestone == "Cancel Test"

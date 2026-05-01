@@ -18,6 +18,7 @@ from ..logger import logger
 from ..types import (
     HeartbeatTick,
     LLMProvider,
+    MilestoneCancelled,
     MilestoneCompleted,
     MilestoneStarted,
     TaskAnomaly,
@@ -35,6 +36,7 @@ from .file_ops import read_file, write_file
 from .search import google_search
 
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+_JOB_TASKS: dict[str, asyncio.Task[Any]] = {}
 _on_delegation_start: Callable[[str], None] | None = None
 
 
@@ -130,6 +132,7 @@ def _validate_single_task(
         "max_retries": max_retries,
         "depends_on": depends_on,
         "pre_approved_commands": pre_approved_commands,
+        "tolerate_failures": bool(t.get("tolerate_failures", False)),
     }
 
 
@@ -326,11 +329,18 @@ def _inject_dependency_context(
 ) -> dict[str, Any]:
     if not task["depends_on"]:
         return task
-    parts = [
-        f"--- Output from '{d}' ---\n{results[d]['output']}"
-        for d in task["depends_on"]
-        if results.get(d, {}).get("status") == TaskStatus.COMPLETED
-    ]
+    parts = []
+    for dep_id in task["depends_on"]:
+        dep = results.get(dep_id)
+        if not dep:
+            continue
+        status = str(dep["status"]).upper()
+        label = (
+            f"'{dep_id}'"
+            if dep["status"] == TaskStatus.COMPLETED
+            else f"'{dep_id}' [{status}]"
+        )
+        parts.append(f"--- Output from {label} ---\n{dep.get('output', '')}")
     if not parts:
         return task
     enriched = task.copy()
@@ -344,6 +354,8 @@ def _inject_dependency_context(
 def _should_skip(
     task: dict[str, Any], results: dict[str, dict[str, Any]]
 ) -> str | None:
+    if task.get("tolerate_failures"):
+        return None
     for dep_id in task["depends_on"]:
         dep_result = results.get(dep_id)
         if dep_result and dep_result["status"] != TaskStatus.COMPLETED:
@@ -536,6 +548,56 @@ def _format_results(
     return "\n".join(report)
 
 
+def serialize_results(
+    milestone: str,
+    results: list[dict[str, Any]],
+    total_duration: float,
+    job_id: str,
+    status: str = "completed",
+) -> dict[str, Any]:
+    completed = sum(1 for r in results if r["status"] == TaskStatus.COMPLETED)
+    failed = sum(1 for r in results if r["status"] == TaskStatus.ERROR)
+    skipped = sum(1 for r in results if r["status"] == TaskStatus.SKIPPED)
+    timed_out = sum(1 for r in results if r["status"] == TaskStatus.TIMEOUT)
+    total_tokens = sum(
+        r.get("tokens", {}).get("total_tokens", 0)
+        for r in results
+        if r["status"] == TaskStatus.COMPLETED
+    )
+    summary_tasks = []
+    for r in results:
+        entry = {
+            "id": r["id"],
+            "status": str(r["status"]),
+            "duration": round(r.get("duration", 0.0), 2),
+        }
+        if r.get("model"):
+            entry["model"] = r["model"]
+        token_total = r.get("tokens", {}).get("total_tokens")
+        if token_total:
+            entry["tokens"] = token_total
+        output = r.get("output", "")
+        if r["status"] == TaskStatus.ERROR:
+            entry["error"] = output
+        else:
+            entry["output"] = output
+        summary_tasks.append(entry)
+    return {
+        "job_id": job_id,
+        "milestone": milestone,
+        "status": status,
+        "total_duration": round(total_duration, 2),
+        "totals": {
+            "completed": completed,
+            "failed": failed,
+            "skipped": skipped,
+            "timed_out": timed_out,
+            "tokens": total_tokens,
+        },
+        "tasks": summary_tasks,
+    }
+
+
 async def _run_heartbeat(
     bus: DelegationBus, job_id: str, interval: int = DELEGATE_HEARTBEAT_INTERVAL
 ) -> None:
@@ -584,16 +646,29 @@ async def _run_milestone(
     heartbeat_task: asyncio.Task[None] | None = None,
 ) -> None:
     start_wall = time.perf_counter()
-    results = await _execute_dag(tasks, semaphore, bus, job_id, parallel_limit)
-    total_wall = time.perf_counter() - start_wall
-    if heartbeat_task is not None:
-        heartbeat_task.cancel()
-    bus.publish(MilestoneCompleted(job_id, milestone, results, total_wall))
-    bus.close()
-    remove_bus(job_id)
+    try:
+        results = await _execute_dag(tasks, semaphore, bus, job_id, parallel_limit)
+        total_wall = time.perf_counter() - start_wall
+        bus.publish(MilestoneCompleted(job_id, milestone, results, total_wall))
+    except asyncio.CancelledError:
+        total_wall = time.perf_counter() - start_wall
+        logger.info(f"Milestone '{milestone}' (job={job_id}) cancelled")
+        bus.publish(MilestoneCancelled(job_id, milestone, total_wall))
+        raise
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+        bus.close()
+        remove_bus(job_id)
+        _JOB_TASKS.pop(job_id, None)
 
 
-async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> str:
+async def delegate_tasks(
+    milestone: str,
+    tasks: str,
+    max_parallel: int = 3,
+    notify_per_task: bool = False,
+) -> str:
     """Orchestrates background sub-agents to complete a complex milestone.
 
     Args:
@@ -604,8 +679,14 @@ async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> s
             - task: Detailed instructions for the sub-agent.
             - agent: (Optional) Role from the roster (e.g., "scout", "code_writer").
             - depends_on: (Optional) List of task IDs to wait for.
+            - tolerate_failures: (Optional) If true, run even when deps failed/
+              timed-out/skipped; their outputs are injected with a status tag.
             Example: '[{"id": "t1", "agent": "scout", "task": "map src/app.py"}]'
         max_parallel: Max number of agents to run at once (Default: 3).
+        notify_per_task: If true, completed/failed tasks are also fed back to
+            the orchestrator as system messages so it can launch follow-up
+            work while siblings still run. Default false (only the final
+            milestone summary is delivered).
 
     Returns:
         A job confirmation message with a JOB_ID.
@@ -618,6 +699,7 @@ async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> s
         job_id = str(uuid.uuid4())[:DELEGATE_JOB_ID_LEN]
 
         bus = get_bus(job_id, milestone)
+        bus.notify_per_task = notify_per_task
         if _on_delegation_start:
             _on_delegation_start(job_id)
 
@@ -645,6 +727,7 @@ async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> s
                 hb_task,
             )
         )
+        _JOB_TASKS[job_id] = task
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_BACKGROUND_TASKS.discard)
 
@@ -662,11 +745,13 @@ async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> s
         plan.append(f"\nSub-agents are running with parallel limit: {parallel_cap}")
         plan.append(
             "\nResults will be automatically posted back here when the "
-            "milestone is complete."
+            "milestone is complete. DO NOT check for results constantly; "
+            "wait for the system message."
         )
         plan.append(
             f"You can also use `check_delegation(job_id='{job_id}')` "
-            "for a live non-blocking snapshot."
+            "for a live non-blocking snapshot, but DO NOT do this "
+            "unless asked by the user."
         )
         return "\n".join(plan)
     except Exception as e:
@@ -708,3 +793,24 @@ async def check_delegation(job_id: str) -> str:
     separator = "|---|---|---|---|"
     table = "\n".join([header, separator, *rows])
     return f"**Job `{job_id}` — {bus.milestone}**\n\n{table}"
+
+
+async def cancel_delegation(job_id: str) -> str:
+    """Cancels a running delegation job.
+
+    Stops the milestone task, terminates pending sub-agents, and emits a
+    MilestoneCancelled event. Already-completed task results are preserved
+    and visible via check_delegation snapshots before the bus closes.
+
+    Args:
+        job_id: The JOB_ID returned by delegate_tasks.
+
+    Returns:
+        Confirmation message or error if the job is unknown.
+    """
+    task = _JOB_TASKS.get(job_id)
+    if task is None or task.done():
+        return f"Job `{job_id}` is unknown or already complete."
+
+    task.cancel()
+    return f"Cancellation requested for job `{job_id}`."
