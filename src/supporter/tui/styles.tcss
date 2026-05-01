@@ -302,3 +302,16 @@ ConfirmationModal {
 #scroll-btn-wrapper.hidden {
     display: none;
 }
+
+WelcomeBanner {
+    height: auto;
+    content-align: left middle;
+    color: $accent;
+    text-style: italic;
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+WelcomeBanner.hidden {
+    display: none;
+}
