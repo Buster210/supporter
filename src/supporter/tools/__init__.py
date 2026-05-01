@@ -5,7 +5,7 @@ from .bash import (
     set_bash_confirmation_callback,
     set_bash_notification_callback,
 )
-from .delegate import collect_delegation, delegate_tasks
+from .delegate import check_delegation, delegate_tasks
 from .file_ops import (
     read_file,
     set_confirmation_callback,
@@ -15,7 +15,7 @@ from .search import google_search
 
 __all__ = [
     "check_bash_availability",
-    "collect_delegation",
+    "check_delegation",
     "delegate_tasks",
     "execute_bash",
     "google_search",

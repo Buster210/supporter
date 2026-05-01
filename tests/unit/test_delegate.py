@@ -14,10 +14,10 @@ from supporter.tools.delegate import (
     _resolve_agent_profile,
     _run_sub_agent,
     _validate_tasks,
-    collect_delegation,
+    check_delegation,
     delegate_tasks,
 )
-from supporter.types import LLMResult
+from supporter.types import LLMResult, TaskStatus
 
 
 class TestAgentRoster:
@@ -237,6 +237,7 @@ class TestSubAgentRunner:
             "persona": "p",
             "context": "c",
             "timeout": 10,
+            "max_retries": 0,
             "depends_on": [],
         }
         semaphore = asyncio.Semaphore(1)
@@ -244,14 +245,18 @@ class TestSubAgentRunner:
         mock_agent = MagicMock()
         mock_agent.execute = AsyncMock(return_value=mock_result)
 
+        from supporter.tools.event_bus import DelegationBus
+
+        mock_bus = MagicMock(spec=DelegationBus)
+
         with patch(
             "supporter.tools.delegate._create_sub_agent",
             return_value=(mock_agent, "prompt"),
         ):
-            result = await _run_sub_agent(task, semaphore)
+            result = await _run_sub_agent(task, semaphore, mock_bus, "job1")
 
         assert result["id"] == "t1"
-        assert result["status"] == "completed"
+        assert result["status"] == TaskStatus.COMPLETED
         assert result["output"] == "Done"
 
     @pytest.mark.asyncio
@@ -264,17 +269,22 @@ class TestSubAgentRunner:
             "persona": "p",
             "context": "c",
             "timeout": 0.01,
+            "max_retries": 0,
             "depends_on": [],
         }
         semaphore = asyncio.Semaphore(1)
+
+        from supporter.tools.event_bus import DelegationBus
+
+        mock_bus = MagicMock(spec=DelegationBus)
 
         with patch("supporter.tools.delegate._create_sub_agent") as mock_factory:
             mock_agent = MagicMock()
             mock_agent.execute = AsyncMock(side_effect=asyncio.TimeoutError)
             mock_factory.return_value = (mock_agent, "prompt")
-            result = await _run_sub_agent(task, semaphore)
+            result = await _run_sub_agent(task, semaphore, mock_bus, "job1")
 
-        assert result["status"] == "timeout"
+        assert result["status"] == TaskStatus.TIMEOUT
         assert "0.01s" in result["output"]
 
     @pytest.mark.asyncio
@@ -287,17 +297,22 @@ class TestSubAgentRunner:
             "persona": "p",
             "context": "c",
             "timeout": 10,
+            "max_retries": 0,
             "depends_on": [],
         }
         semaphore = asyncio.Semaphore(1)
+
+        from supporter.tools.event_bus import DelegationBus
+
+        mock_bus = MagicMock(spec=DelegationBus)
 
         with patch("supporter.tools.delegate._create_sub_agent") as mock_factory:
             mock_agent = MagicMock()
             mock_agent.execute = AsyncMock(side_effect=RuntimeError("Boom"))
             mock_factory.return_value = (mock_agent, "prompt")
-            result = await _run_sub_agent(task, semaphore)
+            result = await _run_sub_agent(task, semaphore, mock_bus, "job1")
 
-        assert result["status"] == "error"
+        assert result["status"] == TaskStatus.ERROR
         assert "Boom" in result["output"]
 
 
@@ -333,10 +348,15 @@ class TestDAGExecution:
                 {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
                 {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
             ]
-            results = await _execute_dag(tasks, semaphore)
+            from supporter.tools.event_bus import DelegationBus
+
+            mock_bus = MagicMock(spec=DelegationBus)
+            results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
 
         assert len(results) == 2
         assert mock_run.call_count == 2
+        assert results[0]["status"] == TaskStatus.COMPLETED
+        assert results[1]["status"] == TaskStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_sequential_chain(self) -> None:
@@ -369,7 +389,10 @@ class TestDAGExecution:
                 {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
                 {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
             ]
-            results = await _execute_dag(tasks, semaphore)
+            from supporter.tools.event_bus import DelegationBus
+
+            mock_bus = MagicMock(spec=DelegationBus)
+            results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
 
         assert len(results) == 2
         b_call_args = mock_run.call_args_list[1]
@@ -409,10 +432,13 @@ class TestDAGExecution:
                 "output": "crashed",
                 "duration": 0.5,
             }
-            results = await _execute_dag(tasks, semaphore)
+            from supporter.tools.event_bus import DelegationBus
 
-        assert results[0]["status"] == "error"
-        assert results[1]["status"] == "skipped"
+            mock_bus = MagicMock(spec=DelegationBus)
+            results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
+
+        assert results[0]["status"] == TaskStatus.ERROR
+        assert results[1]["status"] == TaskStatus.SKIPPED
         assert "Dependency 'a'" in results[1]["output"]
         assert mock_run.call_count == 1
 
@@ -451,8 +477,20 @@ class TestEndToEnd:
         )
         with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
             mock_run.side_effect = [
-                {"id": "t1", "status": "completed", "output": "out1", "duration": 1.0},
-                {"id": "t2", "status": "completed", "output": "out2", "duration": 1.0},
+                {
+                    "id": "t1",
+                    "status": "completed",
+                    "output": "out1",
+                    "duration": 1.0,
+                    "model": "m",
+                },
+                {
+                    "id": "t2",
+                    "status": "completed",
+                    "output": "out2",
+                    "duration": 1.0,
+                    "model": "m",
+                },
             ]
             plan = await delegate_tasks("Test", tasks_json, max_parallel=2)
 
@@ -460,35 +498,46 @@ class TestEndToEnd:
         assert "Job ID:" in plan
         assert "t1" in plan
         assert "t2" in plan
-        assert "collect_delegation" in plan
+        assert "check_delegation" in plan
 
     @pytest.mark.asyncio
-    async def test_collect_delegation_returns_report(self) -> None:
+    async def test_check_delegation_returns_snapshot(self) -> None:
         tasks_json = json.dumps(
             [{"id": "t1", "task": "task 1"}, {"id": "t2", "task": "task 2"}]
         )
         with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
             mock_run.side_effect = [
-                {"id": "t1", "status": "completed", "output": "out1", "duration": 1.0},
-                {"id": "t2", "status": "completed", "output": "out2", "duration": 1.0},
+                {
+                    "id": "t1",
+                    "status": "completed",
+                    "output": "out1",
+                    "duration": 1.0,
+                    "model": "m",
+                },
+                {
+                    "id": "t2",
+                    "status": "completed",
+                    "output": "out2",
+                    "duration": 1.0,
+                    "model": "m",
+                },
             ]
             plan = await delegate_tasks("Test", tasks_json, max_parallel=2)
             job_id = next(line for line in plan.splitlines() if "Job ID:" in line)
             job_id = job_id.split("`")[1]
-            report = await collect_delegation(job_id)
-
-        assert "2/2 completed" in report
-        assert "out1" in report
-        assert "out2" in report
+            snapshot = await check_delegation(job_id)
+        assert "Test" in snapshot or job_id in snapshot
 
     @pytest.mark.asyncio
-    async def test_collect_delegation_invalid_job(self) -> None:
-        result = await collect_delegation("nonexistent")
-        assert "Error:" in result
+    async def test_check_delegation_invalid_job(self) -> None:
+        result = await check_delegation("nonexistent")
         assert "nonexistent" in result
 
     @pytest.mark.asyncio
-    async def test_delegate_tasks_with_dag_two_step(self) -> None:
+    async def test_delegate_tasks_milestone_completes(self) -> None:
+        from supporter.tools.event_bus import get_bus
+        from supporter.types import MilestoneCompleted
+
         tasks_json = json.dumps(
             [
                 {"id": "a", "task": "first"},
@@ -497,13 +546,38 @@ class TestEndToEnd:
         )
         with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
             mock_run.side_effect = [
-                {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
-                {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
+                {
+                    "id": "a",
+                    "status": "completed",
+                    "output": "out_a",
+                    "duration": 1.0,
+                    "model": "m",
+                },
+                {
+                    "id": "b",
+                    "status": "completed",
+                    "output": "out_b",
+                    "duration": 1.0,
+                    "model": "m",
+                },
             ]
             plan = await delegate_tasks("DAG Test", tasks_json, max_parallel=2)
             job_id = next(line for line in plan.splitlines() if "Job ID:" in line)
             job_id = job_id.split("`")[1]
-            report = await collect_delegation(job_id)
 
-        assert "2/2 completed" in report
+            bus = get_bus(job_id)
+            queue = bus.subscribe()
+            completed_event = None
+            for _ in range(50):
+                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                if event is None:
+                    break
+                if isinstance(event, MilestoneCompleted):
+                    completed_event = event
+                    break
+
+        assert completed_event is not None
         assert "after: a" in plan
+        results = completed_event.results
+        completed = [r for r in results if r["status"] == TaskStatus.COMPLETED]
+        assert len(completed) == 2
