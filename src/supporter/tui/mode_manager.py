@@ -18,7 +18,7 @@ class ModeManager:
         from ..config import config
         from ..tools import (
             check_bash_availability,
-            collect_delegation,
+            check_delegation,
             delegate_tasks,
             execute_bash,
             notify_bash_unavailable,
@@ -30,7 +30,7 @@ class ModeManager:
             "read_file": read_file,
             "write_file": write_file,
             "delegate_tasks": delegate_tasks,
-            "collect_delegation": collect_delegation,
+            "check_delegation": check_delegation,
         }
 
         if check_bash_availability():
@@ -65,10 +65,7 @@ class ModeManager:
             )
             return
 
-        if live is not None:
-            self._app.live_mode = live
-        else:
-            self._app.live_mode = not self._app.live_mode
+        self._app.live_mode = live if live is not None else not self._app.live_mode
 
         logger.info(f"ModeManager: toggling mode — live={self._app.live_mode}")
         self._app._start_thinking()

@@ -78,6 +78,10 @@ class SupporterApp(App[None]):
         set_bash_confirmation_callback(self._confirm_bash)
         set_bash_notification_callback(self._notify_error)
 
+        from ..tools.delegate import set_delegation_start_callback
+
+        set_delegation_start_callback(self._start_delegation_listener)
+
         logger.info("Supporter TUI dashboard active")
         try:
             await self._setup_agent(use_live=True)
@@ -97,6 +101,10 @@ class SupporterApp(App[None]):
         set_confirmation_callback(None)
         set_bash_confirmation_callback(None)
         set_bash_notification_callback(None)
+
+        from ..tools.delegate import set_delegation_start_callback
+
+        set_delegation_start_callback(None)
 
         if (
             self.agent
@@ -124,6 +132,7 @@ class SupporterApp(App[None]):
                 pass
             yield QueuedMessagesDisplay(id="queue-display")
             yield ThinkingIndicator(id="thinking-indicator")
+
             with Horizontal(id="scroll-btn-wrapper", classes="hidden"):
                 yield Button("↓ Go to bottom", id="scroll-bottom-btn")
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
@@ -326,6 +335,51 @@ class SupporterApp(App[None]):
             self.call_from_thread(
                 self._toast_manager.notify, self, message, type="error"
             )
+
+    def _inject_system_message(self, text: str) -> None:
+        if self._is_processing:
+            from .chat import QueuedMessagesDisplay
+
+            self._user_message_queue.append(text)
+            self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
+                self._user_message_queue
+            )
+        else:
+            self.run_worker(self._process_message_cycle(text, mount_user=True))
+
+    def _start_delegation_listener(self, job_id: str) -> None:
+        self.run_worker(self._delegation_listener(job_id), exclusive=False)
+
+    async def _delegation_listener(self, job_id: str) -> None:
+        from ..tools.delegate import _format_results
+        from ..tools.event_bus import get_bus
+        from ..types import MilestoneCompleted, TaskAnomaly
+
+        try:
+            queue = get_bus(job_id).subscribe()
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+
+                if isinstance(event, TaskAnomaly):
+                    msg = (
+                        f"AGENT ALERT: Task `{event.task_id}` [{event.agent_label}] "
+                        f"has used {event.elapsed_seconds:.0f}s of its "
+                        f"{event.timeout:.0f}s limit and may be hung."
+                    )
+                    self.call_from_thread(self._inject_system_message, msg)
+
+                elif isinstance(event, MilestoneCompleted):
+                    report = _format_results(
+                        event.milestone, event.results, event.total_duration
+                    )
+                    msg = f"MILESTONE COMPLETE: Job `{job_id}`\n\n{report}"
+                    self.call_from_thread(self._inject_system_message, msg)
+                    break
+
+        except Exception as e:
+            logger.error(f"Delegation listener failed for {job_id}: {e}")
 
 
 def main() -> None:

@@ -334,6 +334,7 @@ def get_provider(
     shared: bool = True,
     model_name: str | None = None,
     registry: dict[str, Callable[..., Any]] | None = None,
+    pool_size: int = 2,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
@@ -386,12 +387,14 @@ def get_provider(
 
             def primary_factory() -> LLMProvider:
                 target_model = model_name or config.gemini_model
-                return DynamicPool(keys, target_model, pool_size=2)
+                return DynamicPool(keys, target_model, pool_size=pool_size)
 
             def fallback_factory() -> LLMProvider | None:
                 if not config.gemini_fallback_model:
                     return None
-                return DynamicPool(keys, config.gemini_fallback_model, pool_size=2)
+                return DynamicPool(
+                    keys, config.gemini_fallback_model, pool_size=pool_size
+                )
 
             provider = LazyFallbackProvider(primary_factory, fallback_factory)
 
