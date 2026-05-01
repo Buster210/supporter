@@ -16,6 +16,24 @@ TIER1_BINARIES = {
     "ps",
     "df",
     "uptime",
+    "mkdir",
+    "touch",
+    "cp",
+    "uname",
+    "env",
+    "sort",
+    "uniq",
+    "diff",
+    "find",
+    "du",
+    "stat",
+    "sed",
+    "awk",
+    "tar",
+    "zip",
+    "unzip",
+    "gzip",
+    "ln",
 }
 
 TIER3_BINARIES = {
@@ -150,6 +168,27 @@ PACKAGE_MANAGERS = {
     "gem",
 }
 
+TIER1_GIT_SUBCOMMANDS = {
+    "add",
+    "branch",
+    "describe",
+    "diff",
+    "fetch",
+    "log",
+    "ls-files",
+    "remote",
+    "rev-parse",
+    "shortlog",
+    "show",
+    "stash",
+    "status",
+    "commit",
+    "checkout",
+    "merge",
+    "push",
+    "pull",
+}
+
 INTERPRETERS = {"python", "python3", "node", "js", "bash", "sh", "perl", "ruby"}
 
 RM_NUCLEAR_PATHS = {"/", "/usr", "/bin", "/etc", "/var", "/home", "/root"}
@@ -235,4 +274,23 @@ TIER3_PYTHON_MODULES = {
     "zlib",
     "bz2",
     "lzma",
+}
+
+HIGH_RISK_TIER2_BINARIES = {
+    "chmod",
+    "mv",
+    "rm",
+    "rmdir",
+    "kill",
+    "pkill",
+    "nice",
+    "renice",
+    "top",
+    "htop",
+    "lsof",
+    "ssh-keygen",
+    "curl",
+    "wget",
+    "xargs",
+    "parallel",
 }

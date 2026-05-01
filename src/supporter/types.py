@@ -1,9 +1,21 @@
+from __future__ import annotations
+
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol, TypedDict
 
 from google.genai.types import Content, GenerateContentConfig, Tool
 from textual.message import Message
+
+
+class TaskStatus(StrEnum):
+    COMPLETED = "completed"
+    TIMEOUT = "timeout"
+    SKIPPED = "skipped"
+    ERROR = "error"
+    STARTED = "started"
+    PENDING = "pending"
 
 
 class LLMOptions(TypedDict, total=False):
@@ -53,10 +65,10 @@ class AppConfig:
     delegate_max_timeout: int
     delegate_max_tasks: int
     delegate_max_output_chars: int
-    delegate_heartbeat_interval: float
     delegate_allowed_tools: set[str]
     delegate_default_persona: str
     delegate_agent_roster: dict[str, dict[str, Any]]
+    delegate_max_retries: int
 
 
 @dataclass
@@ -110,3 +122,78 @@ class LLMProvider(Protocol):
     ) -> AsyncIterator[LLMChunk]: ...
 
     def get_name(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class DelegationEvent:
+    job_id: str
+
+
+@dataclass(frozen=True)
+class MilestoneStarted(DelegationEvent):
+    milestone: str
+    task_ids: list[str]
+    parallel_cap: int
+
+
+@dataclass(frozen=True)
+class MilestoneCompleted(DelegationEvent):
+    milestone: str
+    results: list[dict[str, Any]]
+    total_duration: float
+
+
+@dataclass(frozen=True)
+class TaskStarted(DelegationEvent):
+    task_id: str
+    agent_label: str
+    started_at: float
+    timeout: float
+
+
+@dataclass(frozen=True)
+class TaskCompleted(DelegationEvent):
+    task_id: str
+    duration: float
+    output: str
+    model: str
+
+
+@dataclass(frozen=True)
+class TaskFailed(DelegationEvent):
+    task_id: str
+    duration: float
+    error: str
+
+
+@dataclass(frozen=True)
+class TaskTimedOut(DelegationEvent):
+    task_id: str
+    duration: float
+
+
+@dataclass(frozen=True)
+class TaskSkipped(DelegationEvent):
+    task_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class TaskRetrying(DelegationEvent):
+    task_id: str
+    attempt: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class HeartbeatTick(DelegationEvent):
+    milestone: str
+    snapshot: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class TaskAnomaly(DelegationEvent):
+    task_id: str
+    agent_label: str
+    elapsed_seconds: float
+    timeout: float

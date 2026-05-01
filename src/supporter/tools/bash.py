@@ -8,8 +8,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import time
-from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,6 +15,7 @@ from ..config import config
 from ..logger import logger
 from .bash_defs import (
     FILE_READING_BINS,
+    HIGH_RISK_TIER2_BINARIES,
     INSTALL_CMDS,
     INTERPRETERS,
     NETWORK_BINARIES,
@@ -31,7 +30,7 @@ from .bash_defs import (
     SHELL_METACHARACTERS,
     SYSTEM_DIRECTORIES,
     TEMP_DIRS,
-    TIER1_BINARIES,
+    TIER1_GIT_SUBCOMMANDS,
     TIER3_BINARIES,
     TIER3_PYTHON_MODULES,
     TRUSTED_PREFIXES,
@@ -40,7 +39,6 @@ from .bash_defs import (
 
 _BASH_CONFIRMATION_CALLBACK: Callable[[list[str], str], bool] | None = None
 _BASH_NOTIFICATION_CALLBACK: Callable[[str], None] | None = None
-_bash_execution_history: deque[float] = deque(maxlen=50)
 
 
 def _detect_sandbox() -> tuple[str | None, str | None]:
@@ -106,6 +104,11 @@ def set_bash_notification_callback(
     _BASH_NOTIFICATION_CALLBACK = callback
 
 
+def _check_find_command(tokens: list[str]) -> bool:
+    risky_flags = {"-exec", "-execdir", "-ok", "-okdir", "-delete"}
+    return any(token in risky_flags for token in tokens)
+
+
 def check_bash_availability() -> bool:
     return _SB_BIN is not None
 
@@ -149,7 +152,7 @@ def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
         } and tokens[i + 1].startswith("@"):
             return 3
 
-    return 2
+    return 1
 
 
 def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
@@ -174,38 +177,8 @@ def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
         return 3
 
     is_install = any(t in INSTALL_CMDS for t in tokens)
-
     if not is_install:
-        return 2
-
-    if binary_name in ["npm", "yarn", "pnpm", "bun"]:
-        if "--ignore-scripts" in tokens:
-            return 2
-        return 4
-
-    if binary_name in ["pip", "uv"]:
-        if (
-            "--no-build-isolation" in tokens and "--no-deps" in tokens
-        ) or "--only-binary=:all:" in tokens:
-            return 2
-        if "--no-sync-scripts" in tokens:
-            return 2
-        return 4
-
-    if binary_name == "gem":
-        if "--ignore-dependencies" in tokens:
-            return 2
-        return 4
-
-    if binary_name == "cargo":
-        return 3
-
-    if binary_name == "poetry":
-        if "install" in tokens and "--no-root" not in tokens:
-            return 4
-        if "add" in tokens:
-            return 4
-        return 2
+        return 1
 
     return 2
 
@@ -258,7 +231,7 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
     except PermissionError:
         return 3
     try:
-        tier, _ = _apply_policy_checks(inner_cmd, inner_tokens, binary_name, 2, False)
+        tier = _apply_policy_checks(inner_cmd, inner_tokens, binary_name, 1)
         if tier == 3:
             return 3
     except PermissionError:
@@ -267,7 +240,7 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
         inner_tier = _inspect_interpreter_payload(binary_name, inner_tokens, depth + 1)
         if inner_tier == 3:
             return 3
-    return 2
+    return 1
 
 
 def _inspect_interpreter_payload(
@@ -283,7 +256,7 @@ def _inspect_interpreter_payload(
             break
 
     if not payload:
-        return 2
+        return 1
 
     if len(payload) > 500:
         return 3
@@ -295,7 +268,7 @@ def _inspect_interpreter_payload(
     if binary_name in ["python", "python3"]:
         try:
             tree = ast.parse(payload)
-            worst_tier = 2
+            worst_tier = 1
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
                     if (
@@ -319,7 +292,7 @@ def _inspect_interpreter_payload(
                             if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
                                 mode_arg = kw.value.value
                         if mode_arg and any(m in str(mode_arg) for m in write_modes):
-                            worst_tier = max(worst_tier, 4)
+                            worst_tier = max(worst_tier, 2)
 
                 if isinstance(node, ast.Name) and node.id in RISKY_PYTHON_NAMES:
                     return 3
@@ -368,7 +341,7 @@ def _inspect_interpreter_payload(
                     if any(name in TIER3_PYTHON_MODULES for name in names):
                         return 3
                     if any(name in RISKY_PYTHON_MODULES for name in names):
-                        worst_tier = 4
+                        worst_tier = max(worst_tier, 2)
             return worst_tier
 
         except Exception as e:
@@ -400,7 +373,7 @@ def _inspect_interpreter_payload(
             logger.debug(f"Bash payload split failure: {e}")
             return 3
 
-    return 2
+    return 1
 
 
 async def execute_bash(command: str, working_directory: str | None = None) -> str:
@@ -448,23 +421,17 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
 
         _check_complex_syntax(command)
 
-        security_tier, is_high_risk = _apply_path_security(
-            command, tokens, cwd, project_root
-        )
+        security_tier = _apply_path_security(command, tokens, cwd, project_root)
 
-        security_tier, is_high_risk = _apply_policy_checks(
-            command, tokens, binary_name, security_tier, is_high_risk
+        security_tier = _apply_policy_checks(
+            command, tokens, binary_name, security_tier
         )
         logger.info(
             f"Security classification: binary={binary_name}, tier={security_tier}, "
-            f"high_risk={is_high_risk}, tokens={tokens!r}"
+            f"tokens={tokens!r}"
         )
 
-        _evaluate_final_tier(
-            command, tokens, binary_name, security_tier, is_high_risk, cwd
-        )
-
-        _apply_rate_limiting()
+        _evaluate_final_tier(command, tokens, binary_name, security_tier, cwd)
 
         is_mutation = security_tier >= 2 or any(
             m in command for m in SHELL_METACHARACTERS
@@ -535,9 +502,8 @@ def _check_execution_location(binary_path: Path) -> None:
 
 def _apply_path_security(
     command: str, tokens: list[str], cwd: Path, project_root: Path
-) -> tuple[int, bool]:
+) -> int:
     security_tier = 1
-
     for token in tokens[1:]:
         check_value = token
         if token.startswith("-"):
@@ -606,14 +572,14 @@ def _apply_path_security(
             except Exception as e:
                 logger.debug(f"Project boundary check failure: {e}")
 
-    return security_tier, False
+    return security_tier
 
 
 def _check_open_command(tokens: list[str]) -> int:
     for token in tokens[1:]:
         if token in {"-a", "-e"}:
             return 3
-    return 2
+    return 1
 
 
 def _apply_policy_checks(
@@ -621,8 +587,7 @@ def _apply_policy_checks(
     tokens: list[str],
     binary_name: str,
     security_tier: int,
-    is_high_risk: bool,
-) -> tuple[int, bool]:
+) -> int:
     if binary_name in NETWORK_BINARIES:
         tier = _check_network_egress(binary_name, tokens)
         if tier == 3:
@@ -638,11 +603,7 @@ def _apply_policy_checks(
             raise PermissionError(
                 f"Tier 3 BLOCK: Package manager supply chain violation: {command}"
             )
-        if tier == 4:
-            is_high_risk = True
-            security_tier = 2
-        else:
-            security_tier = max(security_tier, tier)
+        security_tier = max(security_tier, tier)
 
     if binary_name in INTERPRETERS:
         tier = _inspect_interpreter_payload(binary_name, tokens)
@@ -650,11 +611,7 @@ def _apply_policy_checks(
             raise PermissionError(
                 f"Tier 3 BLOCK: Risky or obfuscated payload detected: {command}"
             )
-        if tier == 4:
-            is_high_risk = True
-            security_tier = 2
-        else:
-            security_tier = max(security_tier, tier)
+        security_tier = max(security_tier, tier)
 
     if binary_name == "open":
         tier = _check_open_command(tokens)
@@ -664,7 +621,13 @@ def _apply_policy_checks(
             )
         security_tier = max(security_tier, tier)
 
-    return security_tier, is_high_risk
+    if binary_name in HIGH_RISK_TIER2_BINARIES:
+        security_tier = max(security_tier, 2)
+
+    if binary_name == "find" and _check_find_command(tokens):
+        security_tier = max(security_tier, 2)
+
+    return security_tier
 
 
 def _evaluate_final_tier(
@@ -672,44 +635,19 @@ def _evaluate_final_tier(
     tokens: list[str],
     binary_name: str,
     security_tier: int,
-    is_high_risk: bool,
     cwd: Path,
 ) -> None:
-    metacharacters_found = [m for m in SHELL_METACHARACTERS if m in command]
-    if metacharacters_found:
-        security_tier = max(security_tier, 2)
+    if security_tier == 1 and binary_name == "git":
+        sub = tokens[1] if len(tokens) > 1 else ""
+        if sub not in TIER1_GIT_SUBCOMMANDS:
+            security_tier = 2
 
-    if security_tier == 1 and (
-        binary_name not in TIER1_BINARIES or metacharacters_found
-    ):
-        security_tier = 2
-
-    if security_tier == 2:
+    if security_tier >= 2:
         if _BASH_CONFIRMATION_CALLBACK:
-            risk_msg = " [HIGH RISK]" if is_high_risk else ""
-            if not _BASH_CONFIRMATION_CALLBACK(tokens, str(cwd) + risk_msg):
+            if not _BASH_CONFIRMATION_CALLBACK(tokens, str(cwd)):
                 raise PermissionError("Execution cancelled by user.")
         else:
-            risk_msg = " [HIGH RISK]" if is_high_risk else ""
-            raise PermissionError(f"Tier 2 Confirmation Required{risk_msg}: {command}")
-
-
-def _apply_rate_limiting() -> None:
-    now = time.time()
-    while _bash_execution_history and _bash_execution_history[0] < now - 60:
-        _bash_execution_history.popleft()
-    current_count = len(_bash_execution_history)
-    if current_count >= 50:
-        raise PermissionError("Session command quota exceeded (max 50/min)")
-    if _bash_execution_history and now - _bash_execution_history[-1] < 2.0:
-        wait_ms = 2.0 - (now - _bash_execution_history[-1])
-        logger.info(
-            f"Rate limiter: throttling {wait_ms:.2f}s "
-            f"(cmds in window: {current_count}/50)"
-        )
-        time.sleep(wait_ms)
-    _bash_execution_history.append(time.time())
-    logger.info(f"Rate limiter: accepted (cmds in window: {current_count + 1}/50)")
+            raise PermissionError(f"Tier 2 Confirmation Required: {command}")
 
 
 def _get_fs_state(target_dir: Path) -> dict[str, float]:

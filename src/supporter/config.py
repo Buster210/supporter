@@ -98,8 +98,13 @@ DELEGATE_DEFAULT_TIMEOUT = 180
 DELEGATE_MAX_TIMEOUT = 600
 DELEGATE_MAX_TASKS = 10
 DELEGATE_MAX_OUTPUT_CHARS = 10000
-DELEGATE_HEARTBEAT_INTERVAL = 30.0
 DELEGATE_ALLOWED_TOOLS = {"read_file", "write_file", "execute_bash", "google_search"}
+DELEGATE_MAX_RETRIES = 2
+
+DELEGATE_HEARTBEAT_INTERVAL = 30
+DELEGATE_ANOMALY_THRESHOLD = 0.8
+DELEGATE_JOB_ID_LEN = 8
+DELEGATE_RETRY_BACKOFF = [1.0, 3.0]
 
 DELEGATE_DEFAULT_PERSONA = (
     "You are a focused task executor. You have been delegated a specific sub-task. "
@@ -269,7 +274,7 @@ def load_config() -> AppConfig:
             "REQUIRE_WRITE_CONFIRMATION", "true"
         ).lower()
         == "true",
-        live_thinking_level=os.getenv("GEMINI_LIVE_THINKING_LEVEL", "medium").lower(),
+        live_thinking_level=os.getenv("GEMINI_LIVE_THINKING_LEVEL", "high").lower(),
         retriable_codes=RETRIABLE_CODES,
         google_5xx_errors=GOOGLE_5XX_ERRORS,
         transient_signals=TRANSIENT_SIGNALS,
@@ -278,17 +283,21 @@ def load_config() -> AppConfig:
         drain_timeout=DRAIN_TIMEOUT,
         context_trigger_tokens=CONTEXT_TRIGGER_TOKENS,
         context_target_tokens=CONTEXT_TARGET_TOKENS,
-        http_retry_attempts=int(os.getenv("HTTP_RETRY_ATTEMPTS", HTTP_RETRY_ATTEMPTS)),
+        http_retry_attempts=int(
+            os.getenv("HTTP_RETRY_ATTEMPTS", str(HTTP_RETRY_ATTEMPTS))
+        ),
         delegate_max_hard_cap=DELEGATE_MAX_HARD_CAP,
         delegate_default_parallel=DELEGATE_DEFAULT_PARALLEL,
         delegate_default_timeout=DELEGATE_DEFAULT_TIMEOUT,
         delegate_max_timeout=DELEGATE_MAX_TIMEOUT,
         delegate_max_tasks=DELEGATE_MAX_TASKS,
         delegate_max_output_chars=DELEGATE_MAX_OUTPUT_CHARS,
-        delegate_heartbeat_interval=DELEGATE_HEARTBEAT_INTERVAL,
         delegate_allowed_tools=DELEGATE_ALLOWED_TOOLS,
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
+        delegate_max_retries=int(
+            os.getenv("DELEGATE_MAX_RETRIES", str(DELEGATE_MAX_RETRIES))
+        ),
     )
 
 

@@ -135,7 +135,6 @@ class TestAppConfig:
             delegate_max_timeout=600,
             delegate_max_tasks=10,
             delegate_max_output_chars=10000,
-            delegate_heartbeat_interval=30.0,
             delegate_allowed_tools={
                 "read_file",
                 "write_file",
@@ -144,6 +143,7 @@ class TestAppConfig:
             },
             delegate_default_persona="Default persona",
             delegate_agent_roster={},
+            delegate_max_retries=2,
         )
         assert config.log_level == "DEBUG"
         assert config.provider == "gemini"
