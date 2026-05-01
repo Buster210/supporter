@@ -594,6 +594,22 @@ async def _run_milestone(
 
 
 async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> str:
+    """Orchestrates background sub-agents to complete a complex milestone.
+
+    Args:
+        milestone: A brief label for the overall objective.
+        tasks: A JSON string representing a list of task objects.
+            EACH task object MUST include:
+            - id: A unique string identifier (e.g., "t1", "analyze_file").
+            - task: Detailed instructions for the sub-agent.
+            - agent: (Optional) Role from the roster (e.g., "scout", "code_writer").
+            - depends_on: (Optional) List of task IDs to wait for.
+            Example: '[{"id": "t1", "agent": "scout", "task": "map src/app.py"}]'
+        max_parallel: Max number of agents to run at once (Default: 3).
+
+    Returns:
+        A job confirmation message with a JOB_ID.
+    """
     logger.info(f"Tool: delegate_tasks -- milestone='{milestone}'")
     try:
         validated_tasks = _validate_tasks(tasks)
@@ -660,6 +676,10 @@ async def delegate_tasks(milestone: str, tasks: str, max_parallel: int = 3) -> s
 
 async def check_delegation(job_id: str) -> str:
     """Non-blocking snapshot of the current job state.
+
+    IMPORTANT: Do not call this immediately after starting a delegation.
+    It takes a few seconds for agents to initialize and report their first
+    status. Wait for at least one heartbeat or progress update.
 
     Returns immediately with a Markdown table showing every task's current
     status, agent, and elapsed / total duration. Never blocks the caller.

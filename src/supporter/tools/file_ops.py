@@ -66,6 +66,9 @@ def _validate_path(path: str) -> Path:
         )
 
     relative_path = str(target_path.relative_to(project_root))
+    if relative_path == config.log_file:
+        return target_path
+
     if _is_blacklisted(relative_path):
         raise PermissionError(
             f"Access denied: {relative_path} is a protected internal file."

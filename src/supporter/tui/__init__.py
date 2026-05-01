@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -326,15 +327,18 @@ class SupporterApp(App[None]):
         event.wait()
         return result[0]
 
-    def _notify_error(self, message: str) -> None:
+    def _safe_call(
+        self, callback: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> None:
         import threading
 
         if threading.current_thread() is threading.main_thread():
-            self._toast_manager.notify(self, message, type="error")
+            callback(*args, **kwargs)
         else:
-            self.call_from_thread(
-                self._toast_manager.notify, self, message, type="error"
-            )
+            self.call_from_thread(callback, *args, **kwargs)
+
+    def _notify_error(self, message: str) -> None:
+        self._safe_call(self._toast_manager.notify, self, message, type="error")
 
     def _inject_system_message(self, text: str) -> None:
         if self._is_processing:
@@ -368,14 +372,14 @@ class SupporterApp(App[None]):
                         f"has used {event.elapsed_seconds:.0f}s of its "
                         f"{event.timeout:.0f}s limit and may be hung."
                     )
-                    self.call_from_thread(self._inject_system_message, msg)
+                    self._safe_call(self._inject_system_message, msg)
 
                 elif isinstance(event, MilestoneCompleted):
                     report = _format_results(
                         event.milestone, event.results, event.total_duration
                     )
                     msg = f"MILESTONE COMPLETE: Job `{job_id}`\n\n{report}"
-                    self.call_from_thread(self._inject_system_message, msg)
+                    self._safe_call(self._inject_system_message, msg)
                     break
 
         except Exception as e:

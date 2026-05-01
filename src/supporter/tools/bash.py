@@ -378,8 +378,16 @@ def _inspect_interpreter_payload(
 
 async def execute_bash(command: str, working_directory: str | None = None) -> str:
     """Executes a shell command in a sandboxed, restricted environment.
+
+    IMPORTANT: Only use safe and simple commands. Unsafe or overly complex
+    commands will be blocked by the security gate. Avoid piping, clubbing
+    (&&, ||, ;), or command substitution ($(), ``).
+
+    If a command is blocked, do not treat it as a task failure. Instead,
+    try decomposing the operation into multiple simpler commands.
+
     Args:
-        command: Shell command to execute.
+        command: Shell command to execute (must be safe and simple).
         working_directory: Optional execution cwd (defaults to project root).
     Returns:
         Command stdout/stderr combined, or error message.
