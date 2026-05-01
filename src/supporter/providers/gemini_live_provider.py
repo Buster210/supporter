@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 from google.genai.types import Content
 
-from ..config import DEFAULT_SYSTEM_INSTRUCTION, config
+from ..config import config
 from ..logger import logger
 from ..tools.search import google_search
 from ..types import (
@@ -27,6 +27,8 @@ class GeminiLiveProvider:
         model_name: str | None = None,
         tools: list[Any] | None = None,
         registry: dict[str, Callable[..., Any]] | None = None,
+        system_instruction: str | None = None,
+        include_thoughts: bool | None = None,
     ):
         self.api_keys = api_keys
         self.model_name = model_name or config.gemini_live_model
@@ -34,6 +36,14 @@ class GeminiLiveProvider:
         self.client = genai.Client(api_key=self.api_keys[0])
         self.tools = list(tools) if tools else []
         self.registry = dict(registry) if registry else {}
+        self.system_instruction = (
+            system_instruction or config.default_system_instruction
+        )
+        self.include_thoughts = (
+            include_thoughts
+            if include_thoughts is not None
+            else config.live_thinking_level.lower() != "none"
+        )
 
         self._session: Any = None
         self._session_manager: Any = None
@@ -66,37 +76,53 @@ class GeminiLiveProvider:
         return final_tools
 
     def _get_session_config(self) -> types.LiveConnectConfig:
-        return types.LiveConnectConfig(
-            response_modalities=[types.Modality.AUDIO],
-            system_instruction=types.Content(
-                parts=[types.Part(text=DEFAULT_SYSTEM_INSTRUCTION)]
-            ),
-            speech_config=types.SpeechConfig(
+        config_kwargs: dict[str, Any] = {
+            "response_modalities": [types.Modality.AUDIO],
+            "system_instruction": types.Content(
+                parts=[types.Part(text=self.system_instruction)]
+            )
+            if self.system_instruction
+            else None,
+            "speech_config": types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
                         voice_name=config.voice_name,
                     )
                 )
             ),
-            thinking_config=types.ThinkingConfig(
+            "context_window_compression": types.ContextWindowCompressionConfig(
+                trigger_tokens=config.context_trigger_tokens,
+                sliding_window=types.SlidingWindow(
+                    target_tokens=config.context_target_tokens
+                ),
+            ),
+            "session_resumption": types.SessionResumptionConfig(
+                handle=self._session_handle,
+            ),
+            "tools": self._resolve_tools(),
+        }
+
+        if self.include_thoughts:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
                 include_thoughts=True,
                 thinking_level=getattr(
                     types.ThinkingLevel,
                     config.live_thinking_level.upper(),
                     types.ThinkingLevel.MEDIUM,
                 ),
-            ),
-            context_window_compression=types.ContextWindowCompressionConfig(
-                trigger_tokens=config.context_trigger_tokens,
-                sliding_window=types.SlidingWindow(
-                    target_tokens=config.context_target_tokens
-                ),
-            ),
-            session_resumption=types.SessionResumptionConfig(
-                handle=self._session_handle,
-            ),
-            tools=self._resolve_tools(),
-        )
+            )
+
+        return types.LiveConnectConfig(**config_kwargs)
+
+    async def warmup(self) -> None:
+
+        try:
+            await self._ensure_session()
+            logger.info(f"GeminiLiveProvider: Warmup successful for {self.model_name}")
+        except Exception as e:
+            logger.warning(
+                f"GeminiLiveProvider: Warmup failed for {self.model_name}: {e}"
+            )
 
     async def _ensure_session(self) -> Any:
         async with self._session_lock:
@@ -125,7 +151,10 @@ class GeminiLiveProvider:
                 except Exception as error:
                     error_detail = str(error).lower()
                     if (
-                        any(code in error_detail for code in config.retriable_codes)
+                        any(
+                            code in error_detail
+                            for code in config.retriable_error_strings
+                        )
                         and attempt < len(self.api_keys) - 1
                     ):
                         logger.info(

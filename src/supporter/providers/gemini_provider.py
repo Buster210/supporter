@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import re
 import time
 from collections.abc import AsyncIterator, Callable
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
     from google.genai.types import Content
 
 
-from ..config import DEFAULT_SYSTEM_INSTRUCTION, config
+from ..config import config
 from ..logger import logger
 from ..tools.search import google_search
 from ..types import (
@@ -82,13 +83,15 @@ class GeminiProvider:
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.info(
-                f"Tool '{name}' invoked (async): args={args!r}, kwargs={kwargs!r}"
-            )
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    f"Tool '{name}' invoked (async): args={args!r}, kwargs={kwargs!r}"
+                )
             try:
                 result = await func(*args, **kwargs)
                 logger.info(f"Tool '{name}' completed successfully")
-                logger.debug(f"Tool '{name}' full result: {result!r}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Tool '{name}' full result: {result!r}")
                 return result
             except Exception as e:
                 logger.error(f"Async tool '{name}' failed [{type(e).__name__}]: {e}")
@@ -96,13 +99,15 @@ class GeminiProvider:
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            logger.info(
-                f"Tool '{name}' invoked (sync): args={args!r}, kwargs={kwargs!r}"
-            )
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    f"Tool '{name}' invoked (sync): args={args!r}, kwargs={kwargs!r}"
+                )
             try:
                 result = func(*args, **kwargs)
                 logger.info(f"Tool '{name}' completed successfully")
-                logger.debug(f"Tool '{name}' full result: {result!r}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Tool '{name}' full result: {result!r}")
                 return result
             except Exception as e:
                 logger.error(f"Sync tool '{name}' failed [{type(e).__name__}]: {e}")
@@ -190,7 +195,7 @@ class GeminiProvider:
 
         generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
-            or DEFAULT_SYSTEM_INSTRUCTION,
+            or config.default_system_instruction,
             temperature=options.get("temperature"),
             top_p=options.get("top_p"),
             top_k=options.get("top_k"),
@@ -213,9 +218,12 @@ class GeminiProvider:
             f"generate(): model={self.model_name}, history_turns={len(history)}, "
             f"tools={len(transformed_tools) if transformed_tools else 0}"
         )
-        sys_inst = options.get("system_instruction") or DEFAULT_SYSTEM_INSTRUCTION
-        logger.debug(f"generate() system_instruction: {sys_inst}")
-        logger.debug(f"generate() context options: {options!r}")
+        if logger.isEnabledFor(logging.DEBUG):
+            sys_inst = (
+                options.get("system_instruction") or config.default_system_instruction
+            )
+            logger.debug(f"generate() system_instruction: {sys_inst}")
+            logger.debug(f"generate() context options: {options!r}")
         result: Any = None
 
         if interaction_id:
@@ -280,7 +288,7 @@ class GeminiProvider:
             f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
             f"completion_tokens={usage.get('completion_tokens', '?')}"
         )
-        if result.candidates:
+        if result.candidates and logger.isEnabledFor(logging.DEBUG):
             cand = result.candidates[0]
             logger.debug(f"generate() candidate[0] parts: {cand.content.parts!r}")
             meta = getattr(cand, "grounding_metadata", None)
@@ -310,7 +318,7 @@ class GeminiProvider:
         transformed_tools = self._transform_tools(options)
         generation_config = GenerateContentConfig(
             system_instruction=options.get("system_instruction")
-            or DEFAULT_SYSTEM_INSTRUCTION,
+            or config.default_system_instruction,
             tools=transformed_tools,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
                 disable=False
