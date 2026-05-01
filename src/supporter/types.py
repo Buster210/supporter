@@ -50,11 +50,11 @@ class AppConfig:
     allowed_directories: list[str]
     require_write_confirmation: bool
     live_thinking_level: str
-    retriable_codes: set[str]
-    google_5xx_errors: set[str]
-    transient_signals: set[str]
-    http_errors_5xx: set[int]
-    rate_limit_signals: set[str]
+    retriable_error_strings: set[str]
+    google_api_5xx_exceptions: set[str]
+    transient_error_strings: set[str]
+    http_5xx_status_codes: set[int]
+    rate_limit_error_strings: set[str]
     drain_timeout: float
     context_trigger_tokens: int
     context_target_tokens: int
@@ -69,6 +69,9 @@ class AppConfig:
     delegate_default_persona: str
     delegate_agent_roster: dict[str, dict[str, Any]]
     delegate_max_retries: int
+    log_max_bytes: int = 5_000_000
+    log_backup_count: int = 3
+    history_max_turns: int = 200
 
 
 @dataclass
@@ -140,6 +143,12 @@ class MilestoneStarted(DelegationEvent):
 class MilestoneCompleted(DelegationEvent):
     milestone: str
     results: list[dict[str, Any]]
+    total_duration: float
+
+
+@dataclass(frozen=True)
+class MilestoneCancelled(DelegationEvent):
+    milestone: str
     total_duration: float
 
 

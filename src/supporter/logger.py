@@ -5,6 +5,7 @@ import sys
 import traceback
 from collections import deque
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from .config import config
@@ -24,7 +25,7 @@ def _record(level_name: str, message: str) -> None:
     _FLIGHT_RECORDER.append((ts, level_name, message))
 
 
-def _dump_flight_recorder(file_handler: logging.FileHandler | None) -> None:
+def _dump_flight_recorder(file_handler: RotatingFileHandler | None) -> None:
     if file_handler is None:
         return
     sep = "=" * 72
@@ -60,7 +61,7 @@ class SupporterFormatter(logging.Formatter):
 
 logging.getLogger().setLevel(logging.CRITICAL)
 
-_file_handler: logging.FileHandler | None = None
+_file_handler: RotatingFileHandler | None = None
 
 
 class _FlightRecorderLogger:
@@ -105,9 +106,12 @@ def init_logger() -> None:
     global _file_handler
 
     try:
-        with open(config.log_file, "w") as f:
-            f.write("")
-        fh = logging.FileHandler(config.log_file)
+        fh = RotatingFileHandler(
+            config.log_file,
+            mode="a",
+            maxBytes=config.log_max_bytes,
+            backupCount=config.log_backup_count,
+        )
         fh.setFormatter(SupporterFormatter())
 
         supporter_logger = logging.getLogger("supporter")

@@ -43,6 +43,7 @@ MODAL_PADDING = 6
 BASH_MODAL_MAX_WIDTH = 80
 SCROLL_STEP = 5
 COLLAPSED_SUMMARY_LEN = 50
+RENDER_COALESCE_INTERVAL = 0.08
 MARKDOWN_SYNTAX_MARKERS = [
     r"[*+-]\s",
     r"\d+\.\s",
@@ -65,18 +66,18 @@ INTERNAL_BLACKLIST = [
 
 DEFAULT_MODEL = "gemma-4-31b-it"
 
-RETRIABLE_CODES = {
+RATE_LIMIT_ERROR_STRINGS = {"quota", "too many requests", "429"}
+
+RETRIABLE_ERROR_STRINGS = {
     "1000",
     "1006",
     "1011",
     "1007",
     "1008",
-    "429",
-    "quota",
     "exhausted",
-}
+} | RATE_LIMIT_ERROR_STRINGS
 
-GOOGLE_5XX_ERRORS = {
+GOOGLE_API_5XX_EXCEPTIONS = {
     "InternalServerError",
     "ServiceUnavailable",
     "BadGateway",
@@ -84,9 +85,13 @@ GOOGLE_5XX_ERRORS = {
     "APIError",
 }
 
-TRANSIENT_SIGNALS = {"unavailable", "overloaded", "internal error", "service level"}
-HTTP_ERRORS_5XX = {HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR}
-RATE_LIMIT_SIGNALS = {"quota", "too many requests", "429"}
+TRANSIENT_ERROR_STRINGS = {
+    "unavailable",
+    "overloaded",
+    "internal error",
+    "service level",
+}
+HTTP_5XX_STATUS_CODES = {HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR, 502, 504}
 
 DRAIN_TIMEOUT = 2.0
 CONTEXT_TRIGGER_TOKENS = 100_000
@@ -187,7 +192,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "## THE GOLDEN RULE: Always Delegate\n"
     "Count the independent steps needed to fulfill the request:\n\n"
     "**DELEGATE immediately:**\n"
-    "- Every tasks should be delegated even if its one step.\n\n"
+    "- Every task should be delegated even if it is one step.\n\n"
     "- Read multiple files -> delegate parallel reads\n"
     "- Analyze then fix -> delegate with depends_on\n"
     "- Edit across multiple files -> delegate to code_writer(s)\n"
@@ -204,14 +209,11 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "  -> Sub-agents are now running in the background.\n"
     "  -> DO NOT call check_delegation immediately; wait for progress updates.\n\n"
     "STEP 2: Narrate to the user BEFORE collecting. Use this format:\n"
-    "  ---\n"
     "  Delegating **[milestone]** to [N] sub-agent(s):\n"
     "  | # | Agent | Task |\n"
     "  | - | ----- | ---- |\n"
     "  | 1 | [role] | [summary] |\n"
-    "  [parallel/sequential explanation]\n"
-    "  Waiting for them to complete...\n"
-    "  ---\n\n"
+    "  [parallel/sequential explanation]\n\n"
     "STEP 3: Call collect_delegation(job_id=<id from step 1>)\n"
     "  -> Blocks until all sub-agents finish.\n"
     "  -> Returns the full milestone report.\n\n"
@@ -290,11 +292,11 @@ def load_config() -> AppConfig:
         ).lower()
         == "true",
         live_thinking_level=os.getenv("GEMINI_LIVE_THINKING_LEVEL", "high").lower(),
-        retriable_codes=RETRIABLE_CODES,
-        google_5xx_errors=GOOGLE_5XX_ERRORS,
-        transient_signals=TRANSIENT_SIGNALS,
-        http_errors_5xx=HTTP_ERRORS_5XX,
-        rate_limit_signals=RATE_LIMIT_SIGNALS,
+        retriable_error_strings=RETRIABLE_ERROR_STRINGS,
+        google_api_5xx_exceptions=GOOGLE_API_5XX_EXCEPTIONS,
+        transient_error_strings=TRANSIENT_ERROR_STRINGS,
+        http_5xx_status_codes=HTTP_5XX_STATUS_CODES,
+        rate_limit_error_strings=RATE_LIMIT_ERROR_STRINGS,
         drain_timeout=DRAIN_TIMEOUT,
         context_trigger_tokens=CONTEXT_TRIGGER_TOKENS,
         context_target_tokens=CONTEXT_TARGET_TOKENS,
@@ -313,6 +315,9 @@ def load_config() -> AppConfig:
         delegate_max_retries=int(
             os.getenv("DELEGATE_MAX_RETRIES", str(DELEGATE_MAX_RETRIES))
         ),
+        log_max_bytes=int(os.getenv("LOG_MAX_BYTES", "5000000")),
+        log_backup_count=int(os.getenv("LOG_BACKUP_COUNT", "3")),
+        history_max_turns=int(os.getenv("HISTORY_MAX_TURNS", "200")),
     )
 
 
