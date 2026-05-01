@@ -3,7 +3,10 @@ from unittest.mock import patch
 
 import pytest
 
-from supporter.tools.file_ops import read_file, write_file
+from supporter.tools.file_ops import (
+    read_file,
+    write_file,
+)
 
 
 @pytest.fixture

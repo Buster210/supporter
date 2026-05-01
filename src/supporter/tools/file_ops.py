@@ -114,7 +114,7 @@ async def read_file(
                 return content
             content = f.read()
             logger.debug(f"read_file full content: {content!r}")
-            return content
+        return content
 
     try:
         return await asyncio.to_thread(_sync_read)

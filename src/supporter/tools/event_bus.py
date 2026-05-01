@@ -9,6 +9,7 @@ _REGISTRY: dict[str, "DelegationBus"] = {}
 class DelegationBus:
     def __init__(self, milestone: str) -> None:
         self.milestone = milestone
+        self.notify_per_task = False
         self._subscribers: list[asyncio.Queue[DelegationEvent | None]] = []
         self._final_event: MilestoneCompleted | None = None
         self._task_states: dict[str, dict[str, Any]] = {}
@@ -32,6 +33,7 @@ class DelegationBus:
         for q in self._subscribers:
             q.put_nowait(None)
         self._subscribers.clear()
+        self._task_states.clear()
 
     def update_task_state(self, task_id: str, state: dict[str, Any]) -> None:
         self._task_states[task_id] = state
@@ -41,13 +43,17 @@ class DelegationBus:
 
 
 def get_bus(job_id: str, milestone: str = "") -> DelegationBus:
-    if job_id not in _REGISTRY:
-        _REGISTRY[job_id] = DelegationBus(milestone)
-    return _REGISTRY[job_id]
+    bus = _REGISTRY.get(job_id)
+    if bus is None:
+        bus = DelegationBus(milestone)
+        _REGISTRY[job_id] = bus
+    return bus
 
 
 def remove_bus(job_id: str) -> None:
-    _REGISTRY.pop(job_id, None)
+    bus = _REGISTRY.pop(job_id, None)
+    if bus is not None:
+        bus.close()
 
 
 def bus_exists(job_id: str) -> bool:

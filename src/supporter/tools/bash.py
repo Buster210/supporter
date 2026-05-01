@@ -40,6 +40,8 @@ from .bash_defs import (
 _BASH_CONFIRMATION_CALLBACK: Callable[[list[str], str], bool] | None = None
 _BASH_NOTIFICATION_CALLBACK: Callable[[str], None] | None = None
 
+_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
 
 def _detect_sandbox() -> tuple[str | None, str | None]:
     if sys.platform == "darwin":
@@ -724,9 +726,8 @@ def _execute_subprocess(
             f"sandbox={_SB_TYPE!r}"
         )
 
-        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-        stdout = ansi_escape.sub("", stdout)
-        stderr = ansi_escape.sub("", stderr)
+        stdout = _ANSI_ESCAPE.sub("", stdout)
+        stderr = _ANSI_ESCAPE.sub("", stderr)
 
         for pattern in SECRET_PATTERNS:
             stdout = re.sub(pattern, "[REDACTED]", stdout)
