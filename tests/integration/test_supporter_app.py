@@ -95,7 +95,7 @@ async def test_handle_command_routes_to_mode_manager() -> None:
 @pytest.mark.asyncio
 async def test_flush_queued_messages_processes_batch() -> None:
     app = SupporterApp()
-    app._user_message_queue = ["Hello", "World", "Test"]
+    app._user_message_queue = [("Hello", False), ("World", False), ("Test", False)]
     mock_queue_display = MockWidget("queue-display")
     with (
         patch.object(app, "query_one", return_value=mock_queue_display),
@@ -113,7 +113,7 @@ async def test_flush_queued_messages_processes_batch() -> None:
 @pytest.mark.asyncio
 async def test_flush_queued_messages_sets_processing_flag() -> None:
     app = SupporterApp()
-    app._user_message_queue = ["Message 1", "Message 2"]
+    app._user_message_queue = [("Message 1", False), ("Message 2", False)]
     app._is_processing = False
     mock_queue_display = MockWidget("queue-display")
     with (
@@ -146,14 +146,18 @@ async def test_queue_accumulates_during_processing() -> None:
         event.value = "Test message"
         await app.on_input_submitted(event)
     assert len(app._user_message_queue) == 1
-    assert app._user_message_queue[0] == "Test message"
+    assert app._user_message_queue[0] == ("Test message", False)
     mock_queue_display.update_queue.assert_called_with(["Test message"])
 
 
 @pytest.mark.asyncio
 async def test_queue_combines_multiple_messages() -> None:
     app = SupporterApp()
-    app._user_message_queue = ["First message", "Second message", "Third message"]
+    app._user_message_queue = [
+        ("First message", False),
+        ("Second message", False),
+        ("Third message", False),
+    ]
     mock_queue_display = MockWidget("queue-display")
     with (
         patch.object(app, "query_one", return_value=mock_queue_display),
@@ -187,7 +191,7 @@ async def test_on_input_submitted_queues_when_processing() -> None:
         event = MagicMock()
         event.value = " queued message "
         await app.on_input_submitted(event)
-    assert "queued message" in app._user_message_queue
+    assert ("queued message", False) in app._user_message_queue
 
 
 @pytest.mark.asyncio

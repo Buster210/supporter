@@ -1,5 +1,5 @@
-from typing import cast
-from unittest.mock import MagicMock, patch
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from textual.binding import Binding
@@ -23,7 +23,23 @@ async def test_tui_app_can_be_instantiated(mock_provider: MockLLMProvider) -> No
 @pytest.mark.asyncio
 async def test_tui_app_compose_produces_widgets(mock_provider: MockLLMProvider) -> None:
     app = SupporterApp()
-    with patch("supporter.tui.SupporterApp._setup_agent", new_callable=MagicMock):
+
+    async def side_effect(*args: Any, **kwargs: Any) -> None:
+        app.agent = MagicMock()
+        app.agent.provider = MagicMock()
+        app.agent.provider.close = AsyncMock()
+
+    with (
+        patch(
+            "supporter.tui.SupporterApp._setup_agent",
+            new_callable=AsyncMock,
+            side_effect=side_effect,
+        ),
+        patch(
+            "supporter.tui.mode_manager.ModeManager.trigger_live_greeting",
+            new_callable=AsyncMock,
+        ),
+    ):
         async with app.run_test() as pilot:
             await pilot.pause()
             assert app.query_one("#user-input") is not None
@@ -35,7 +51,23 @@ async def test_tui_app_compose_produces_widgets(mock_provider: MockLLMProvider) 
 @pytest.mark.asyncio
 async def test_tui_app_handles_input_submission(mock_provider: MockLLMProvider) -> None:
     app = SupporterApp()
-    with patch("supporter.tui.SupporterApp._setup_agent", new_callable=MagicMock):
+
+    async def side_effect(*args: Any, **kwargs: Any) -> None:
+        app.agent = MagicMock()
+        app.agent.provider = MagicMock()
+        app.agent.provider.close = AsyncMock()
+
+    with (
+        patch(
+            "supporter.tui.SupporterApp._setup_agent",
+            new_callable=AsyncMock,
+            side_effect=side_effect,
+        ),
+        patch(
+            "supporter.tui.mode_manager.ModeManager.trigger_live_greeting",
+            new_callable=AsyncMock,
+        ),
+    ):
         async with app.run_test() as pilot:
             await pilot.pause()
             input_widget = cast(Input, app.query_one("#user-input"))
@@ -51,7 +83,23 @@ async def test_tui_app_handles_input_submission(mock_provider: MockLLMProvider) 
 @pytest.mark.asyncio
 async def test_tui_clear_screen_action(mock_provider: MockLLMProvider) -> None:
     app = SupporterApp()
-    with patch("supporter.tui.SupporterApp._setup_agent", new_callable=MagicMock):
+
+    async def side_effect(*args: Any, **kwargs: Any) -> None:
+        app.agent = MagicMock()
+        app.agent.provider = MagicMock()
+        app.agent.provider.close = AsyncMock()
+
+    with (
+        patch(
+            "supporter.tui.SupporterApp._setup_agent",
+            new_callable=AsyncMock,
+            side_effect=side_effect,
+        ),
+        patch(
+            "supporter.tui.mode_manager.ModeManager.trigger_live_greeting",
+            new_callable=AsyncMock,
+        ),
+    ):
         async with app.run_test() as pilot:
             await pilot.pause()
             app.action_clear_screen()
@@ -62,7 +110,23 @@ async def test_tui_clear_screen_action(mock_provider: MockLLMProvider) -> None:
 @pytest.mark.asyncio
 async def test_tui_mode_indicator_exists(mock_provider: MockLLMProvider) -> None:
     app = SupporterApp()
-    with patch("supporter.tui.SupporterApp._setup_agent", new_callable=MagicMock):
+
+    async def side_effect(*args: Any, **kwargs: Any) -> None:
+        app.agent = MagicMock()
+        app.agent.provider = MagicMock()
+        app.agent.provider.close = AsyncMock()
+
+    with (
+        patch(
+            "supporter.tui.SupporterApp._setup_agent",
+            new_callable=AsyncMock,
+            side_effect=side_effect,
+        ),
+        patch(
+            "supporter.tui.mode_manager.ModeManager.trigger_live_greeting",
+            new_callable=AsyncMock,
+        ),
+    ):
         async with app.run_test() as pilot:
             await pilot.pause()
             mode_indicator = app.query_one("#mode-indicator")
@@ -73,7 +137,23 @@ async def test_tui_mode_indicator_exists(mock_provider: MockLLMProvider) -> None
 @pytest.mark.asyncio
 async def test_tui_key_bindings_registered(mock_provider: MockLLMProvider) -> None:
     app = SupporterApp()
-    with patch("supporter.tui.SupporterApp._setup_agent", new_callable=MagicMock):
+
+    async def side_effect(*args: Any, **kwargs: Any) -> None:
+        app.agent = MagicMock()
+        app.agent.provider = MagicMock()
+        app.agent.provider.close = AsyncMock()
+
+    with (
+        patch(
+            "supporter.tui.SupporterApp._setup_agent",
+            new_callable=AsyncMock,
+            side_effect=side_effect,
+        ),
+        patch(
+            "supporter.tui.mode_manager.ModeManager.trigger_live_greeting",
+            new_callable=AsyncMock,
+        ),
+    ):
         async with app.run_test() as pilot:
             await pilot.pause()
             binding_keys = [b.key for b in app.BINDINGS if isinstance(b, Binding)]

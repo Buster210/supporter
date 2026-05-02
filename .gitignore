@@ -1,5 +1,5 @@
 .env
-app.log
+app.log*
 .DS_Store
 __pycache__/
 *.py[cod]
