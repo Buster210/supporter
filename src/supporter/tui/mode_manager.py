@@ -11,12 +11,36 @@ from ..types import ModeChanged
 class ModeManager:
     def __init__(self, app: Any) -> None:
         self._app = app
+        from ..config import config
+        from ..providers.gemini_live_provider import GeminiLiveProvider
+
+        self._greeting_provider = GeminiLiveProvider(
+            config.gemini_api_keys,
+            model_name=config.gemini_live_model,
+            system_instruction=(
+                "Greeting assistant. Output exactly one friendly sentence. "
+                "No preamble, no thoughts."
+            ),
+            include_thoughts=False,
+        )
+        self._warmup_task: asyncio.Task[Any] | None = None
+
+    def start_warmup(self) -> None:
+        if self._warmup_task is None:
+            self._warmup_task = asyncio.create_task(self._greeting_provider.warmup())
+
+    async def close(self) -> None:
+        if hasattr(self, "_warmup_task") and self._warmup_task:
+            self._warmup_task.cancel()
+        if hasattr(self, "_greeting_provider") and self._greeting_provider:
+            await self._greeting_provider.close()
 
     async def setup_agent(self, use_live: bool = False) -> None:
         from .. import get_provider
         from ..agent import ChatAgent
         from ..config import config
         from ..tools import (
+            cancel_delegation,
             check_bash_availability,
             check_delegation,
             delegate_tasks,
@@ -31,6 +55,7 @@ class ModeManager:
             "write_file": write_file,
             "delegate_tasks": delegate_tasks,
             "check_delegation": check_delegation,
+            "cancel_delegation": cancel_delegation,
         }
 
         if check_bash_availability():
@@ -74,9 +99,46 @@ class ModeManager:
         try:
             await self.setup_agent(use_live=self._app.live_mode)
             self._update_ui_state()
+
+            if self._app.live_mode:
+                try:
+                    await self.trigger_live_greeting()
+                    logger.info("ModeManager: Successfully queued greeting worker")
+                except Exception as e:
+                    logger.error(f"ModeManager: Failed to queue greeting worker: {e}")
         finally:
             self._app.is_activating_mode = False
             self._app._stop_thinking()
+
+    async def trigger_live_greeting(self) -> None:
+        import datetime
+        import getpass
+
+        username = getpass.getuser()
+        now = datetime.datetime.now().strftime("%I:%M %p")
+        prompt = (
+            f"Give a short, unique, and friendly one-sentence greeting to {username}. "
+            f"Current time is {now}."
+        )
+
+        banner = self._app.query_one("#welcome-banner")
+        logger.info(f"ModeManager: Starting persistent live greeting for {username}")
+
+        try:
+            self.start_warmup()
+            if self._warmup_task:
+                await self._warmup_task
+
+            full_text = ""
+            async for chunk in self._greeting_provider.generate_stream(prompt):
+                if chunk.text:
+                    full_text += chunk.text
+                    banner.message = full_text.strip()
+
+            logger.info("ModeManager: Persistent live greeting complete")
+        except Exception as e:
+            logger.error(f"ModeManager: Greeting failed: {e}")
+            banner.message = f"Hello {username}!"
 
     def _update_ui_state(self) -> None:
         mode = "LIVE" if self._app.live_mode else "SINGLE"

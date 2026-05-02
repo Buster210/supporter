@@ -52,7 +52,7 @@ class SupporterApp(App[None]):
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
         self._is_processing = False
-        self._user_message_queue: list[str] = []
+        self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
@@ -84,8 +84,10 @@ class SupporterApp(App[None]):
         set_delegation_start_callback(self._start_delegation_listener)
 
         logger.info("Supporter TUI dashboard active")
+        self._mode_manager.start_warmup()
         try:
-            await self._setup_agent(use_live=True)
+            self.run_worker(self._setup_agent(use_live=True), exclusive=True)
+            self.run_worker(self._mode_manager.trigger_live_greeting())
             self.query_one("#user-input").focus()
         except Exception as e:
             msg = f"Startup failure [{type(e).__name__}]: {e}"
@@ -115,6 +117,7 @@ class SupporterApp(App[None]):
             await self.agent.provider.close()
 
         await DynamicPool.shutdown_all()
+        await self._mode_manager.close()
 
     async def _setup_agent(self, use_live: bool = False) -> None:
         await self._mode_manager.setup_agent(use_live=use_live)
@@ -125,10 +128,12 @@ class SupporterApp(App[None]):
             QueuedMessagesDisplay,
             SupporterHeader,
             ThinkingIndicator,
+            WelcomeBanner,
         )
 
         with Vertical(id="main-container"):
             yield SupporterHeader(id="supporter-header")
+            yield WelcomeBanner(id="welcome-banner", classes="hidden")
             with ChatContainer(id="chat-view"):
                 pass
             yield QueuedMessagesDisplay(id="queue-display")
@@ -185,31 +190,39 @@ class SupporterApp(App[None]):
         if self._is_processing:
             from .chat import QueuedMessagesDisplay
 
-            self._user_message_queue.append(user_text)
+            self._user_message_queue.append((user_text, False))
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
-                self._user_message_queue
+                [msg for msg, _ in self._user_message_queue]
             )
             self._toast_manager.notify(
                 self, f"Message queued ({len(self._user_message_queue)})", type="queue"
             )
             return
 
+        if not self.agent:
+            self._toast_manager.notify(
+                self, "Agent is still initializing... please wait.", type="system"
+            )
+            return
+
+        new_turn = await self._mount_user_turn(user_text)
+        self._is_processing = True
+        self.run_worker(
+            self._process_message_cycle(user_text, mount_user=False, target=new_turn)
+        )
+
+    async def _mount_user_turn(self, text: str) -> ChatTurn:
         from .bubble import MessageBubble
         from .chat import ChatTurn
 
         chat_view = self.query_one("#chat-view", Vertical)
-        user_bubble = MessageBubble(role="user", content=user_text)
-        new_turn = ChatTurn(user_bubble)
+        new_turn = ChatTurn(MessageBubble(role="user", content=text))
         if self.active_turn:
             self.active_turn.auto_collapse()
         self.active_turn = new_turn
         await chat_view.mount(new_turn)
         chat_view.scroll_end()
-
-        self._is_processing = True
-        self.run_worker(
-            self._process_message_cycle(user_text, mount_user=False, target=new_turn)
-        )
+        return new_turn
 
     async def _handle_command(self, command: str) -> bool:
         return await self._mode_manager.handle_command(command)
@@ -218,21 +231,16 @@ class SupporterApp(App[None]):
         await self._mode_manager.toggle_mode(live=live)
 
     async def _process_message_cycle(
-        self, text: str, mount_user: bool = True, target: Vertical | None = None
+        self,
+        text: str,
+        mount_user: bool = True,
+        target: Vertical | None = None,
+        exclude_from_history: bool = False,
     ) -> None:
-        from .bubble import MessageBubble
-        from .chat import ChatTurn
-
         self._is_processing = True
         chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
-            user_bubble = MessageBubble(role="user", content=text)
-            new_turn = ChatTurn(user_bubble)
-            if self.active_turn:
-                self.active_turn.auto_collapse()
-            self.active_turn = new_turn
-            await chat_view.mount(new_turn)
-            chat_view.scroll_end()
+            await self._mount_user_turn(text)
             self.query_one("#user-input").focus()
 
         target_container = target or (
@@ -243,13 +251,13 @@ class SupporterApp(App[None]):
 
         self.status_label = "Thinking"
         self._start_thinking()
-        start_time = time.perf_counter()
+        start_time = getattr(target_container, "turn_start_time", time.perf_counter())
 
         try:
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
             await self._process_streaming_execution(
-                text, target_container, start_time, self.agent
+                text, target_container, start_time, self.agent, exclude_from_history
             )
         except Exception as e:
             from .bubble import MessageBubble
@@ -267,18 +275,30 @@ class SupporterApp(App[None]):
         if not self._user_message_queue:
             return
 
-        texts = list(self._user_message_queue)
+        items = list(self._user_message_queue)
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
-        combined_text = "\n\n".join(texts)
+        combined_text = "\n\n".join(msg for msg, _ in items)
+        has_user_message = any(not is_sys for _, is_sys in items)
         self._is_processing = True
-        self.run_worker(self._process_message_cycle(combined_text, mount_user=True))
+
+        if has_user_message:
+            self.run_worker(self._process_message_cycle(combined_text, mount_user=True))
+        else:
+            self.run_worker(self._process_system_message(combined_text))
 
     async def _process_streaming_execution(
-        self, text: str, target: Vertical, start_time: float, agent: ChatAgent
+        self,
+        text: str,
+        target: Vertical,
+        start_time: float,
+        agent: ChatAgent,
+        exclude_from_history: bool = False,
     ) -> None:
-        await self._message_processor.process_streaming(text, target, start_time, agent)
+        await self._message_processor.process_streaming(
+            text, target, start_time, agent, exclude_from_history
+        )
 
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
@@ -344,23 +364,99 @@ class SupporterApp(App[None]):
         if self._is_processing:
             from .chat import QueuedMessagesDisplay
 
-            self._user_message_queue.append(text)
+            self._user_message_queue.append((text, True))
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
-                self._user_message_queue
+                [msg for msg, _ in self._user_message_queue]
             )
         else:
-            self.run_worker(self._process_message_cycle(text, mount_user=True))
+            self.run_worker(self._process_system_message(text))
+
+    async def _process_system_message(self, text: str) -> None:
+        from .bubble import MessageBubble
+
+        if self.active_turn:
+            if "MILESTONE_RESULT (json)" in text:
+                bubble = MessageBubble(role="agent", content="")
+                bubble.elements = [
+                    {
+                        "type": "subagent_result",
+                        "content": text,
+                        "collapsed": True,
+                        "manually_interacted": False,
+                    }
+                ]
+                bubble.collapsed = False
+                await self.active_turn.mount_bubble(bubble)
+            else:
+                await self.active_turn.mount_bubble(
+                    MessageBubble(role="user", content=text)
+                )
+            await self._process_message_cycle(text, mount_user=False)
+        else:
+            await self._process_message_cycle(text, mount_user=True)
 
     def _start_delegation_listener(self, job_id: str) -> None:
         self.run_worker(self._delegation_listener(job_id), exclusive=False)
 
+    @staticmethod
+    def _summarize_output(text: str, limit: int = 600) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "\n\n[... truncated ...]"
+
+    async def _post_task_bubble(self, content: str) -> None:
+        from .bubble import MessageBubble
+
+        chat_view = self.query_one("#chat-view", Vertical)
+        target = self.active_turn or chat_view
+        if hasattr(target, "mount_bubble"):
+            await target.mount_bubble(MessageBubble(role="agent", content=content))
+        else:
+            await target.mount(MessageBubble(role="agent", content=content))
+        chat_view.scroll_end()
+
+    async def _emit_task_event(
+        self,
+        bus: Any,
+        kind: str,
+        task_id: str,
+        duration: float | None,
+        body: str,
+        sys_extra: str = "",
+    ) -> None:
+        label = bus.get_snapshot().get(task_id, {}).get("agent_label", "?")
+        head = f"`{task_id}` · {label}"
+        if duration is not None:
+            head += f" · {duration:.2f}s"
+        bubble = f"**[{kind}]** {head}"
+        if body:
+            bubble += f"\n\n{body}"
+        await self._post_task_bubble(bubble)
+        if bus.notify_per_task:
+            sys_msg = f"TASK {kind} {head}{sys_extra}"
+            if body:
+                sys_msg += f":\n\n{body}"
+            self._safe_call(self._inject_system_message, sys_msg)
+
     async def _delegation_listener(self, job_id: str) -> None:
-        from ..tools.delegate import _format_results
+        import json
+
+        from ..tools.delegate import serialize_results
         from ..tools.event_bus import get_bus
-        from ..types import MilestoneCompleted, TaskAnomaly
+        from ..types import (
+            MilestoneCancelled,
+            MilestoneCompleted,
+            TaskAnomaly,
+            TaskCompleted,
+            TaskFailed,
+            TaskSkipped,
+            TaskTimedOut,
+        )
 
         try:
-            queue = get_bus(job_id).subscribe()
+            bus = get_bus(job_id)
+            queue = bus.subscribe()
             while True:
                 event = await queue.get()
                 if event is None:
@@ -374,11 +470,60 @@ class SupporterApp(App[None]):
                     )
                     self._safe_call(self._inject_system_message, msg)
 
-                elif isinstance(event, MilestoneCompleted):
-                    report = _format_results(
-                        event.milestone, event.results, event.total_duration
+                elif isinstance(event, TaskCompleted):
+                    await self._emit_task_event(
+                        bus,
+                        "DONE",
+                        event.task_id,
+                        event.duration,
+                        self._summarize_output(event.output),
                     )
-                    msg = f"MILESTONE COMPLETE: Job `{job_id}`\n\n{report}"
+
+                elif isinstance(event, TaskFailed):
+                    await self._emit_task_event(
+                        bus,
+                        "FAIL",
+                        event.task_id,
+                        event.duration,
+                        self._summarize_output(event.error, limit=400),
+                    )
+
+                elif isinstance(event, TaskTimedOut):
+                    await self._emit_task_event(
+                        bus, "TIMEOUT", event.task_id, event.duration, ""
+                    )
+
+                elif isinstance(event, TaskSkipped):
+                    await self._emit_task_event(
+                        bus, "SKIP", event.task_id, None, event.reason
+                    )
+
+                elif isinstance(event, MilestoneCompleted):
+                    payload = serialize_results(
+                        event.milestone,
+                        event.results,
+                        event.total_duration,
+                        job_id,
+                        status="completed",
+                    )
+                    msg = (
+                        f"MILESTONE_RESULT (json):\n```json\n"
+                        f"{json.dumps(payload, indent=2)}\n```"
+                    )
+                    self._safe_call(self._inject_system_message, msg)
+                    break
+
+                elif isinstance(event, MilestoneCancelled):
+                    payload = {
+                        "job_id": job_id,
+                        "milestone": event.milestone,
+                        "status": "cancelled",
+                        "total_duration": round(event.total_duration, 2),
+                    }
+                    msg = (
+                        f"MILESTONE_CANCELLED (json):\n```json\n"
+                        f"{json.dumps(payload, indent=2)}\n```"
+                    )
                     self._safe_call(self._inject_system_message, msg)
                     break
 
