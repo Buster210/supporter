@@ -46,6 +46,7 @@ class ModeManager:
             delegate_tasks,
             execute_bash,
             notify_bash_unavailable,
+            query_delegation,
             read_file,
             write_file,
         )
@@ -56,6 +57,7 @@ class ModeManager:
             "delegate_tasks": delegate_tasks,
             "check_delegation": check_delegation,
             "cancel_delegation": cancel_delegation,
+            "query_delegation": query_delegation,
         }
 
         if check_bash_availability():

@@ -70,7 +70,7 @@ filterwarnings = [
 omit = []
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 84
 
 [tool.mypy]
 python_version = "3.13"

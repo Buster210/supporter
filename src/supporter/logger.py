@@ -1,3 +1,4 @@
+import atexit
 import logging
 import os
 import platform
@@ -5,7 +6,8 @@ import sys
 import traceback
 from collections import deque
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from queue import Queue
 from typing import Any
 
 from .config import config
@@ -45,7 +47,7 @@ def _dump_flight_recorder(file_handler: RotatingFileHandler | None) -> None:
             file_handler.stream.write(raw)
             file_handler.stream.flush()
     except Exception as exc:
-        _ = exc
+        sys.stderr.write(f"Failed to dump supporter flight recorder: {exc}\n")
 
 
 class SupporterFormatter(logging.Formatter):
@@ -62,6 +64,7 @@ class SupporterFormatter(logging.Formatter):
 logging.getLogger().setLevel(logging.CRITICAL)
 
 _file_handler: RotatingFileHandler | None = None
+_queue_listener: QueueListener | None = None
 
 
 class _FlightRecorderLogger:
@@ -103,7 +106,7 @@ logger = _FlightRecorderLogger(logging.getLogger("supporter"))
 
 
 def init_logger() -> None:
-    global _file_handler
+    global _file_handler, _queue_listener
 
     try:
         fh = RotatingFileHandler(
@@ -115,10 +118,18 @@ def init_logger() -> None:
         fh.setFormatter(SupporterFormatter())
 
         supporter_logger = logging.getLogger("supporter")
+        _stop_queue_listener()
+        _close_file_handler()
+
         for h in supporter_logger.handlers[:]:
             supporter_logger.removeHandler(h)
 
-        supporter_logger.addHandler(fh)
+        log_queue: Queue[logging.LogRecord] = Queue(-1)
+        qh = QueueHandler(log_queue)
+        supporter_logger.addHandler(qh)
+
+        _queue_listener = QueueListener(log_queue, fh)
+        _queue_listener.start()
         _file_handler = fh
     except Exception as e:
         logger.warning(f"Failed to initialize file logging: {e}")
@@ -139,6 +150,44 @@ def init_logger() -> None:
         f"OS={platform.system()} {platform.release()}, "
         f"CWD={os.getcwd()}"
     )
+
+
+def shutdown_logger() -> None:
+    _stop_queue_listener()
+    _close_file_handler()
+
+
+def _stop_queue_listener() -> None:
+    global _queue_listener
+
+    listener = _queue_listener
+    _queue_listener = None
+    if listener is None:
+        return
+    try:
+        listener.stop()
+    except Exception as e:
+        logger.warning(f"Failed to stop async log listener [{type(e).__name__}]: {e}")
+
+
+def _close_file_handler() -> None:
+    global _file_handler
+
+    handler = _file_handler
+    _file_handler = None
+    if handler is None:
+        return
+    try:
+        handler.flush()
+    except Exception as e:
+        sys.stderr.write(f"Failed to flush supporter log handler: {e}\n")
+    try:
+        handler.close()
+    except Exception as e:
+        sys.stderr.write(f"Failed to close supporter log handler: {e}\n")
+
+
+atexit.register(shutdown_logger)
 
 
 def main() -> None:

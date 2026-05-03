@@ -49,10 +49,10 @@ def test_init_logger(tmp_path: Any) -> None:
         init_logger()
         assert log_file.exists()
         assert logger.level == logging.DEBUG
-        has_file_handler = any(
-            isinstance(h, logging.FileHandler) for h in logger.handlers
+        has_queue_handler = any(
+            isinstance(h, logging.handlers.QueueHandler) for h in logger.handlers
         )
-        assert has_file_handler
+        assert has_queue_handler
 
 
 def test_init_logger_failure(tmp_path: Any) -> None:

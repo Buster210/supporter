@@ -131,6 +131,16 @@ MessageBubble.right {
     margin-top: 1;
 }
 
+.delegation-progress {
+    margin-top: 1;
+    margin-bottom: 1;
+    content-align-horizontal: center;
+}
+
+.delegation-progress #main-content, .delegation-progress .main-content {
+    text-align: center;
+}
+
 .message-meta {
     color: $accent;
     text-style: dim italic;

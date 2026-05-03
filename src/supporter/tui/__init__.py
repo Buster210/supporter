@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -54,6 +55,7 @@ class SupporterApp(App[None]):
         self._is_processing = False
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
+        self._delegation_bubbles: dict[str, Any] = {}
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
         indicator = self.query_one("#mode-indicator", Label)
@@ -375,22 +377,14 @@ class SupporterApp(App[None]):
         from .bubble import MessageBubble
 
         if self.active_turn:
-            if "MILESTONE_RESULT (json)" in text:
-                bubble = MessageBubble(role="agent", content="")
-                bubble.elements = [
-                    {
-                        "type": "subagent_result",
-                        "content": text,
-                        "collapsed": True,
-                        "manually_interacted": False,
-                    }
-                ]
-                bubble.collapsed = False
-                await self.active_turn.mount_bubble(bubble)
-            else:
-                await self.active_turn.mount_bubble(
-                    MessageBubble(role="user", content=text)
-                )
+            if (
+                "DELEGATION_CAPSULE_RESULT (json)" in text
+                or "MILESTONE_RESULT (json)" in text
+            ):
+                return
+            await self.active_turn.mount_bubble(
+                MessageBubble(role="user", content=text)
+            )
             await self._process_message_cycle(text, mount_user=False)
         else:
             await self._process_message_cycle(text, mount_user=True)
@@ -405,52 +399,139 @@ class SupporterApp(App[None]):
             return text
         return text[:limit].rstrip() + "\n\n[... truncated ...]"
 
-    async def _post_task_bubble(self, content: str) -> None:
+    @staticmethod
+    def _format_completed_task_signal(job_id: str, task_id: str) -> str:
+        return (
+            "<br/>\n\n"
+            f"Delegation task completed — job_id: `{job_id}` | task_id: `{task_id}`\n"
+            "\n<br/>"
+        )
+
+    @classmethod
+    def _format_delegation_progress(cls, job_id: str, bus: Any) -> str:
+        rows = []
+        for task_id, state in bus.get_snapshot().items():
+            status = cls._display_task_status(str(state.get("status", "PENDING")))
+            agent = str(state.get("agent_label", "?"))
+            duration = state.get("duration")
+            duration_text = ""
+            if isinstance(duration, int | float) and duration > 0:
+                duration_text = f"{duration:.2f}s"
+            rows.append(
+                "| "
+                + " | ".join(
+                    [
+                        task_id,
+                        agent,
+                        status,
+                        duration_text,
+                    ]
+                )
+                + " |"
+            )
+
+        table = [
+            f"Job `{job_id}`",
+            "",
+            "| Task | Agent | Status | Time |",
+            "| ---- | ----- | ------ | ---- |",
+            *rows,
+        ]
+        return "\n".join(table)
+
+    @staticmethod
+    def _display_task_status(status: str) -> str:
+        normalized = status.lower()
+        if normalized == "running":
+            return "working"
+        if normalized == "done":
+            return "completed"
+        return normalized
+
+    @staticmethod
+    def _format_task_signal(job_id: str, kind: str, task_id: str, bus: Any) -> str:
+        state = bus.get_snapshot().get(task_id, {})
+        payload = {
+            "job_id": job_id,
+            "task_id": task_id,
+            "agent": str(state.get("agent_label", "?")),
+            "assigned_task": str(state.get("task_goal", "")).strip(),
+        }
+        status = kind.upper()
+        return f"DELEGATION_TASK_{status}: {json.dumps(payload, ensure_ascii=False)}"
+
+    async def _upsert_delegation_progress(self, job_id: str, bus: Any) -> None:
         from .bubble import MessageBubble
 
+        content = self._format_delegation_progress(job_id, bus)
+        bubble = self._delegation_bubbles.get(job_id)
+        if bubble is not None:
+            bubble.elements[0]["content"] = content
+            bubble._update_ui_content()
+            return
+
+        bubble = MessageBubble(role="agent", content="")
+        bubble.add_class("delegation-progress")
+        bubble.elements = [
+            {
+                "type": "subagent_result",
+                "content": content,
+                "collapsed": True,
+                "manually_interacted": False,
+            }
+        ]
+        bubble.collapsed = False
+        self._delegation_bubbles[job_id] = bubble
         chat_view = self.query_one("#chat-view", Vertical)
         target = self.active_turn or chat_view
         if hasattr(target, "mount_bubble"):
-            await target.mount_bubble(MessageBubble(role="agent", content=content))
+            await target.mount_bubble(bubble)
         else:
-            await target.mount(MessageBubble(role="agent", content=content))
+            await target.mount(bubble)
         chat_view.scroll_end()
 
     async def _emit_task_event(
         self,
         bus: Any,
+        job_id: str,
         kind: str,
         task_id: str,
         duration: float | None,
         body: str,
         sys_extra: str = "",
+        sys_body: str | None = None,
     ) -> None:
-        label = bus.get_snapshot().get(task_id, {}).get("agent_label", "?")
-        head = f"`{task_id}` · {label}"
-        if duration is not None:
-            head += f" · {duration:.2f}s"
-        bubble = f"**[{kind}]** {head}"
-        if body:
-            bubble += f"\n\n{body}"
-        await self._post_task_bubble(bubble)
+        _ = duration, body
+        await self._upsert_delegation_progress(job_id=job_id, bus=bus)
         if bus.notify_per_task:
-            sys_msg = f"TASK {kind} {head}{sys_extra}"
-            if body:
-                sys_msg += f":\n\n{body}"
-            self._safe_call(self._inject_system_message, sys_msg)
+            if sys_body:
+                message = sys_body
+            else:
+                message = self._format_task_signal(job_id, kind, task_id, bus)
+                if sys_extra:
+                    message += sys_extra
+            self._safe_call(
+                self._inject_system_message,
+                message,
+            )
 
     async def _delegation_listener(self, job_id: str) -> None:
         import json
 
-        from ..tools.delegate import serialize_results
-        from ..tools.event_bus import get_bus
+        from ..tools.delegate import get_bus, serialize_results
+        from ..tools.delegation_capsule import (
+            query_delegation,
+            serialize_capsule,
+        )
         from ..types import (
             MilestoneCancelled,
             MilestoneCompleted,
+            MilestoneStarted,
             TaskAnomaly,
             TaskCompleted,
             TaskFailed,
             TaskSkipped,
+            TaskStarted,
             TaskTimedOut,
         )
 
@@ -462,7 +543,10 @@ class SupporterApp(App[None]):
                 if event is None:
                     break
 
-                if isinstance(event, TaskAnomaly):
+                if isinstance(event, (MilestoneStarted, TaskStarted)):
+                    pass
+
+                elif isinstance(event, TaskAnomaly):
                     msg = (
                         f"AGENT ALERT: Task `{event.task_id}` [{event.agent_label}] "
                         f"has used {event.elapsed_seconds:.0f}s of its "
@@ -471,57 +555,114 @@ class SupporterApp(App[None]):
                     self._safe_call(self._inject_system_message, msg)
 
                 elif isinstance(event, TaskCompleted):
+                    sys_body = self._format_completed_task_signal(
+                        job_id=job_id, task_id=event.task_id
+                    )
                     await self._emit_task_event(
                         bus,
+                        job_id,
                         "DONE",
                         event.task_id,
                         event.duration,
-                        self._summarize_output(event.output),
+                        "",
+                        sys_body=sys_body,
                     )
 
                 elif isinstance(event, TaskFailed):
+                    inspect_hint = (
+                        f'\n\nMore: query_delegation(job_id="{job_id}", '
+                        f'task_id="{event.task_id}")'
+                    )
                     await self._emit_task_event(
                         bus,
+                        job_id,
                         "FAIL",
                         event.task_id,
                         event.duration,
                         self._summarize_output(event.error, limit=400),
+                        sys_extra=inspect_hint,
                     )
 
                 elif isinstance(event, TaskTimedOut):
+                    inspect_hint = (
+                        f'\n\nMore: query_delegation(job_id="{job_id}", '
+                        f'task_id="{event.task_id}")'
+                    )
                     await self._emit_task_event(
-                        bus, "TIMEOUT", event.task_id, event.duration, ""
+                        bus,
+                        job_id,
+                        "TIMEOUT",
+                        event.task_id,
+                        event.duration,
+                        "Execution timed out before completion.",
+                        sys_extra=inspect_hint,
                     )
 
                 elif isinstance(event, TaskSkipped):
+                    inspect_hint = (
+                        f'\n\nMore: query_delegation(job_id="{job_id}", '
+                        f'task_id="{event.task_id}")'
+                    )
                     await self._emit_task_event(
-                        bus, "SKIP", event.task_id, None, event.reason
+                        bus,
+                        job_id,
+                        "SKIP",
+                        event.task_id,
+                        None,
+                        event.reason,
+                        sys_extra=inspect_hint,
                     )
 
                 elif isinstance(event, MilestoneCompleted):
-                    payload = serialize_results(
-                        event.milestone,
-                        event.results,
-                        event.total_duration,
-                        job_id,
-                        status="completed",
-                    )
+                    try:
+                        data = await query_delegation(job_id)
+                        if not data:
+                            raise ValueError(f"Capsule not found for {job_id}")
+                        payload = serialize_capsule(data)
+                    except Exception as e:
+                        logger.warning(
+                            "Falling back to legacy delegation result for "
+                            f"{job_id} [{type(e).__name__}]: {e}"
+                        )
+                        has_failures = any(
+                            str(result.get("status")) in {"error", "timeout", "skipped"}
+                            for result in event.results
+                        )
+                        payload = serialize_results(
+                            event.milestone,
+                            event.results,
+                            event.total_duration,
+                            job_id,
+                            status="completed_with_failures"
+                            if has_failures
+                            else "completed",
+                        )
                     msg = (
-                        f"MILESTONE_RESULT (json):\n```json\n"
+                        f"DELEGATION_CAPSULE_RESULT (json):\n```json\n"
                         f"{json.dumps(payload, indent=2)}\n```"
                     )
                     self._safe_call(self._inject_system_message, msg)
                     break
 
                 elif isinstance(event, MilestoneCancelled):
-                    payload = {
-                        "job_id": job_id,
-                        "milestone": event.milestone,
-                        "status": "cancelled",
-                        "total_duration": round(event.total_duration, 2),
-                    }
+                    try:
+                        data = await query_delegation(job_id)
+                        if not data:
+                            raise ValueError(f"Capsule not found for {job_id}")
+                        payload = serialize_capsule(data)
+                    except Exception as e:
+                        logger.warning(
+                            "Falling back to legacy cancellation result for "
+                            f"{job_id} [{type(e).__name__}]: {e}"
+                        )
+                        payload = {
+                            "job_id": job_id,
+                            "milestone": event.milestone,
+                            "status": "cancelled",
+                            "total_duration": round(event.total_duration, 2),
+                        }
                     msg = (
-                        f"MILESTONE_CANCELLED (json):\n```json\n"
+                        f"DELEGATION_CAPSULE_RESULT (json):\n```json\n"
                         f"{json.dumps(payload, indent=2)}\n```"
                     )
                     self._safe_call(self._inject_system_message, msg)
