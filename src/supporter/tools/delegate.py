@@ -31,6 +31,15 @@ from ..types import (
     TaskTimedOut,
 )
 from .bash import execute_bash
+from .delegation_capsule import (
+    create_capsule,
+    mark_capsule_cancelled,
+    mark_capsule_completed,
+    mark_task_completed,
+    mark_task_failed,
+    mark_task_skipped,
+    mark_task_started,
+)
 from .event_bus import DelegationBus, bus_exists, get_bus, remove_bus
 from .file_ops import read_file, write_file
 from .search import google_search
@@ -418,25 +427,13 @@ async def _execute_dag(
                 "duration": 0.0,
             }
             results[task_id] = state
-            bus.update_task_state(
-                task_id,
-                {"status": "SKIPPED", "agent_label": agent_label, "duration": 0.0},
-            )
+            await mark_task_skipped(job_id, task_id, skip_reason)
             bus.publish(TaskSkipped(job_id=job_id, task_id=task_id, reason=skip_reason))
             task_done[task_id].set()
             return
 
         started_at = time.monotonic()
-        bus.update_task_state(
-            task_id,
-            {
-                "status": "RUNNING",
-                "agent_label": agent_label,
-                "started_at": started_at,
-                "timeout": task["timeout"],
-                "anomaly_fired": False,
-            },
-        )
+        await mark_task_started(job_id, task_id)
         enriched = _inject_dependency_context(task, results)
         bus.publish(
             TaskStarted(
@@ -460,6 +457,9 @@ async def _execute_dag(
         results[task_id] = result
 
         if result["status"] == TaskStatus.COMPLETED:
+            await mark_task_completed(
+                job_id, task_id, result.get("output", ""), result["duration"]
+            )
             bus.update_task_state(
                 task_id,
                 {
@@ -478,6 +478,9 @@ async def _execute_dag(
                 )
             )
         elif result["status"] == TaskStatus.TIMEOUT:
+            await mark_task_failed(
+                job_id, task_id, "Task timed out", result["duration"]
+            )
             bus.update_task_state(
                 task_id,
                 {
@@ -492,6 +495,12 @@ async def _execute_dag(
                 )
             )
         else:
+            await mark_task_failed(
+                job_id,
+                task_id,
+                result.get("output", "Unknown error"),
+                result["duration"],
+            )
             bus.update_task_state(
                 task_id,
                 {
@@ -656,6 +665,7 @@ async def _run_milestone(
         bus.publish(MilestoneCancelled(job_id, milestone, total_wall))
         raise
     finally:
+        await mark_capsule_completed(job_id)
         if heartbeat_task is not None:
             heartbeat_task.cancel()
         bus.close()
@@ -702,6 +712,13 @@ async def delegate_tasks(
         bus.notify_per_task = notify_per_task
         if _on_delegation_start:
             _on_delegation_start(job_id)
+
+        await create_capsule(
+            job_id=job_id,
+            milestone=milestone,
+            tasks=validated_tasks,
+            parallel_cap=parallel_cap,
+        )
 
         bus.publish(
             MilestoneStarted(
@@ -813,4 +830,5 @@ async def cancel_delegation(job_id: str) -> str:
         return f"Job `{job_id}` is unknown or already complete."
 
     task.cancel()
+    await mark_capsule_cancelled(job_id)
     return f"Cancellation requested for job `{job_id}`."

@@ -16,6 +16,7 @@ class TaskStatus(StrEnum):
     ERROR = "error"
     STARTED = "started"
     PENDING = "pending"
+    RETRYING = "retrying"
 
 
 class LLMOptions(TypedDict, total=False):
@@ -166,6 +167,11 @@ class TaskCompleted(DelegationEvent):
     duration: float
     output: str
     model: str
+    summary: str = ""
+    confidence: str = "unknown"
+    findings_count: int = 0
+    evidence_counts: dict[str, int] = field(default_factory=dict)
+    handoff: str = ""
 
 
 @dataclass(frozen=True)

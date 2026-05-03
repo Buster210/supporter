@@ -13,3 +13,4 @@ venv/
 htmlcov/
 supporter.egg-info
 .mypy_cache
+.supporter

@@ -103,7 +103,6 @@ class MockWidget:
         self.content = ""
         self._message = ""
         self.queue_messages: list[str] = []
-        from unittest.mock import MagicMock
 
         self.update = MagicMock(side_effect=self._update_content, return_value=None)
         self.update_queue = MagicMock(side_effect=self._update_queue, return_value=None)
