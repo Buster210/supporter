@@ -33,7 +33,6 @@ class DelegationBus:
         for q in self._subscribers:
             q.put_nowait(None)
         self._subscribers.clear()
-        self._task_states.clear()
 
     def update_task_state(self, task_id: str, state: dict[str, Any]) -> None:
         self._task_states[task_id] = state
@@ -58,3 +57,11 @@ def remove_bus(job_id: str) -> None:
 
 def bus_exists(job_id: str) -> bool:
     return job_id in _REGISTRY
+
+
+__all__ = [
+    "DelegationBus",
+    "bus_exists",
+    "get_bus",
+    "remove_bus",
+]

@@ -16,7 +16,6 @@ class TaskStatus(StrEnum):
     ERROR = "error"
     STARTED = "started"
     PENDING = "pending"
-    RETRYING = "retrying"
 
 
 class LLMOptions(TypedDict, total=False):
