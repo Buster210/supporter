@@ -6,7 +6,7 @@ import re
 import resource
 import shlex
 import shutil
-import subprocess
+import subprocess  # nosec
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -14,27 +14,28 @@ from pathlib import Path
 from ..config import config
 from ..logger import logger
 from .bash_defs import (
-    FILE_READING_BINS,
-    HIGH_RISK_TIER2_BINARIES,
-    INSTALL_CMDS,
-    INTERPRETERS,
-    NETWORK_BINARIES,
-    PACKAGE_MANAGERS,
-    RISKY_PYTHON_ATTRS,
-    RISKY_PYTHON_MODULES,
-    RISKY_PYTHON_NAMES,
-    RM_NUCLEAR_PATHS,
-    SECRET_PATTERNS,
+    AUTO_APPROVED_BINARIES,
+    AUTO_APPROVED_GIT_SUBCOMMANDS,
+    BLOCKED_BINARIES,
+    BLOCKED_PYTHON_MODULES,
+    CONFIRMATION_REQUIRED_BINARIES,
+    CONFIRMATION_REQUIRED_PYTHON_MODULES,
+    FILE_READING_BINARIES,
+    INLINE_PAYLOAD_INTERPRETER_BINARIES,
+    NETWORK_EGRESS_BINARIES,
+    NETWORK_UPLOAD_FLAGS,
+    PACKAGE_INSTALL_SUBCOMMANDS,
+    PACKAGE_MANAGER_BINARIES,
+    RISKY_PYTHON_ATTRIBUTE_NAMES,
+    RISKY_PYTHON_SYMBOL_NAMES,
+    RM_BLOCKED_TARGET_PATHS,
+    SECRET_VALUE_PATTERNS,
     SENSITIVE_FILE_PATTERNS,
-    SHELL_BINS,
-    SHELL_METACHARACTERS,
-    SYSTEM_DIRECTORIES,
-    TEMP_DIRS,
-    TIER1_GIT_SUBCOMMANDS,
-    TIER3_BINARIES,
-    TIER3_PYTHON_MODULES,
-    TRUSTED_PREFIXES,
-    UPLOAD_FLAGS,
+    SENSITIVE_SYSTEM_PATHS,
+    SHELL_INTERPRETER_BINARIES,
+    SHELL_SPECIAL_TOKENS,
+    TRUSTED_EXECUTABLE_PATH_PREFIXES,
+    UNTRUSTED_EXECUTION_TEMP_DIRS,
 )
 
 _BASH_CONFIRMATION_CALLBACK: Callable[[list[str], str], bool] | None = None
@@ -99,35 +100,19 @@ def _wrap_in_sandbox(tokens: list[str], cwd: Path, project_root: Path) -> list[s
     )
 
 
-def set_bash_notification_callback(
-    callback: Callable[[str], None] | None,
-) -> None:
-    global _BASH_NOTIFICATION_CALLBACK
-    _BASH_NOTIFICATION_CALLBACK = callback
+# --- Policy Functions ---
+
+
+def _verify_binary(cmd: str) -> Path:
+    binary = shutil.which(cmd)
+    if not binary:
+        raise PermissionError(f"Binary not found: {cmd}")
+    return Path(binary).resolve()
 
 
 def _check_find_command(tokens: list[str]) -> bool:
     risky_flags = {"-exec", "-execdir", "-ok", "-okdir", "-delete"}
     return any(token in risky_flags for token in tokens)
-
-
-def check_bash_availability() -> bool:
-    return _SB_BIN is not None
-
-
-def notify_bash_unavailable() -> None:
-    if _BASH_NOTIFICATION_CALLBACK:
-        _BASH_NOTIFICATION_CALLBACK(
-            "BASH TOOL DISABLED: Sandbox execution is required but no sandbox tool "
-            "(sandbox-exec or nsjail) was found on this system."
-        )
-
-
-def set_bash_confirmation_callback(
-    callback: Callable[[list[str], str], bool] | None,
-) -> None:
-    global _BASH_CONFIRMATION_CALLBACK
-    _BASH_CONFIRMATION_CALLBACK = callback
 
 
 def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
@@ -136,7 +121,7 @@ def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
         return 3
 
     for token in tokens:
-        if token in UPLOAD_FLAGS:
+        if token in NETWORK_UPLOAD_FLAGS:
             return 3
         if token.startswith(("-d@", "--data@", "-d @", "--data @")):
             return 3
@@ -178,7 +163,7 @@ def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
     if "-g" in tokens or "--global" in tokens or "--user" in tokens:
         return 3
 
-    is_install = any(t in INSTALL_CMDS for t in tokens)
+    is_install = any(t in PACKAGE_INSTALL_SUBCOMMANDS for t in tokens)
     if not is_install:
         return 1
 
@@ -194,7 +179,7 @@ def _check_rm_nuclear(binary_name: str, tokens: list[str], cwd: Path) -> None:
         try:
             p = Path(token).expanduser()
             resolved = (cwd / p).resolve() if not p.is_absolute() else p.resolve()
-            if str(resolved) in RM_NUCLEAR_PATHS:
+            if str(resolved) in RM_BLOCKED_TARGET_PATHS:
                 raise PermissionError(
                     f"Tier 3 BLOCK: rm targeting system-critical path: {resolved}"
                 )
@@ -216,7 +201,7 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
     except PermissionError:
         return 3
     binary_name = resolved.name
-    if binary_name in TIER3_BINARIES:
+    if binary_name in BLOCKED_BINARIES:
         return 3
     try:
         _check_execution_location(resolved)
@@ -238,7 +223,7 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
             return 3
     except PermissionError:
         return 3
-    if binary_name in INTERPRETERS:
+    if binary_name in INLINE_PAYLOAD_INTERPRETER_BINARIES:
         inner_tier = _inspect_interpreter_payload(binary_name, inner_tokens, depth + 1)
         if inner_tier == 3:
             return 3
@@ -275,12 +260,12 @@ def _inspect_interpreter_payload(
                 if isinstance(node, ast.Call):
                     if (
                         isinstance(node.func, ast.Name)
-                        and node.func.id in RISKY_PYTHON_NAMES
+                        and node.func.id in RISKY_PYTHON_SYMBOL_NAMES
                     ):
                         return 3
                     if (
                         isinstance(node.func, ast.Attribute)
-                        and node.func.attr in RISKY_PYTHON_NAMES
+                        and node.func.attr in RISKY_PYTHON_SYMBOL_NAMES
                     ):
                         return 3
                     if isinstance(node.func, ast.Name) and node.func.id == "open":
@@ -296,15 +281,18 @@ def _inspect_interpreter_payload(
                         if mode_arg and any(m in str(mode_arg) for m in write_modes):
                             worst_tier = max(worst_tier, 2)
 
-                if isinstance(node, ast.Name) and node.id in RISKY_PYTHON_NAMES:
+                if isinstance(node, ast.Name) and node.id in RISKY_PYTHON_SYMBOL_NAMES:
                     return 3
 
-                if isinstance(node, ast.Attribute) and node.attr in RISKY_PYTHON_ATTRS:
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr in RISKY_PYTHON_ATTRIBUTE_NAMES
+                ):
                     return 3
 
                 if isinstance(node, ast.Subscript):
                     if isinstance(node.slice, ast.Constant):
-                        if str(node.slice.value) in RISKY_PYTHON_NAMES:
+                        if str(node.slice.value) in RISKY_PYTHON_SYMBOL_NAMES:
                             return 3
                     elif not isinstance(node.slice, ast.Constant):
                         return 3
@@ -340,9 +328,11 @@ def _inspect_interpreter_payload(
                         if isinstance(node, ast.Import)
                         else [node.module]
                     )
-                    if any(name in TIER3_PYTHON_MODULES for name in names):
+                    if any(name in BLOCKED_PYTHON_MODULES for name in names):
                         return 3
-                    if any(name in RISKY_PYTHON_MODULES for name in names):
+                    if any(
+                        name in CONFIRMATION_REQUIRED_PYTHON_MODULES for name in names
+                    ):
                         worst_tier = max(worst_tier, 2)
             return worst_tier
 
@@ -378,98 +368,6 @@ def _inspect_interpreter_payload(
     return 1
 
 
-async def execute_bash(command: str, working_directory: str | None = None) -> str:
-    """Executes a shell command in a sandboxed, restricted environment.
-
-    IMPORTANT: Only use safe and simple commands. Unsafe or overly complex
-    commands will be blocked by the security gate. Avoid piping, clubbing
-    (&&, ||, ;), or command substitution ($(), ``).
-
-    If a command is blocked, do not treat it as a task failure. Instead,
-    try decomposing the operation into multiple simpler commands.
-
-    Args:
-        command: Shell command to execute (must be safe and simple).
-        working_directory: Optional execution cwd (defaults to project root).
-    Returns:
-        Command stdout/stderr combined, or error message.
-        Triggers UI confirmation for risky commands.
-    """
-    logger.info(f"Tool: execute_bash — command='{command}'")
-
-    def _sync_execute() -> str:
-        if "\x00" in command:
-            raise ValueError("Null bytes not permitted in commands")
-        if not command.isascii():
-            raise ValueError("Non-ASCII characters not permitted")
-
-        tokens = _parse_and_strip_env(command)
-        if not tokens:
-            return "Empty command"
-
-        base_cmd = tokens[0]
-        if "/" in base_cmd:
-            raise PermissionError(
-                f"Tier 3 BLOCK: Command invocation via full path prohibited: {base_cmd}"
-            )
-
-        resolved_binary_path = _verify_binary(base_cmd)
-        binary_name = resolved_binary_path.name
-        if binary_name in TIER3_BINARIES:
-            raise PermissionError(f"Tier 3 BLOCK: Binary prohibited: {binary_name}")
-
-        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
-        cwd = project_root
-        if working_directory:
-            from .file_ops import _validate_path
-
-            cwd = _validate_path(working_directory)
-
-        _check_execution_location(resolved_binary_path)
-
-        _check_rm_nuclear(binary_name, tokens, cwd)
-
-        _check_complex_syntax(command)
-
-        security_tier = _apply_path_security(command, tokens, cwd, project_root)
-
-        security_tier = _apply_policy_checks(
-            command, tokens, binary_name, security_tier
-        )
-        logger.info(
-            f"Security classification: binary={binary_name}, tier={security_tier}, "
-            f"tokens={tokens!r}"
-        )
-
-        _evaluate_final_tier(command, tokens, binary_name, security_tier, cwd)
-
-        is_mutation = security_tier >= 2 or any(
-            m in command for m in SHELL_METACHARACTERS
-        )
-        pre_state = _get_fs_state(cwd) if is_mutation else {}
-
-        return _execute_subprocess(
-            resolved_binary_path, tokens, cwd, project_root, pre_state, is_mutation
-        )
-
-    try:
-        return await asyncio.to_thread(_sync_execute)
-    except Exception as e:
-        logger.error(f"Tool Failure: execute_bash [{type(e).__name__}]: {e}")
-        return f"Error: {e!s}"
-
-
-def _parse_and_strip_env(command: str) -> list[str]:
-    clean_command = command.strip()
-    while True:
-        match = re.match(r"^[A-Z_][A-Z0-9_]*=\S+\s+", clean_command)
-        if match:
-            clean_command = clean_command[match.end() :].strip()
-        else:
-            break
-    return shlex.split(clean_command)
-
-
 def _check_complex_syntax(command: str) -> None:
     if "$(" in command or "`" in command:
         raise PermissionError(
@@ -483,14 +381,14 @@ def _check_complex_syntax(command: str) -> None:
             if sub_tokens:
                 try:
                     rhs_bin = _verify_binary(sub_tokens[0])
-                    if rhs_bin.name in SHELL_BINS:
+                    if rhs_bin.name in SHELL_INTERPRETER_BINARIES:
                         raise PermissionError(
                             f"Tier 3 BLOCK: Pipe-to-shell detected: {rhs_bin.name}"
                         )
-                    if rhs_bin.name in NETWORK_BINARIES:
+                    if rhs_bin.name in NETWORK_EGRESS_BINARIES:
                         lhs_tokens = shlex.split(parts[0].strip())
                         if any(
-                            t in FILE_READING_BINS or t.startswith(("/", ".", "~"))
+                            t in FILE_READING_BINARIES or t.startswith(("/", ".", "~"))
                             for t in lhs_tokens
                         ):
                             raise PermissionError(
@@ -503,7 +401,7 @@ def _check_complex_syntax(command: str) -> None:
 
 
 def _check_execution_location(binary_path: Path) -> None:
-    for tdir in TEMP_DIRS:
+    for tdir in UNTRUSTED_EXECUTION_TEMP_DIRS:
         if str(binary_path).startswith(tdir):
             raise PermissionError(
                 f"Tier 3 BLOCK: Execution from temp directory prohibited: {binary_path}"
@@ -560,12 +458,12 @@ def _apply_path_security(
         else:
             resolved_token = token
 
-        for sys_dir in SYSTEM_DIRECTORIES:
+        for sys_dir in SENSITIVE_SYSTEM_PATHS:
             abs_sys_dir = str(Path(sys_dir).expanduser().resolve())
             if resolved_token == abs_sys_dir or resolved_token.startswith(
                 abs_sys_dir + "/"
             ):
-                if any(m in command for m in SHELL_METACHARACTERS):
+                if any(m in command for m in SHELL_SPECIAL_TOKENS):
                     raise PermissionError(
                         "Tier 3 BLOCK: Metacharacter targeting system directory: "
                         f"{token}"
@@ -598,7 +496,7 @@ def _apply_policy_checks(
     binary_name: str,
     security_tier: int,
 ) -> int:
-    if binary_name in NETWORK_BINARIES:
+    if binary_name in NETWORK_EGRESS_BINARIES:
         tier = _check_network_egress(binary_name, tokens)
         if tier == 3:
             raise PermissionError(
@@ -607,7 +505,7 @@ def _apply_policy_checks(
             )
         security_tier = max(security_tier, tier)
 
-    if binary_name in PACKAGE_MANAGERS:
+    if binary_name in PACKAGE_MANAGER_BINARIES:
         tier = _check_package_manager(binary_name, tokens)
         if tier == 3:
             raise PermissionError(
@@ -615,7 +513,7 @@ def _apply_policy_checks(
             )
         security_tier = max(security_tier, tier)
 
-    if binary_name in INTERPRETERS:
+    if binary_name in INLINE_PAYLOAD_INTERPRETER_BINARIES:
         tier = _inspect_interpreter_payload(binary_name, tokens)
         if tier == 3:
             raise PermissionError(
@@ -631,13 +529,32 @@ def _apply_policy_checks(
             )
         security_tier = max(security_tier, tier)
 
-    if binary_name in HIGH_RISK_TIER2_BINARIES:
+    if binary_name in CONFIRMATION_REQUIRED_BINARIES:
         security_tier = max(security_tier, 2)
 
     if binary_name == "find" and _check_find_command(tokens):
         security_tier = max(security_tier, 2)
 
     return security_tier
+
+
+def _apply_tier1_allowlist(
+    tokens: list[str],
+    binary_name: str,
+    security_tier: int,
+) -> int:
+    if security_tier >= 2:
+        return security_tier
+
+    if binary_name in AUTO_APPROVED_BINARIES:
+        return 1
+
+    if binary_name == "git":
+        sub = tokens[1] if len(tokens) > 1 else ""
+        if sub in AUTO_APPROVED_GIT_SUBCOMMANDS:
+            return 1
+
+    return 2
 
 
 def _evaluate_final_tier(
@@ -649,7 +566,7 @@ def _evaluate_final_tier(
 ) -> None:
     if security_tier == 1 and binary_name == "git":
         sub = tokens[1] if len(tokens) > 1 else ""
-        if sub not in TIER1_GIT_SUBCOMMANDS:
+        if sub not in AUTO_APPROVED_GIT_SUBCOMMANDS:
             security_tier = 2
 
     if security_tier >= 2:
@@ -658,6 +575,99 @@ def _evaluate_final_tier(
                 raise PermissionError("Execution cancelled by user.")
         else:
             raise PermissionError(f"Tier 2 Confirmation Required: {command}")
+
+
+# --- Execution Functions ---
+
+
+async def execute_bash(command: str, working_directory: str | None = None) -> str:
+    """Executes a shell command in a sandboxed, restricted environment.
+
+    IMPORTANT: Only use safe and simple commands. Unsafe or overly complex
+    commands will be blocked by the security gate. Avoid piping, clubbing
+    (&&, ||, ;), or command substitution ($(), ``).
+
+    If a command is blocked, do not treat it as a task failure. Instead,
+    try decomposing the operation into multiple simpler commands.
+
+    Args:
+        command: Shell command to execute (must be safe and simple).
+        working_directory: Optional execution cwd (defaults to project root).
+    Returns:
+        Command stdout/stderr combined, or error message.
+        Triggers UI confirmation for risky commands.
+    """
+    logger.info(f"Tool: execute_bash — command='{command}'")
+
+    def _sync_execute() -> str:
+        if "\x00" in command:
+            raise ValueError("Null bytes not permitted in commands")
+        if not command.isascii():
+            raise ValueError("Non-ASCII characters not permitted")
+
+        tokens = _parse_and_strip_env(command)
+        if not tokens:
+            return "Empty command"
+
+        base_cmd = tokens[0]
+        if "/" in base_cmd:
+            raise PermissionError(
+                f"Tier 3 BLOCK: Command invocation via full path prohibited: {base_cmd}"
+            )
+
+        resolved_binary_path = _verify_binary(base_cmd)
+        binary_name = resolved_binary_path.name
+        if binary_name in BLOCKED_BINARIES:
+            raise PermissionError(f"Tier 3 BLOCK: Binary prohibited: {binary_name}")
+
+        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
+        cwd = project_root
+        if working_directory:
+            from .file_ops import _validate_path
+
+            cwd = _validate_path(working_directory)
+
+        _check_execution_location(resolved_binary_path)
+        _check_rm_nuclear(binary_name, tokens, cwd)
+        _check_complex_syntax(command)
+
+        security_tier = _apply_path_security(command, tokens, cwd, project_root)
+        security_tier = _apply_policy_checks(
+            command, tokens, binary_name, security_tier
+        )
+        security_tier = _apply_tier1_allowlist(tokens, binary_name, security_tier)
+        logger.info(
+            f"Security classification: binary={binary_name}, tier={security_tier}, "
+            f"tokens={tokens!r}"
+        )
+
+        _evaluate_final_tier(command, tokens, binary_name, security_tier, cwd)
+
+        is_mutation = security_tier >= 2 or any(
+            m in command for m in SHELL_SPECIAL_TOKENS
+        )
+        pre_state = _get_fs_state(cwd) if is_mutation else {}
+
+        return _execute_subprocess(
+            resolved_binary_path, tokens, cwd, project_root, pre_state, is_mutation
+        )
+
+    try:
+        return await asyncio.to_thread(_sync_execute)
+    except Exception as e:
+        logger.error(f"Tool Failure: execute_bash [{type(e).__name__}]: {e}")
+        return f"Error: {e!s}"
+
+
+def _parse_and_strip_env(command: str) -> list[str]:
+    clean_command = command.strip()
+    while True:
+        match = re.match(r"^[A-Z_][A-Z0-9_]*=\S+\s+", clean_command)
+        if match:
+            clean_command = clean_command[match.end() :].strip()
+        else:
+            break
+    return shlex.split(clean_command)
 
 
 def _get_fs_state(target_dir: Path) -> dict[str, float]:
@@ -705,7 +715,7 @@ def _execute_subprocess(
             shell=False,
             cwd=cwd,
             env={
-                "PATH": ":".join(TRUSTED_PREFIXES),
+                "PATH": ":".join(TRUSTED_EXECUTABLE_PATH_PREFIXES),
                 "TERM": "dumb",
                 "LANG": "en_US.UTF-8",
                 "HOME": os.environ.get("HOME", ""),
@@ -729,7 +739,7 @@ def _execute_subprocess(
         stdout = _ANSI_ESCAPE.sub("", stdout)
         stderr = _ANSI_ESCAPE.sub("", stderr)
 
-        for pattern in SECRET_PATTERNS:
+        for pattern in SECRET_VALUE_PATTERNS:
             stdout = re.sub(pattern, "[REDACTED]", stdout)
             stderr = re.sub(pattern, "[REDACTED]", stderr)
 
@@ -763,8 +773,39 @@ def _execute_subprocess(
         return f"Error executing command: {e!s}"
 
 
-def _verify_binary(cmd: str) -> Path:
-    binary = shutil.which(cmd)
-    if not binary:
-        raise PermissionError(f"Binary not found: {cmd}")
-    return Path(binary).resolve()
+# --- Callback Setters ---
+
+
+def set_bash_notification_callback(
+    callback: Callable[[str], None] | None,
+) -> None:
+    global _BASH_NOTIFICATION_CALLBACK
+    _BASH_NOTIFICATION_CALLBACK = callback
+
+
+def check_bash_availability() -> bool:
+    return _SB_BIN is not None
+
+
+def notify_bash_unavailable() -> None:
+    if _BASH_NOTIFICATION_CALLBACK:
+        _BASH_NOTIFICATION_CALLBACK(
+            "BASH TOOL DISABLED: Sandbox execution is required but no sandbox tool "
+            "(sandbox-exec or nsjail) was found on this system."
+        )
+
+
+def set_bash_confirmation_callback(
+    callback: Callable[[list[str], str], bool] | None,
+) -> None:
+    global _BASH_CONFIRMATION_CALLBACK
+    _BASH_CONFIRMATION_CALLBACK = callback
+
+
+__all__ = [
+    "check_bash_availability",
+    "execute_bash",
+    "notify_bash_unavailable",
+    "set_bash_confirmation_callback",
+    "set_bash_notification_callback",
+]
