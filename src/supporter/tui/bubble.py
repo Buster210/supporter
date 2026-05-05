@@ -136,7 +136,9 @@ class MessageBubble(Vertical):
 
             current_child_idx = 0
             for el in self.elements:
-                if el["type"] in ("thought", "tool_calls", "subagent_result"):
+                if el["type"] == "subagent_result":
+                    continue
+                if el["type"] in ("thought", "tool_calls"):
                     if current_child_idx == idx:
                         el["collapsed"] = not el["collapsed"]
                         el["manually_interacted"] = True
@@ -200,8 +202,9 @@ class MessageBubble(Vertical):
     def _ensure_correct_widget_count(self, container: Any) -> None:
         current_widgets = container.query("*")
         expected_count = sum(
-            2 if el["type"] in ("thought", "tool_calls", "subagent_result") else 1
+            2 if el["type"] in ("thought", "tool_calls") else 1
             for el in self.elements
+            if el["type"] != "subagent_result"
         )
         if len(current_widgets) < expected_count:
             self._mount_missing_widgets(container, current_widgets)
@@ -213,13 +216,14 @@ class MessageBubble(Vertical):
         w_idx = 0
         while w_idx < len(current_widgets) and element_idx < len(self.elements):
             el = self.elements[element_idx]
-            w_idx += (
-                2 if el["type"] in ("thought", "tool_calls", "subagent_result") else 1
-            )
+            if el["type"] != "subagent_result":
+                w_idx += 2 if el["type"] in ("thought", "tool_calls") else 1
             element_idx += 1
         new_widgets = []
         for i in range(element_idx, len(self.elements)):
-            new_widgets.extend(self._create_widgets_for_element(i, self.elements[i]))
+            if self.elements[i]["type"] != "subagent_result":
+                el = self.elements[i]
+                new_widgets.extend(self._create_widgets_for_element(i, el))
         if new_widgets:
             container.mount(*new_widgets)
 
@@ -234,7 +238,9 @@ class MessageBubble(Vertical):
         current_widgets = container.query("*")
         w_idx = 0
         for i, el in enumerate(self.elements):
-            if el["type"] in ("thought", "tool_calls", "subagent_result"):
+            if el["type"] == "subagent_result":
+                continue
+            if el["type"] in ("thought", "tool_calls"):
                 if w_idx + 1 >= len(current_widgets):
                     break
                 self._update_section_widget(
@@ -264,10 +270,6 @@ class MessageBubble(Vertical):
             header.update_label("Tools Used", el["collapsed"], self.collapsible)
             view.update(self._format_tool_calls(el["calls"]))
             view.display = not el["collapsed"] if self.collapsible else True
-        elif el["type"] == "subagent_result":
-            header.update_label("Subagents", el["collapsed"], self.collapsible)
-            view.update(RichMarkdown(el["content"]))
-            view.display = not el["collapsed"] if self.collapsible else True
 
     def _update_content_widget(self, view: Any, el: dict[str, Any]) -> None:
         view = cast(Static, view)
@@ -278,6 +280,8 @@ class MessageBubble(Vertical):
             view.update(content)
 
     def _create_widgets_for_element(self, idx: int, el: dict[str, Any]) -> list[Static]:
+        if el["type"] == "subagent_result":
+            return []
         if el["type"] == "thought":
             is_thinking = self.streaming and not self.content
             label = "Thinking" if is_thinking else "Thoughts"
@@ -298,15 +302,6 @@ class MessageBubble(Vertical):
             view.display = not el["collapsed"] if self.collapsible else True
             header.set_class(idx > 0, "section-gap")
             return [header, view]
-        if el["type"] == "subagent_result":
-            header = SectionHeader("", classes="section-header")
-            header.update_label("Subagents", el["collapsed"], self.collapsible)
-            view = Static(
-                RichMarkdown(el["content"].strip()), classes="main-content section-gap"
-            )
-            view.display = not el["collapsed"] if self.collapsible else True
-            header.set_class(idx > 0, "section-gap")
-            return [header, view]
         content = el["content"].strip()
         if self._should_use_markdown(content):
             view = Static(RichMarkdown(content), classes="main-content")
@@ -317,7 +312,7 @@ class MessageBubble(Vertical):
 
     def _format_tool_calls(self, calls: list[dict[str, Any]]) -> str:
         lines = []
-        max_width = 80
+        max_width = self._get_tool_line_max_width()
         for tc in calls:
             name, args = tc["name"], tc["args"]
             arg_str = ""
@@ -329,6 +324,13 @@ class MessageBubble(Vertical):
                 full_line = f"{full_line[: max_width - 3]}..."
             lines.append(full_line)
         return "\n".join(lines)
+
+    def _get_tool_line_max_width(self) -> int:
+        width = self.size.width
+        if width <= 0:
+            return 80
+        # Keep a small safety margin for bubble padding and list indentation.
+        return max(20, width - 6)
 
     def append_token(self, token: str, is_thought: bool = False) -> None:
         if is_thought:

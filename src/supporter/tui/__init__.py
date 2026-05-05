@@ -13,7 +13,7 @@ from textual.reactive import reactive
 from textual.widgets import Button, Input, Label
 
 from .. import ChatAgent, DynamicPool
-from ..logger import init_logger, logger
+from ..logger import init_logger, logger, shutdown_logger
 from ..types import ModeChanged
 
 if TYPE_CHECKING:
@@ -120,6 +120,7 @@ class SupporterApp(App[None]):
 
         await DynamicPool.shutdown_all()
         await self._mode_manager.close()
+        shutdown_logger()
 
     async def _setup_agent(self, use_live: bool = False) -> None:
         await self._mode_manager.setup_agent(use_live=use_live)
@@ -518,11 +519,8 @@ class SupporterApp(App[None]):
     async def _delegation_listener(self, job_id: str) -> None:
         import json
 
-        from ..tools.delegate import get_bus, serialize_results
-        from ..tools.delegation_capsule import (
-            query_delegation,
-            serialize_capsule,
-        )
+        from ..tools.delegate import serialize_capsule_result, serialize_results
+        from ..tools.event_bus import get_bus
         from ..types import (
             MilestoneCancelled,
             MilestoneCompleted,
@@ -615,10 +613,7 @@ class SupporterApp(App[None]):
 
                 elif isinstance(event, MilestoneCompleted):
                     try:
-                        data = await query_delegation(job_id)
-                        if not data:
-                            raise ValueError(f"Capsule not found for {job_id}")
-                        payload = serialize_capsule(data)
+                        payload = serialize_capsule_result(job_id)
                     except Exception as e:
                         logger.warning(
                             "Falling back to legacy delegation result for "
@@ -646,10 +641,7 @@ class SupporterApp(App[None]):
 
                 elif isinstance(event, MilestoneCancelled):
                     try:
-                        data = await query_delegation(job_id)
-                        if not data:
-                            raise ValueError(f"Capsule not found for {job_id}")
-                        payload = serialize_capsule(data)
+                        payload = serialize_capsule_result(job_id)
                     except Exception as e:
                         logger.warning(
                             "Falling back to legacy cancellation result for "

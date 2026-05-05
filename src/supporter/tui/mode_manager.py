@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -14,18 +16,22 @@ class ModeManager:
         from ..config import config
         from ..providers.gemini_live_provider import GeminiLiveProvider
 
-        self._greeting_provider = GeminiLiveProvider(
-            config.gemini_api_keys,
-            model_name=config.gemini_live_model,
-            system_instruction=(
-                "Greeting assistant. Output exactly one friendly sentence. "
-                "No preamble, no thoughts."
-            ),
-            include_thoughts=False,
-        )
+        self._greeting_provider: Any = None
+        if config.gemini_api_keys:
+            self._greeting_provider = GeminiLiveProvider(
+                config.gemini_api_keys,
+                model_name=config.gemini_live_model,
+                system_instruction=(
+                    "Greeting assistant. Output exactly one friendly sentence. "
+                    "No preamble, no thoughts."
+                ),
+                include_thoughts=False,
+            )
         self._warmup_task: asyncio.Task[Any] | None = None
 
     def start_warmup(self) -> None:
+        if self._greeting_provider is None:
+            return
         if self._warmup_task is None:
             self._warmup_task = asyncio.create_task(self._greeting_provider.warmup())
 
@@ -120,11 +126,20 @@ class ModeManager:
         now = datetime.datetime.now().strftime("%I:%M %p")
         prompt = (
             f"Give a short, unique, and friendly one-sentence greeting to {username}. "
-            f"Current time is {now}."
+            f"Current time is {now}. Include the exact username `{username}` "
+            "in the sentence."
         )
 
         banner = self._app.query_one("#welcome-banner")
+        if self._greeting_provider is None:
+            banner.message = self._bold_username(f"Hello {username}!", username)
+            logger.info("ModeManager: No greeting provider; using fallback message")
+            return
         logger.info(f"ModeManager: Starting persistent live greeting for {username}")
+        loading_stop = asyncio.Event()
+        loading_task: asyncio.Task[None] | None = asyncio.create_task(
+            self._animate_loading_banner(banner, loading_stop)
+        )
 
         try:
             self.start_warmup()
@@ -134,17 +149,49 @@ class ModeManager:
             full_text = ""
             async for chunk in self._greeting_provider.generate_stream(prompt):
                 if chunk.text:
+                    if not loading_stop.is_set():
+                        loading_stop.set()
+                        if loading_task is not None:
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await loading_task
+                            loading_task = None
                     full_text += chunk.text
-                    banner.message = full_text.strip()
+                    banner.message = self._bold_username(full_text.strip(), username)
+            if not full_text.strip():
+                banner.message = self._bold_username(f"Hello {username}!", username)
 
             logger.info("ModeManager: Persistent live greeting complete")
         except Exception as e:
             logger.error(f"ModeManager: Greeting failed: {e}")
-            banner.message = f"Hello {username}!"
+            banner.message = self._bold_username(f"Hello {username}!", username)
+        finally:
+            loading_stop.set()
+            if loading_task is not None:
+                loading_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await loading_task
+
+    async def _animate_loading_banner(
+        self, banner: Any, stop_event: asyncio.Event
+    ) -> None:
+        frames = ("wait, Loading.", "wait, Loading..", "wait, Loading...")
+        idx = 0
+        while not stop_event.is_set():
+            banner.message = frames[idx % len(frames)]
+            idx += 1
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=0.18)
+            except TimeoutError:
+                continue
 
     def _update_ui_state(self) -> None:
         mode = "LIVE" if self._app.live_mode else "SINGLE"
         self._app.post_message(ModeChanged(mode=mode, enabled=True))
+
+    @staticmethod
+    def _bold_username(text: str, username: str) -> str:
+        pattern = re.escape(username)
+        return re.sub(pattern, f"[b]{username}[/b]", text, count=1)
 
     async def handle_command(self, command: str) -> bool:
         cmd = command.lower().strip()

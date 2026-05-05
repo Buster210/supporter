@@ -144,7 +144,7 @@ MessageBubble.right {
 .message-meta {
     color: $accent;
     text-style: dim italic;
-    margin: 0;
+    margin: 0 0 0 0;
     width: 1fr;
 }
 
