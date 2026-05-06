@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supporter.config import AppConfig, _get_project_root, load_config
+from supporter.config import (
+    DEFAULT_SYSTEM_INSTRUCTION,
+    AppConfig,
+    _get_project_root,
+    load_config,
+)
 
 
 class TestGetProjectRoot:
@@ -148,3 +153,36 @@ class TestAppConfig:
         assert config.log_level == "DEBUG"
         assert config.provider == "gemini"
         assert config.require_write_confirmation is True
+
+
+class TestDefaultSystemInstruction:
+    def test_no_longer_forces_always_delegate(self) -> None:
+        assert "Every task should be delegated even if it is one step." not in (
+            DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert "## Delegation Strategy" in DEFAULT_SYSTEM_INSTRUCTION
+
+    def test_includes_completion_signal_query_contract(self) -> None:
+        assert "completion signal" in DEFAULT_SYSTEM_INSTRUCTION
+        assert (
+            "call query_delegation(job_id=..., task_id=...)"
+            in DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert "before answering" in DEFAULT_SYSTEM_INSTRUCTION
+        assert "not a report" in DEFAULT_SYSTEM_INSTRUCTION
+
+    def test_no_longer_puts_assigned_task_in_completion_signal(self) -> None:
+        assert "assigned_task only" not in DEFAULT_SYSTEM_INSTRUCTION
+        assert (
+            "containing job_id, task_id, agent, and assigned_task only."
+            not in DEFAULT_SYSTEM_INSTRUCTION
+        )
+
+    def test_includes_direct_final_answer_synthesis_rule(self) -> None:
+        assert (
+            "answers the user's original request directly" in DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert (
+            "Do not frame the final answer as a sub-agent completion update"
+            in DEFAULT_SYSTEM_INSTRUCTION
+        )

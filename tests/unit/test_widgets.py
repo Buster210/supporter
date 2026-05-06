@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -53,12 +54,29 @@ class TestMessageBubble:
         bubble.duration = 1.5
         assert "gemma-4-31b-it" in bubble._get_meta_text()
         assert "1.50s" in bubble._get_meta_text()
+        assert bubble._get_meta_text() == "(gemma-4-31b-it in 1.50s)"
 
     def test_get_meta_text_no_duration(self) -> None:
         bubble = MessageBubble(role="agent", content="test")
         bubble.model = "gemini"
         meta = bubble._get_meta_text()
         assert "gemini" in meta
+
+    def test_styles_message_meta_has_top_spacing(self) -> None:
+        styles_path = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "supporter"
+            / "tui"
+            / "styles.tcss"
+        )
+        styles = styles_path.read_text(encoding="utf-8")
+        assert ".delegation-progress" in styles
+        assert "margin-top: 1;" in styles
+        assert "margin-bottom: 1;" in styles
+        assert "content-align-horizontal: center;" in styles
+        assert ".message-meta" in styles
+        assert "margin: 0 0 0 0;" in styles
 
     def test_format_tool_calls_single(self) -> None:
         bubble = MessageBubble(role="agent", content="")
@@ -80,6 +98,7 @@ class TestMessageBubble:
     def test_format_tool_calls_long_args_truncated(self) -> None:
         bubble = MessageBubble(role="agent", content="")
         calls = [{"name": "write_file", "args": {"content": "x" * 100}}]
+        bubble._get_tool_line_max_width = lambda: 30  # type: ignore[method-assign]
         result = bubble._format_tool_calls(calls)
         assert "..." in result
 

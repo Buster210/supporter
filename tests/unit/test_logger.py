@@ -1,9 +1,20 @@
 import logging
+import sys
 from datetime import datetime
+from io import StringIO
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from supporter.logger import SupporterFormatter, init_logger, logger, main
+from supporter.logger import (
+    SupporterFormatter,
+    _close_file_handler,
+    _dump_flight_recorder,
+    _record,
+    _stop_queue_listener,
+    init_logger,
+    logger,
+    main,
+)
 
 
 def test_supporter_formatter() -> None:
@@ -49,10 +60,15 @@ def test_init_logger(tmp_path: Any) -> None:
         init_logger()
         assert log_file.exists()
         assert logger.level == logging.DEBUG
-        has_queue_handler = any(
-            isinstance(h, logging.handlers.QueueHandler) for h in logger.handlers
+        import supporter.logger
+
+        has_file_handler = any(
+            isinstance(h, logging.FileHandler) for h in logger.handlers
+        ) or any(
+            isinstance(h, logging.FileHandler)
+            for h in getattr(supporter.logger._queue_listener, "handlers", [])
         )
-        assert has_queue_handler
+        assert has_file_handler
 
 
 def test_init_logger_failure(tmp_path: Any) -> None:
@@ -70,3 +86,79 @@ def test_logger_main_runs_init_and_logs_message(tmp_path: Any) -> None:
         main()
         mock_init.assert_called_once()
         mock_supporter_logger.info.assert_any_call("Test message")
+
+
+def test_dump_flight_recorder_stream_write_error() -> None:
+    _record("INFO", "test entry")
+    handler = MagicMock()
+    handler.stream.write.side_effect = OSError("disk full")
+    captured = StringIO()
+    with patch.object(sys, "stderr", captured):
+        _dump_flight_recorder(handler)
+    assert "Failed to dump supporter flight recorder" in captured.getvalue()
+
+
+def test_error_with_exc_info_appends_traceback() -> None:
+    with patch.object(logger, "_inner") as mock_inner:
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            logger.error("something failed", exc_info=True)
+    call_args = mock_inner.error.call_args
+    assert "boom" in call_args[0][0]
+
+
+def test_exception_method_appends_traceback() -> None:
+    with patch.object(logger, "_inner") as mock_inner:
+        try:
+            raise RuntimeError("kaboom")
+        except RuntimeError:
+            logger.exception("caught it")
+    call_args = mock_inner.exception.call_args
+    assert "kaboom" in call_args[0][0]
+
+
+def test_stop_queue_listener_exception() -> None:
+    import supporter.logger
+
+    fake_listener = MagicMock()
+    fake_listener.stop.side_effect = RuntimeError("stop failed")
+    original = supporter.logger._queue_listener
+    try:
+        supporter.logger._queue_listener = fake_listener
+        _stop_queue_listener()
+    finally:
+        supporter.logger._queue_listener = original
+
+
+def test_close_file_handler_flush_exception() -> None:
+    import supporter.logger
+
+    fake_handler = MagicMock()
+    fake_handler.flush.side_effect = OSError("flush failed")
+    original = supporter.logger._file_handler
+    captured = StringIO()
+    try:
+        supporter.logger._file_handler = fake_handler
+        with patch.object(sys, "stderr", captured):
+            _close_file_handler()
+    finally:
+        supporter.logger._file_handler = original
+    assert "Failed to flush supporter log handler" in captured.getvalue()
+    fake_handler.close.assert_called_once()
+
+
+def test_close_file_handler_close_exception() -> None:
+    import supporter.logger
+
+    fake_handler = MagicMock()
+    fake_handler.close.side_effect = OSError("close failed")
+    original = supporter.logger._file_handler
+    captured = StringIO()
+    try:
+        supporter.logger._file_handler = fake_handler
+        with patch.object(sys, "stderr", captured):
+            _close_file_handler()
+    finally:
+        supporter.logger._file_handler = original
+    assert "Failed to close supporter log handler" in captured.getvalue()
