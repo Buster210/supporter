@@ -1,4 +1,4 @@
-TIER1_BINARIES = {
+AUTO_APPROVED_BINARIES = {
     "ls",
     "tree",
     "pwd",
@@ -16,9 +16,26 @@ TIER1_BINARIES = {
     "ps",
     "df",
     "uptime",
+    "mkdir",
+    "touch",
+    "cp",
+    "uname",
+    "sort",
+    "uniq",
+    "diff",
+    "find",
+    "du",
+    "stat",
+    "sed",
+    "awk",
+    "tar",
+    "zip",
+    "unzip",
+    "gzip",
+    "ln",
 }
 
-TIER3_BINARIES = {
+BLOCKED_BINARIES = {
     "sudo",
     "su",
     "mkfs",
@@ -55,7 +72,7 @@ TIER3_BINARIES = {
     "rsync",
 }
 
-NETWORK_BINARIES = {
+NETWORK_EGRESS_BINARIES = {
     "curl",
     "wget",
     "nc",
@@ -67,7 +84,7 @@ NETWORK_BINARIES = {
     "tftp",
 }
 
-SHELL_METACHARACTERS = {
+SHELL_SPECIAL_TOKENS = {
     "|",
     ">",
     ">>",
@@ -84,7 +101,7 @@ SHELL_METACHARACTERS = {
     "||",
 }
 
-SYSTEM_DIRECTORIES = {
+SENSITIVE_SYSTEM_PATHS = {
     "/etc",
     "/var/log",
     "~/.ssh",
@@ -93,7 +110,12 @@ SYSTEM_DIRECTORIES = {
     "~/.profile",
 }
 
-TRUSTED_PREFIXES = ["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+TRUSTED_EXECUTABLE_PATH_PREFIXES = [
+    "/usr/bin",
+    "/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+]
 
 SENSITIVE_FILE_PATTERNS = [
     ".env",
@@ -119,7 +141,7 @@ SENSITIVE_FILE_PATTERNS = [
     ".kube/config",
 ]
 
-SECRET_PATTERNS = [
+SECRET_VALUE_PATTERNS = [
     r"AIza[0-9A-Za-z\-_]{35}",
     r"sk-[a-zA-Z0-9]{32,}",
     r"AKIA[0-9A-Z]{16}",
@@ -127,8 +149,7 @@ SECRET_PATTERNS = [
     r"(?i)(password|secret|token|api_key)\s*[=:]\s*\S+",
 ]
 
-
-UPLOAD_FLAGS = {
+NETWORK_UPLOAD_FLAGS = {
     "-F",
     "--form",
     "-T",
@@ -137,7 +158,7 @@ UPLOAD_FLAGS = {
     "--body-file",
 }
 
-PACKAGE_MANAGERS = {
+PACKAGE_MANAGER_BINARIES = {
     "npm",
     "yarn",
     "pnpm",
@@ -150,11 +171,41 @@ PACKAGE_MANAGERS = {
     "gem",
 }
 
-INTERPRETERS = {"python", "python3", "node", "js", "bash", "sh", "perl", "ruby"}
+AUTO_APPROVED_GIT_SUBCOMMANDS = {
+    "add",
+    "branch",
+    "describe",
+    "diff",
+    "fetch",
+    "log",
+    "ls-files",
+    "remote",
+    "rev-parse",
+    "shortlog",
+    "show",
+    "stash",
+    "status",
+    "commit",
+    "checkout",
+    "merge",
+    "push",
+    "pull",
+}
 
-RM_NUCLEAR_PATHS = {"/", "/usr", "/bin", "/etc", "/var", "/home", "/root"}
+INLINE_PAYLOAD_INTERPRETER_BINARIES = {
+    "python",
+    "python3",
+    "node",
+    "js",
+    "bash",
+    "sh",
+    "perl",
+    "ruby",
+}
 
-SHELL_BINS = {
+RM_BLOCKED_TARGET_PATHS = {"/", "/usr", "/bin", "/etc", "/var", "/home", "/root"}
+
+SHELL_INTERPRETER_BINARIES = {
     "sh",
     "bash",
     "zsh",
@@ -167,7 +218,7 @@ SHELL_BINS = {
     "ruby",
 }
 
-FILE_READING_BINS = {
+FILE_READING_BINARIES = {
     "cat",
     "tail",
     "head",
@@ -179,11 +230,16 @@ FILE_READING_BINS = {
     "zip",
 }
 
-TEMP_DIRS = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]  # noqa: S108
+UNTRUSTED_EXECUTION_TEMP_DIRS = [
+    "/tmp",  # noqa: S108
+    "/private/tmp",
+    "/var/folders",
+    "/private/var/folders",
+]
 
-INSTALL_CMDS = {"install", "i", "ci", "add", "sync"}
+PACKAGE_INSTALL_SUBCOMMANDS = {"install", "i", "ci", "add", "sync"}
 
-RISKY_PYTHON_NAMES = {
+RISKY_PYTHON_SYMBOL_NAMES = {
     "getattr",
     "setattr",
     "__import__",
@@ -199,7 +255,7 @@ RISKY_PYTHON_NAMES = {
     "__builtins__",
 }
 
-RISKY_PYTHON_ATTRS = {
+RISKY_PYTHON_ATTRIBUTE_NAMES = {
     "__import__",
     "__builtins__",
     "__globals__",
@@ -211,7 +267,7 @@ RISKY_PYTHON_ATTRS = {
     "import_module",
 }
 
-RISKY_PYTHON_MODULES = {
+CONFIRMATION_REQUIRED_PYTHON_MODULES = {
     "os",
     "subprocess",
     "socket",
@@ -226,7 +282,7 @@ RISKY_PYTHON_MODULES = {
     "websockets",
 }
 
-TIER3_PYTHON_MODULES = {
+BLOCKED_PYTHON_MODULES = {
     "codecs",
     "base64",
     "binascii",
@@ -235,4 +291,23 @@ TIER3_PYTHON_MODULES = {
     "zlib",
     "bz2",
     "lzma",
+}
+
+CONFIRMATION_REQUIRED_BINARIES = {
+    "chmod",
+    "mv",
+    "rm",
+    "rmdir",
+    "kill",
+    "pkill",
+    "nice",
+    "renice",
+    "top",
+    "htop",
+    "lsof",
+    "ssh-keygen",
+    "curl",
+    "wget",
+    "xargs",
+    "parallel",
 }

@@ -60,6 +60,12 @@ class MockApp:
     def exit(self) -> None:
         self.exited = True
 
+    def run_worker(self, worker: Any, **kwargs: Any) -> Any:
+        pass
+
+    async def _process_message_cycle(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
     def action_clear_screen(self) -> None:
         self.cleared = True
 
@@ -82,13 +88,21 @@ class MockApp:
 
 
 class MockWidget:
+    @property
+    def message(self) -> str:
+        return self._message
+
+    @message.setter
+    def message(self, value: str) -> None:
+        self._message = value
+
     def __init__(self, id: str = "") -> None:
         self.id = id
         self.mounted: list[Any] = []
         self.removed = False
         self.content = ""
+        self._message = ""
         self.queue_messages: list[str] = []
-        from unittest.mock import MagicMock
 
         self.update = MagicMock(side_effect=self._update_content, return_value=None)
         self.update_queue = MagicMock(side_effect=self._update_queue, return_value=None)

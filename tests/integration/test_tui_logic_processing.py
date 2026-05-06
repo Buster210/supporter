@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -16,7 +16,7 @@ async def test_process_streaming_basic() -> None:
     target = MockWidget()
     agent = MagicMock()
 
-    async def mock_stream(text: Any) -> AsyncGenerator[Any, Any]:
+    async def mock_stream(text: Any, **kwargs: Any) -> AsyncGenerator[Any, Any]:
         yield MagicMock(
             text="Hello",
             is_tool_call=False,
@@ -53,7 +53,7 @@ async def test_process_streaming_with_tool_calls() -> None:
     target = MockWidget()
     agent = MagicMock()
 
-    async def mock_stream(text: Any) -> AsyncGenerator[Any, Any]:
+    async def mock_stream(text: Any, **kwargs: Any) -> AsyncGenerator[Any, Any]:
         yield MagicMock(
             is_tool_call=True,
             tool_name="read_file",
@@ -103,7 +103,7 @@ async def test_process_streaming_empty_chunk() -> None:
     chunk.is_thought = False
     chunk.model = None
 
-    async def mock_stream(*args: Any) -> AsyncGenerator[Any, Any]:
+    async def mock_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, Any]:
         yield chunk
 
     agent = MagicMock()
@@ -124,7 +124,7 @@ async def test_process_streaming_chat_turn_mount() -> None:
     chunk.is_thought = False
     chunk.model = "test-model"
 
-    async def mock_stream(*args: Any) -> AsyncGenerator[Any, Any]:
+    async def mock_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, Any]:
         yield chunk
 
     agent = MagicMock()
@@ -135,7 +135,11 @@ async def test_process_streaming_chat_turn_mount() -> None:
         return None
 
     target.mount_bubble = MagicMock(side_effect=mock_mount_bubble)
-    result = await processor.process_streaming("test", target, 0, agent)
+    with patch(
+        "supporter.tui.bubble.MessageBubble.app", new_callable=PropertyMock
+    ) as mock_app_prop:
+        mock_app_prop.return_value = app
+        result = await processor.process_streaming("test", target, 0, agent)
     assert result is not None
     target.mount_bubble.assert_called()
 

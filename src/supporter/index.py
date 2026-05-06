@@ -6,7 +6,7 @@ import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from google.genai.types import Content
@@ -47,23 +47,23 @@ def is_rate_limit(error: Any) -> bool:
     if getattr(error, "status", None) == HTTP_RATE_LIMIT:
         return True
     message = str(error).lower()
-    return any(sig in message for sig in config.rate_limit_signals)
+    return any(sig in message for sig in config.rate_limit_error_strings)
 
 
 def is_model_error(error: Any, model_name: str | None = None) -> bool:
     error_class_name = error.__class__.__name__
-    if error_class_name in config.google_5xx_errors:
+    if error_class_name in config.google_api_5xx_exceptions:
         return True
 
     status = getattr(error, "status", None)
-    if status in config.http_errors_5xx:
+    if status in config.http_5xx_status_codes:
         return True
 
     message = str(error).lower()
-    if any(sig in message for sig in config.transient_signals):
+    if any(sig in message for sig in config.transient_error_strings):
         return True
 
-    return any(code in message for code in ("503", "500", "502", "504"))
+    return any(str(code) in message for code in config.http_5xx_status_codes)
 
 
 def should_trigger_fallback(error: Any) -> bool:
@@ -111,11 +111,12 @@ class DynamicPool(LLMProvider):
         self.slot_available = asyncio.Event()
         self._current_index = 0
         self.background_tasks: set[asyncio.Task[None]] = set()
+        self._replace_lock = asyncio.Semaphore(1)
         self._instances.add(self)
 
     def _fill_slot(self) -> None:
         key = self.keys[self.next_key_index % len(self.keys)]
-        self.next_key_index += 1
+        self.next_key_index = (self.next_key_index + 1) % len(self.keys)
         provider = GeminiProvider(key, model_name=self.model_name)
         self.active_slots.append(provider)
         self.slot_available.set()
@@ -143,8 +144,10 @@ class DynamicPool(LLMProvider):
         )
 
         async def _bg_replace() -> None:
-            await asyncio.sleep(0)
-            self._fill_slot()
+            async with self._replace_lock:
+                await asyncio.sleep(0)
+                if len(self.active_slots) < self.pool_size:
+                    self._fill_slot()
 
         coro = _bg_replace()
         try:
@@ -186,7 +189,7 @@ class DynamicPool(LLMProvider):
         for attempt in range(len(self.keys)):
             provider = self._rotate_and_get()
             try:
-                provider_options = cast(LLMOptions, dict(options)) if options else None
+                provider_options = options if options else None
                 result: LLMResult = await provider.generate(prompt, provider_options)
 
                 if not result.model:
@@ -229,7 +232,7 @@ class DynamicPool(LLMProvider):
             provider = self._rotate_and_get()
             yielded_any = False
             try:
-                provider_options = cast(LLMOptions, dict(options)) if options else None
+                provider_options = options if options else None
                 async for chunk in provider.generate_stream(prompt, provider_options):
                     yielded_any = True
                     yield chunk
@@ -334,6 +337,7 @@ def get_provider(
     shared: bool = True,
     model_name: str | None = None,
     registry: dict[str, Callable[..., Any]] | None = None,
+    pool_size: int = 2,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
@@ -386,12 +390,14 @@ def get_provider(
 
             def primary_factory() -> LLMProvider:
                 target_model = model_name or config.gemini_model
-                return DynamicPool(keys, target_model, pool_size=2)
+                return DynamicPool(keys, target_model, pool_size=pool_size)
 
             def fallback_factory() -> LLMProvider | None:
                 if not config.gemini_fallback_model:
                     return None
-                return DynamicPool(keys, config.gemini_fallback_model, pool_size=2)
+                return DynamicPool(
+                    keys, config.gemini_fallback_model, pool_size=pool_size
+                )
 
             provider = LazyFallbackProvider(primary_factory, fallback_factory)
 

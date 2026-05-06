@@ -5,44 +5,48 @@ default_stages = ["pre-commit"]
 [[repos]]
 repo = "builtin"
 hooks = [
-    { id = "trailing-whitespace" },
-    { id = "end-of-file-fixer" },
-    { id = "check-yaml" },
-    { id = "check-toml" },
-    { id = "check-added-large-files" },
+    { id = "trailing-whitespace", priority = 0 },
+    { id = "end-of-file-fixer", priority = 0 },
+    { id = "check-toml", priority = 0 },
+    { id = "check-added-large-files", args = ["--maxkb=200"], priority = 0 },
+    { id = "check-merge-conflict", priority = 0 },
 ]
 
 [[repos]]
 repo = "https://github.com/astral-sh/uv-pre-commit"
-rev = "0.11.7"
-hooks = [{ id = "uv-lock" }]
+rev = "0.11.9"
+hooks = [{ id = "uv-lock", priority = 0 }]
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.15.10"
+rev = "v0.15.12"
 hooks = [
-    { id = "ruff", args = [
+    { id = "ruff", priority = 10, args = [
         "--exit-non-zero-on-fix",
         "--fix",
     ] },
-    { id = "ruff-format" },
+    { id = "ruff-format", priority = 10 },
 ]
 
 [[repos]]
 repo = "local"
 hooks = [
-    { id = "mypy", name = "mypy", entry = "./.venv/bin/mypy src tests", language = "system", types = [
-        "python",
-    ], require_serial = true, pass_filenames = false, always_run = true },
-    { id = "pytest", name = "pytest", entry = "uv run pytest --cov=src", language = "system", pass_filenames = false, always_run = true },
+    { id = "mypy", name = "mypy", entry = "uv run mypy src tests",
+      language = "system", types = ["python"], require_serial = true,
+      pass_filenames = false, always_run = true, fail_fast = true, priority = 40 },
+    { id = "pytest", name = "pytest", entry = "uv run pytest --cov=src",
+      language = "system", pass_filenames = false, always_run = true,
+      fail_fast = true, priority = 40 },
 ]
 
 [[repos]]
 repo = "https://github.com/PyCQA/bandit"
 rev = "1.9.4"
-hooks = [{ id = "bandit", args = ["-c", "pyproject.toml"] }]
+hooks = [{ id = "bandit", args = ["-c", "pyproject.toml"],
+           types = ["python"], priority = 40 }]
 
 [[repos]]
 repo = "https://github.com/Yelp/detect-secrets"
 rev = "v1.5.0"
-hooks = [{ id = "detect-secrets", args = ["--baseline", ".secrets.baseline"] }]
+hooks = [{ id = "detect-secrets", args = ["--baseline", ".secrets.baseline"],
+           priority = 40 }]

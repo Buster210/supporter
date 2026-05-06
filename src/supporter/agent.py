@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from google.genai.types import Content, Tool
 
+from .config import config
 from .logger import logger
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
@@ -41,9 +43,15 @@ class ChatAgent:
             "system_instruction": self.system_instruction,
         }
 
+    def _trim_history(self) -> None:
+        cap = config.history_max_turns
+        if cap and len(self.history) > cap:
+            del self.history[: len(self.history) - cap]
+
     async def execute(self, prompt: str) -> LLMResult:
         logger.info(f"Agent: executing prompt — length={len(prompt)}")
-        logger.debug(f"Agent: full prompt: {prompt!r}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Agent: full prompt: {prompt!r}")
         from google.genai.types import Content, Part
 
         user_message = Content(role="user", parts=[Part(text=prompt)])
@@ -65,11 +73,13 @@ class ChatAgent:
         if result.automatic_function_calling_history:
             logger.info("Agent: syncing history from automatic function calling")
             self.history = result.automatic_function_calling_history
+            self._trim_history()
             return
 
         self.history.append(user_message)
 
         if not result.candidates or not result.candidates[0].content:
+            self._trim_history()
             return
 
         from google.genai.types import Content
@@ -77,26 +87,34 @@ class ChatAgent:
         self.history.append(
             Content(role="model", parts=result.candidates[0].content.parts)
         )
+        self._trim_history()
         logger.info(f"Agent: history synced — new size={len(self.history)}")
 
-    async def execute_stream(self, prompt: str) -> AsyncIterator[LLMChunk]:
+    async def execute_stream(
+        self, prompt: str, exclude_from_history: bool = False
+    ) -> AsyncIterator[LLMChunk]:
         logger.info(f"Agent: executing streaming prompt — length={len(prompt)}")
-        logger.debug(f"Agent: full streaming prompt: {prompt!r}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Agent: full streaming prompt: {prompt!r}")
         from google.genai.types import Content, Part
 
         user_message = Content(role="user", parts=[Part(text=prompt)])
-        accumulated_text = ""
+        text_parts: list[str] = []
 
         async for chunk in self.provider.generate_stream(
             prompt, self._prepare_execution_context()
         ):
-            accumulated_text += chunk.text
+            text_parts.append(chunk.text)
             yield chunk
 
-        self.history.append(user_message)
-        from google.genai.types import Content, Part
+        if not exclude_from_history:
+            self.history.append(user_message)
+            from google.genai.types import Content, Part
 
-        self.history.append(Content(role="model", parts=[Part(text=accumulated_text)]))
+            self.history.append(
+                Content(role="model", parts=[Part(text="".join(text_parts))])
+            )
+            self._trim_history()
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
     def clear_history(self) -> None:

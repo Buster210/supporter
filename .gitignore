@@ -1,5 +1,5 @@
 .env
-app.log
+app.log*
 .DS_Store
 __pycache__/
 *.py[cod]
@@ -13,3 +13,4 @@ venv/
 htmlcov/
 supporter.egg-info
 .mypy_cache
+.supporter

@@ -1,9 +1,21 @@
+from __future__ import annotations
+
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol, TypedDict
 
 from google.genai.types import Content, GenerateContentConfig, Tool
 from textual.message import Message
+
+
+class TaskStatus(StrEnum):
+    COMPLETED = "completed"
+    TIMEOUT = "timeout"
+    SKIPPED = "skipped"
+    ERROR = "error"
+    STARTED = "started"
+    PENDING = "pending"
 
 
 class LLMOptions(TypedDict, total=False):
@@ -38,15 +50,28 @@ class AppConfig:
     allowed_directories: list[str]
     require_write_confirmation: bool
     live_thinking_level: str
-    retriable_codes: set[str]
-    google_5xx_errors: set[str]
-    transient_signals: set[str]
-    http_errors_5xx: set[int]
-    rate_limit_signals: set[str]
+    retriable_error_strings: set[str]
+    google_api_5xx_exceptions: set[str]
+    transient_error_strings: set[str]
+    http_5xx_status_codes: set[int]
+    rate_limit_error_strings: set[str]
     drain_timeout: float
     context_trigger_tokens: int
     context_target_tokens: int
     http_retry_attempts: int
+    delegate_max_hard_cap: int
+    delegate_default_parallel: int
+    delegate_default_timeout: int
+    delegate_max_timeout: int
+    delegate_max_tasks: int
+    delegate_max_output_chars: int
+    delegate_allowed_tools: set[str]
+    delegate_default_persona: str
+    delegate_agent_roster: dict[str, dict[str, Any]]
+    delegate_max_retries: int
+    log_max_bytes: int = 5_000_000
+    log_backup_count: int = 3
+    history_max_turns: int = 200
 
 
 @dataclass
@@ -100,3 +125,89 @@ class LLMProvider(Protocol):
     ) -> AsyncIterator[LLMChunk]: ...
 
     def get_name(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class DelegationEvent:
+    job_id: str
+
+
+@dataclass(frozen=True)
+class MilestoneStarted(DelegationEvent):
+    milestone: str
+    task_ids: list[str]
+    parallel_cap: int
+
+
+@dataclass(frozen=True)
+class MilestoneCompleted(DelegationEvent):
+    milestone: str
+    results: list[dict[str, Any]]
+    total_duration: float
+
+
+@dataclass(frozen=True)
+class MilestoneCancelled(DelegationEvent):
+    milestone: str
+    total_duration: float
+
+
+@dataclass(frozen=True)
+class TaskStarted(DelegationEvent):
+    task_id: str
+    agent_label: str
+    started_at: float
+    timeout: float
+
+
+@dataclass(frozen=True)
+class TaskCompleted(DelegationEvent):
+    task_id: str
+    duration: float
+    output: str
+    model: str
+    summary: str = ""
+    confidence: str = "unknown"
+    findings_count: int = 0
+    evidence_counts: dict[str, int] = field(default_factory=dict)
+    handoff: str = ""
+
+
+@dataclass(frozen=True)
+class TaskFailed(DelegationEvent):
+    task_id: str
+    duration: float
+    error: str
+
+
+@dataclass(frozen=True)
+class TaskTimedOut(DelegationEvent):
+    task_id: str
+    duration: float
+
+
+@dataclass(frozen=True)
+class TaskSkipped(DelegationEvent):
+    task_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class TaskRetrying(DelegationEvent):
+    task_id: str
+    attempt: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class HeartbeatTick(DelegationEvent):
+    milestone: str
+    snapshot: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class TaskAnomaly(DelegationEvent):
+    task_id: str
+    agent_label: str
+    elapsed_seconds: float
+    timeout: float

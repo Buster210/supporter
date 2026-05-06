@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -26,6 +27,16 @@ SUPPORTER_ART = (
 class SupporterHeader(Static):
     def render(self) -> Text:
         return apply_crystal_gradient(SUPPORTER_ART)
+
+
+class WelcomeBanner(Static):
+    message = reactive("")
+
+    def render(self) -> str:
+        return self.message
+
+    def watch_message(self, message: str) -> None:
+        self.set_class(not message, "hidden")
 
 
 class ChatContainer(Vertical):
@@ -73,6 +84,7 @@ class ChatTurn(Vertical):
         super().__init__(classes="chat-turn")
         self.user_bubble = user_bubble
         self.agent_bubbles: list[MessageBubble] = []
+        self.turn_start_time = time.perf_counter()
 
     def watch_collapsed(self, value: bool) -> None:
         self.set_class(value, "collapsed")

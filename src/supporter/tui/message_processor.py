@@ -26,6 +26,7 @@ class ChatMessageProcessor:
         container: Any,
         start_time: float,
         agent: ChatAgent,
+        exclude_from_history: bool = False,
     ) -> Any:
         from .bubble import MessageBubble
 
@@ -33,7 +34,9 @@ class ChatMessageProcessor:
 
         try:
             logger.info(f"UI: starting stream process — text_len={len(text)}")
-            async for chunk in agent.execute_stream(text):
+            async for chunk in agent.execute_stream(
+                text, exclude_from_history=exclude_from_history
+            ):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
             if state.bubble:

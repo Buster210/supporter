@@ -92,26 +92,28 @@ class TestFileOpsUtils:
 
 
 class TestPathValidation:
-    def test_validate_path_no_allowed(self) -> None:
-        with patch("supporter.tools.file_ops.config") as mock_config:
-            mock_config.allowed_directories = []
-            with pytest.raises(PermissionError, match="No allowed directories"):
-                _validate_path("test.txt")
+    def test_validate_path_no_allowed(self, mock_file_ops_config: Any) -> None:
+        mock_file_ops_config.allowed_directories = []
+        with pytest.raises(PermissionError, match="No allowed directories"):
+            _validate_path("test.txt")
 
-    def test_validate_path_outside_root(self, temp_project: Any) -> None:
-        with patch("supporter.tools.file_ops.config") as mock_config:
-            mock_config.allowed_directories = [str(temp_project)]
-            with pytest.raises(PermissionError, match="outside project root"):
-                _validate_path("/tmp/outside.txt")  # noqa: S108
+    def test_validate_path_outside_root(
+        self, temp_project: Any, mock_file_ops_config: Any
+    ) -> None:
+        mock_file_ops_config.allowed_directories = [str(temp_project)]
+        with pytest.raises(PermissionError, match="outside project root"):
+            _validate_path("/tmp/outside.txt")  # noqa: S108
 
-    def test_validate_path_blacklisted(self, temp_project: Any) -> None:
-        with patch("supporter.tools.file_ops.config") as mock_config:
-            mock_config.allowed_directories = [str(temp_project)]
-            with pytest.raises(PermissionError, match="protected internal file"):
-                _validate_path(str(temp_project / ".env"))
+    def test_validate_path_blacklisted(
+        self, temp_project: Any, mock_file_ops_config: Any
+    ) -> None:
+        mock_file_ops_config.allowed_directories = [str(temp_project)]
+        with pytest.raises(PermissionError, match="protected internal file"):
+            _validate_path(str(temp_project / ".env"))
 
-    def test_validate_path_gitignore(self, temp_project: Any) -> None:
-        with patch("supporter.tools.file_ops.config") as mock_config:
-            mock_config.allowed_directories = [str(temp_project)]
-            with pytest.raises(PermissionError, match="ignored by \\.gitignore"):
-                _validate_path(str(temp_project / "ignored.log"))
+    def test_validate_path_gitignore(
+        self, temp_project: Any, mock_file_ops_config: Any
+    ) -> None:
+        mock_file_ops_config.allowed_directories = [str(temp_project)]
+        with pytest.raises(PermissionError, match="ignored by \\.gitignore"):
+            _validate_path(str(temp_project / "ignored.log"))

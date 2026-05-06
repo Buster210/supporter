@@ -131,10 +131,20 @@ MessageBubble.right {
     margin-top: 1;
 }
 
+.delegation-progress {
+    margin-top: 1;
+    margin-bottom: 1;
+    content-align-horizontal: center;
+}
+
+.delegation-progress #main-content, .delegation-progress .main-content {
+    text-align: center;
+}
+
 .message-meta {
     color: $accent;
     text-style: dim italic;
-    margin: 0;
+    margin: 0 0 0 0;
     width: 1fr;
 }
 
@@ -300,5 +310,18 @@ ConfirmationModal {
 }
 
 #scroll-btn-wrapper.hidden {
+    display: none;
+}
+
+WelcomeBanner {
+    height: auto;
+    content-align: left middle;
+    color: $accent;
+    text-style: italic;
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+WelcomeBanner.hidden {
     display: none;
 }

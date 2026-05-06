@@ -1,5 +1,4 @@
 import subprocess
-import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -7,10 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import supporter.tools.bash as bash_mod
 from supporter.tools.bash import (
     _apply_path_security,
     _apply_policy_checks,
-    _apply_rate_limiting,
+    _apply_tier1_allowlist,
     _check_complex_syntax,
     _check_execution_location,
     _check_network_egress,
@@ -18,6 +18,7 @@ from supporter.tools.bash import (
     _check_package_manager,
     _check_rm_nuclear,
     _detect_sandbox,
+    _evaluate_final_tier,
     _gate_inner_shell_payload,
     _get_fs_state,
     _inspect_interpreter_payload,
@@ -40,20 +41,19 @@ def project_root(tmp_path: Any) -> Any:
 
 @pytest.fixture
 def mock_config() -> Generator[MagicMock, None, None]:
-    with patch("supporter.tools.bash.config") as mock:
-        mock.allowed_directories = ["/fake_tmp/project"]
-        yield mock
+    with (
+        patch("supporter.tools.bash.config") as mock_c,
+    ):
+        mock_c.allowed_directories = ["/fake_tmp/project"]
+        yield mock_c
 
 
 @pytest.fixture(autouse=True)
 def reset_globals() -> Any:
-    from supporter.tools import bash
-
-    bash._bash_execution_history.clear()
-    bash._SB_TYPE = None
-    bash._SB_BIN = None
-    bash._BASH_NOTIFICATION_CALLBACK = None
-    bash._BASH_CONFIRMATION_CALLBACK = None
+    bash_mod._SB_TYPE = None
+    bash_mod._SB_BIN = None
+    bash_mod._BASH_NOTIFICATION_CALLBACK = None
+    bash_mod._BASH_CONFIRMATION_CALLBACK = None
 
 
 @pytest.fixture(autouse=True)
@@ -85,9 +85,18 @@ async def test_execute_bash_substitution_prohibited() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_bash_pipe_confirmation() -> None:
-    result = await execute_bash("ls | grep test")
-    assert "Tier 2 Confirmation Required" in result
+async def test_execute_bash_pipe_auto_allow() -> None:
+    # ls | grep is now Tier 1 (read-only pipe)
+    with (
+        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch("supporter.tools.bash._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.subprocess.run") as mock_run,
+    ):
+        mock_verify.side_effect = [Path("/bin/ls"), Path("/usr/bin/grep")]
+        mock_run.return_value = MagicMock(stdout=b"out", stderr=b"", returncode=0)
+        result = await execute_bash("ls | grep test")
+        assert "out" in result
 
 
 @pytest.mark.asyncio
@@ -98,8 +107,11 @@ async def test_execute_bash_full_path_prohibited() -> None:
 
 def test_execute_bash_success(project_root: Any) -> None:
     import asyncio
-    with patch("supporter.tools.bash.config") as mock_config:
-        mock_config.allowed_directories = [str(project_root)]
+
+    with (
+        patch("supporter.tools.bash.config") as mock_config_c,
+    ):
+        mock_config_c.allowed_directories = [str(project_root)]
         with patch("supporter.tools.bash._verify_binary") as mock_verify:
             mock_verify.return_value = Path("/usr/bin/ls")
             with patch("supporter.tools.bash._execute_subprocess") as mock_exec:
@@ -107,15 +119,17 @@ def test_execute_bash_success(project_root: Any) -> None:
                 with (
                     patch(
                         "supporter.tools.bash._apply_path_security",
-                        return_value=(1, False),
+                        return_value=1,
                     ),
                     patch(
                         "supporter.tools.bash._apply_policy_checks",
-                        return_value=(1, False),
+                        return_value=1,
                     ),
                     patch("supporter.tools.bash._evaluate_final_tier"),
-                    patch("supporter.tools.bash._apply_rate_limiting"),
-                    patch("supporter.tools.bash._get_fs_state", return_value={}),
+                    patch(
+                        "supporter.tools.bash._get_fs_state",
+                        return_value={},
+                    ),
                 ):
                     result = asyncio.run(execute_bash("ls"))
                     assert result == "file1\nfile2"
@@ -142,11 +156,11 @@ def test_check_rm_nuclear() -> None:
 
 
 def test_gate_inner_shell_payload() -> None:
-    assert _gate_inner_shell_payload(["ls"], 0) == 2
+    assert _gate_inner_shell_payload(["ls"], 0) == 1
 
 
 def test_check_network_egress() -> None:
-    assert _check_network_egress("wget", ["wget", "http://x.com"]) == 2
+    assert _check_network_egress("wget", ["wget", "http://x.com"]) == 1
     assert _check_network_egress("curl", ["curl", "-F", "x=y"]) == 3
 
 
@@ -164,8 +178,8 @@ def test_check_network_egress_data_flags() -> None:
 
 
 def test_check_package_manager() -> None:
-    assert _check_package_manager("git", ["git", "clone", "url"]) == 2
-    assert _check_package_manager("pip", ["pip", "install", "pkg"]) == 4
+    assert _check_package_manager("git", ["git", "clone", "url"]) == 1
+    assert _check_package_manager("pip", ["pip", "install", "pkg"]) == 2
 
 
 def test_check_package_manager_supply_chain() -> None:
@@ -207,25 +221,25 @@ def test_check_package_manager_others() -> None:
         )
         == 2
     )
-    assert _check_package_manager("gem", ["gem", "install", "pkg"]) == 4
-    assert _check_package_manager("cargo", ["cargo", "install", "pkg"]) == 3
-    assert _check_package_manager("poetry", ["poetry", "install"]) == 4
+    assert _check_package_manager("gem", ["gem", "install", "pkg"]) == 2
+    assert _check_package_manager("cargo", ["cargo", "install", "pkg"]) == 2
+    assert _check_package_manager("poetry", ["poetry", "install"]) == 2
     assert _check_package_manager("poetry", ["poetry", "install", "--no-root"]) == 2
-    assert _check_package_manager("poetry", ["poetry", "add", "pkg"]) == 4
-    assert _check_package_manager("poetry", ["poetry", "run", "cmd"]) == 2
+    assert _check_package_manager("poetry", ["poetry", "add", "pkg"]) == 2
+    assert _check_package_manager("poetry", ["poetry", "run", "cmd"]) == 1
 
 
 def test_check_open_command() -> None:
-    assert _check_open_command(["open", "file.txt"]) == 2
+    assert _check_open_command(["open", "file.txt"]) == 1
     assert _check_open_command(["open", "-a", "Safari"]) == 3
     assert _check_open_command(["open", "-e", "file.txt"]) == 3
 
 
 def test_inspect_interpreter_payload() -> None:
     assert (
-        _inspect_interpreter_payload("python", ["python", "-c", "print('hi')"], 0) == 2
+        _inspect_interpreter_payload("python", ["python", "-c", "print('hi')"], 0) == 1
     )
-    assert _inspect_interpreter_payload("ruby", ["ruby", "-r", "socket"], 0) == 2
+    assert _inspect_interpreter_payload("ruby", ["ruby", "-r", "socket"], 0) == 1
 
 
 def test_inspect_interpreter_payload_python_complex() -> None:
@@ -240,7 +254,7 @@ def test_inspect_interpreter_payload_python_complex() -> None:
     )
     assert (
         _inspect_interpreter_payload("python", ["python", "-c", "open('f', 'w')"], 0)
-        == 4
+        == 2
     )
     assert _inspect_interpreter_payload("python", ["python", "-c", "x = exec"], 0) == 3
     assert (
@@ -268,9 +282,9 @@ def test_inspect_interpreter_payload_python_complex() -> None:
     )
     assert (
         _inspect_interpreter_payload("python", ["python", "-c", "import subprocess"], 0)
-        == 4
+        == 2
     )
-    assert _inspect_interpreter_payload("python", ["python", "-c", "import os"], 0) == 4
+    assert _inspect_interpreter_payload("python", ["python", "-c", "import os"], 0) == 2
     assert (
         _inspect_interpreter_payload("python", ["python", "-c", "invalid syntax"], 0)
         == 3
@@ -315,15 +329,13 @@ def test_apply_path_security_flag_parsing() -> None:
     cwd = cwd.resolve()
     root = root.resolve()
     p = Path("/fake_tmp/out").resolve()
-    _tier, _risk = _apply_path_security(
-        "cmd -o=" + str(p), ["cmd", "-o=" + str(p)], cwd, root
-    )
+    _tier = _apply_path_security("cmd -o=" + str(p), ["cmd", "-o=" + str(p)], cwd, root)
     assert _tier == 1
-    _tier, _risk = _apply_path_security(
+    _tier = _apply_path_security(
         "cmd -L@/fake_tmp/out", ["cmd", "-L@/fake_tmp/out"], cwd, root
     )
     assert _tier == 1
-    _tier, _risk = _apply_path_security(
+    _tier = _apply_path_security(
         "cmd -c/fake_tmp/out", ["cmd", "-c/fake_tmp/out"], cwd, root
     )
     assert _tier == 1
@@ -333,10 +345,10 @@ def test_apply_path_security_exceptions() -> None:
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
     with (
-        patch("supporter.tools.bash.SYSTEM_DIRECTORIES", []),
+        patch("supporter.tools.bash.SENSITIVE_SYSTEM_PATHS", []),
         patch("pathlib.Path.resolve", side_effect=Exception("resolve failure")),
     ):
-        _tier, _risk = _apply_path_security(
+        _tier = _apply_path_security(
             "ls /nonexistent", ["ls", "/nonexistent"], cwd, root
         )
         assert _tier == 1
@@ -346,12 +358,10 @@ def test_apply_path_security_boundary_failure() -> None:
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
     with (
-        patch("supporter.tools.bash.SYSTEM_DIRECTORIES", []),
+        patch("supporter.tools.bash.SENSITIVE_SYSTEM_PATHS", []),
         patch("pathlib.Path.resolve", side_effect=Exception("boundary failure")),
     ):
-        _tier, _risk = _apply_path_security(
-            "ls /outside", ["ls", "/outside"], cwd, root
-        )
+        _tier = _apply_path_security("ls /outside", ["ls", "/outside"], cwd, root)
         assert _tier == 1
 
 
@@ -378,7 +388,8 @@ def test_check_rm_nuclear_failure() -> None:
 def test_check_complex_syntax_pipe_to_network() -> None:
     with (
         patch(
-            "supporter.tools.bash._verify_binary", return_value=Path("/usr/bin/curl")
+            "supporter.tools.bash._verify_binary",
+            return_value=Path("/usr/bin/curl"),
         ),
         pytest.raises(PermissionError, match="Pipe-to-network"),
     ):
@@ -391,15 +402,18 @@ def test_gate_inner_shell_payload_complex() -> None:
     with patch("supporter.tools.bash._verify_binary", side_effect=PermissionError):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
-        "supporter.tools.bash._verify_binary", return_value=Path("/usr/bin/sudo")
+        "supporter.tools.bash._verify_binary",
+        return_value=Path("/usr/bin/sudo"),
     ):
         assert _gate_inner_shell_payload(["sudo"], 0) == 3
     with patch(
-        "supporter.tools.bash._check_execution_location", side_effect=PermissionError
+        "supporter.tools.bash._check_execution_location",
+        side_effect=PermissionError,
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
-        "supporter.tools.bash._check_complex_syntax", side_effect=PermissionError
+        "supporter.tools.bash._check_complex_syntax",
+        side_effect=PermissionError,
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
@@ -416,34 +430,24 @@ def test_gate_inner_shell_payload_complex() -> None:
 
 def test_apply_policy_checks_raises() -> None:
     with pytest.raises(PermissionError, match="Network egress violation"):
-        _apply_policy_checks("curl -F x=y", ["curl", "-F", "x=y"], "curl", 1, False)
+        _apply_policy_checks("curl -F x=y", ["curl", "-F", "x=y"], "curl", 1)
     with pytest.raises(PermissionError, match="Package manager supply chain"):
         _apply_policy_checks(
             "npm install --registry x",
             ["npm", "install", "--registry", "x"],
             "npm",
             1,
-            False,
         )
-    _tier, _risk = _apply_policy_checks(
+    _tier = _apply_policy_checks(
         "python -c 'import subprocess'",
         ["python", "-c", "import subprocess"],
         "python",
         1,
-        False,
     )
     assert _tier == 2
-    assert _risk is True
+
     with pytest.raises(PermissionError, match="'open' with -a/-e flag"):
-        _apply_policy_checks("open -a x", ["open", "-a", "x"], "open", 1, False)
-
-
-def test_apply_rate_limiting_exhaustion() -> None:
-    from supporter.tools import bash
-
-    bash._bash_execution_history.extend([time.time()] * 50)
-    with pytest.raises(PermissionError, match="quota exceeded"):
-        _apply_rate_limiting()
+        _apply_policy_checks("open -a x", ["open", "-a", "x"], "open", 1)
 
 
 def test_detect_sandbox_linux() -> None:
@@ -464,10 +468,8 @@ def test_detect_sandbox_none() -> None:
 
 
 def test_wrap_in_sandbox_macos_profile_missing() -> None:
-    from supporter.tools import bash
-
-    bash._SB_TYPE = "macos"
-    bash._SB_BIN = "/usr/bin/sandbox-exec"
+    bash_mod._SB_TYPE = "macos"
+    bash_mod._SB_BIN = "/usr/bin/sandbox-exec"
     with (
         patch("pathlib.Path.exists", return_value=False),
         pytest.raises(RuntimeError, match="macOS sandbox profile missing"),
@@ -476,10 +478,8 @@ def test_wrap_in_sandbox_macos_profile_missing() -> None:
 
 
 def test_wrap_in_sandbox_linux() -> None:
-    from supporter.tools import bash
-
-    bash._SB_TYPE = "linux"
-    bash._SB_BIN = "/usr/bin/nsjail"
+    bash_mod._SB_TYPE = "linux"
+    bash_mod._SB_BIN = "/usr/bin/nsjail"
     tokens = ["ls"]
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
@@ -489,10 +489,8 @@ def test_wrap_in_sandbox_linux() -> None:
 
 
 def test_wrap_in_sandbox_unsupported() -> None:
-    from supporter.tools import bash
-
-    bash._SB_TYPE = "unsupported"
-    bash._SB_BIN = "/usr/bin/unknown"
+    bash_mod._SB_TYPE = "unsupported"
+    bash_mod._SB_BIN = "/usr/bin/unknown"
     with pytest.raises(RuntimeError, match="Unsupported sandbox configuration"):
         _wrap_in_sandbox(["ls"], Path("/fake_tmp"), Path("/fake_tmp"))
 
@@ -518,11 +516,9 @@ def test_notification_callbacks() -> None:
 
 
 def test_check_bash_availability() -> None:
-    from supporter.tools import bash
-
-    bash._SB_BIN = None
+    bash_mod._SB_BIN = None
     assert check_bash_availability() is False
-    bash._SB_BIN = "/usr/bin/sandbox-exec"
+    bash_mod._SB_BIN = "/usr/bin/sandbox-exec"
     assert check_bash_availability() is True
 
 
@@ -599,14 +595,13 @@ def test_execute_subprocess_complex_failure(
     mock_open: MagicMock,
 ) -> None:
     import asyncio
-    from supporter.tools import bash
 
-    bash._SB_BIN = "/usr/bin/sandbox-exec"
-    bash._SB_TYPE = "macos"
+    bash_mod._SB_BIN = "/usr/bin/sandbox-exec"
+    bash_mod._SB_TYPE = "macos"
     mock_pre = {"f": 1.0}
     mock_get_fs.side_effect = [mock_pre, {"f": 1.0, "new": 2.0}]
     mock_setlimit.side_effect = Exception("limit failed")
-    mock_path_sec.return_value = (2, False)
+    mock_path_sec.return_value = 2
 
     mock_res = MagicMock(returncode=0, stdout=b"out", stderr=b"")
     mock_run.return_value = mock_res
@@ -622,6 +617,7 @@ def test_execute_subprocess_generic_exception(
     mock_run: MagicMock, mock_verify: MagicMock
 ) -> None:
     import asyncio
+
     with (
         patch("supporter.tools.bash._SB_BIN", "/bin/ls"),
         patch("supporter.tools.bash._SB_TYPE", "macos"),
@@ -704,8 +700,7 @@ async def test_tier2_high_risk_install(mock_config: MagicMock) -> None:
     with patch("supporter.tools.bash._verify_binary") as mock_verify:
         mock_verify.return_value = Path("/usr/bin/npm")
         await execute_bash("npm install lodash")
-    args, _ = mock_callback.call_args
-    assert "[HIGH RISK]" in args[1]
+    mock_callback.assert_called()
 
 
 @pytest.mark.asyncio
@@ -721,6 +716,41 @@ async def test_tier1_auto_allow(mock_config: MagicMock) -> None:
 
 
 @pytest.mark.asyncio
+async def test_unknown_binary_defaults_to_tier2(mock_config: MagicMock) -> None:
+    mock_callback = MagicMock(return_value=False)
+    set_bash_confirmation_callback(mock_callback)
+    with patch("supporter.tools.bash._verify_binary") as mock_verify:
+        mock_verify.return_value = Path("/usr/bin/customtool")
+        result = await execute_bash("customtool --version")
+
+    assert "Execution cancelled by user" in result
+    mock_callback.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_blocked_binary_is_rejected_before_policy_allowlist(
+    mock_config: MagicMock,
+) -> None:
+    with patch("supporter.tools.bash._verify_binary") as mock_verify:
+        mock_verify.return_value = Path("/usr/bin/env")
+        result = await execute_bash("env")
+
+    assert "Tier 3 BLOCK: Binary prohibited: env" in result
+
+
+def test_apply_tier1_allowlist_defaults_unknown_to_tier2() -> None:
+    assert _apply_tier1_allowlist(["customtool"], "customtool", 1) == 2
+
+
+def test_apply_tier1_allowlist_keeps_allowed_binary_tier1() -> None:
+    assert _apply_tier1_allowlist(["ls"], "ls", 1) == 1
+
+
+def test_apply_tier1_allowlist_keeps_allowed_git_subcommand_tier1() -> None:
+    assert _apply_tier1_allowlist(["git", "status"], "git", 1) == 1
+
+
+@pytest.mark.asyncio
 async def test_env_var_stripping(mock_config: MagicMock) -> None:
     with patch("supporter.tools.bash._verify_binary") as mock_verify:
         mock_verify.return_value = Path("/usr/bin/ls")
@@ -731,23 +761,15 @@ async def test_env_var_stripping(mock_config: MagicMock) -> None:
 
 
 def test_evaluate_final_tier_cancellation() -> None:
-    from supporter.tools import bash
-
-    bash._BASH_CONFIRMATION_CALLBACK = lambda tokens, msg: False
+    bash_mod._BASH_CONFIRMATION_CALLBACK = lambda tokens, msg: False
     with pytest.raises(PermissionError, match="cancelled by user"):
-        bash._evaluate_final_tier(
-            "ls *", ["ls", "*"], "ls", 2, False, Path("/fake_tmp")
-        )
+        _evaluate_final_tier("rm foo", ["rm", "foo"], "rm", 2, Path("/fake_tmp"))
 
 
 def test_evaluate_final_tier_high_risk() -> None:
-    from supporter.tools import bash
-
-    bash._BASH_CONFIRMATION_CALLBACK = MagicMock(return_value=True)
-    bash._evaluate_final_tier(
-        "pkg install", ["pkg", "install"], "pkg", 2, True, Path("/fake_tmp")
-    )
-    bash._BASH_CONFIRMATION_CALLBACK.assert_called_once()
+    bash_mod._BASH_CONFIRMATION_CALLBACK = MagicMock(return_value=True)
+    _evaluate_final_tier("pkg install", ["pkg", "install"], "pkg", 2, Path("/fake_tmp"))
+    bash_mod._BASH_CONFIRMATION_CALLBACK.assert_called_once()
 
 
 def test_check_network_egress_httpie_at_file(mock_config: Any) -> None:
@@ -760,11 +782,11 @@ def test_check_network_egress_wget_post_file(mock_config: Any) -> None:
 
 
 def test_check_network_egress_plain_wget(mock_config: Any) -> None:
-    assert _check_network_egress("wget", ["wget", "https://example.com"]) == 2
+    assert _check_network_egress("wget", ["wget", "https://example.com"]) == 1
 
 
 def test_check_network_egress_no_upload_flags(mock_config: Any) -> None:
-    assert _check_network_egress("curl", ["curl", "https://example.com"]) == 2
+    assert _check_network_egress("curl", ["curl", "https://example.com"]) == 1
 
 
 def test_check_package_manager_pip_only_binary(mock_config: Any) -> None:
@@ -774,57 +796,27 @@ def test_check_package_manager_pip_only_binary(mock_config: Any) -> None:
     )
 
 
-def test_check_package_manager_poetry_no_root(mock_config: Any) -> None:
-    assert _check_package_manager("poetry", ["poetry", "install", "--no-root"]) == 2
-
-
 def test_check_package_manager_yarn_ignore_scripts(mock_config: Any) -> None:
     assert _check_package_manager("yarn", ["yarn", "install", "--ignore-scripts"]) == 2
 
 
 def test_check_package_manager_bun(mock_config: Any) -> None:
-    assert _check_package_manager("bun", ["bun", "install"]) == 4
-
-
-def test_check_package_manager_gem_ignore_deps(mock_config: Any) -> None:
-    assert (
-        _check_package_manager(
-            "gem", ["gem", "install", "--ignore-dependencies", "pkg"]
-        )
-        == 2
-    )
+    assert _check_package_manager("bun", ["bun", "install"]) == 2
 
 
 def test_check_package_manager_go_install(mock_config: Any) -> None:
     assert _check_package_manager("go", ["go", "install", "pkg"]) == 2
 
 
-def test_check_open_command_default(mock_config: Any) -> None:
-    assert _check_open_command(["open", "file.txt"]) == 2
-
-
-def test_check_open_command_flag_a(mock_config: Any) -> None:
-    assert _check_open_command(["open", "-a", "Safari"]) == 3
-
-
-def test_check_open_command_flag_e(mock_config: Any) -> None:
-    assert _check_open_command(["open", "-e", "file.txt"]) == 3
-
-
-def test_inspect_interpreter_payload_bash_simple(mock_config: Any) -> None:
-    result = _inspect_interpreter_payload("bash", ["bash", "-c", "echo hello"], depth=0)
-    assert result in (2, 3)
-
-
 def test_inspect_interpreter_payload_bash_short(mock_config: Any) -> None:
     short_cmd = "echo hello"
     result = _inspect_interpreter_payload("bash", ["bash", "-c", short_cmd], depth=0)
-    assert result == 2
+    assert result == 1
 
 
 def test_apply_path_security_with_eq_flag(mock_config: Any, project_root: Any) -> None:
     tokens = ["ls", "--format=long=none", "file"]
-    _tier, _ = _apply_path_security(
+    _tier = _apply_path_security(
         "ls " + " ".join(tokens), tokens, project_root, project_root
     )
     assert _tier >= 1
@@ -832,43 +824,14 @@ def test_apply_path_security_with_eq_flag(mock_config: Any, project_root: Any) -
 
 def test_apply_path_security_with_at_flag(mock_config: Any, project_root: Any) -> None:
     at_delimited_path = "file@data.txt"
-    _tier, _ = _apply_path_security(
+    _tier = _apply_path_security(
         "cmd file@x", ["cmd", at_delimited_path], project_root, project_root
     )
 
 
 def test_verify_binary_not_found() -> None:
-    from supporter.tools import bash
-
     with pytest.raises(PermissionError, match="Binary not found"):
-        bash._verify_binary("nonexistent_command_xyz")
-
-
-def test_apply_rate_limiting_at_boundary() -> None:
-    from supporter.tools import bash
-
-    bash._bash_execution_history.clear()
-    now = time.time()
-    for _ in range(49):
-        bash._bash_execution_history.append(now - 1)
-    with patch("time.time", return_value=now):
-        _apply_rate_limiting()
-        assert len(bash._bash_execution_history) == 50
-
-
-def test_apply_rate_limiting_no_callback(mock_config: Any) -> None:
-    from supporter.tools import bash
-
-    bash._BASH_CONFIRMATION_CALLBACK = None
-    bash._bash_execution_history.clear()
-    now = time.time()
-    for _ in range(50):
-        bash._bash_execution_history.append(now - 1)
-    with (
-        patch("time.time", return_value=now),
-        pytest.raises(PermissionError, match="quota exceeded"),
-    ):
-        _apply_rate_limiting()
+        bash_mod._verify_binary("nonexistent_command_xyz")
 
 
 def test_check_execution_location_curl_upload_flag() -> None:
@@ -899,7 +862,211 @@ def test_apply_path_security_outside_project_boundary(tmp_path: Any) -> None:
     root = tmp_path / "project"
     root.mkdir()
     cwd = root
-    _tier, _ = _apply_path_security(
+    _tier = _apply_path_security(
         "ls /fake_tmp/outside", ["ls", "/fake_tmp/outside"], cwd, root
     )
+    assert _tier == 2
+
+
+def test_check_find_command_flags() -> None:
+    assert bash_mod._check_find_command(["find", ".", "-exec", "ls", "{}", ";"])
+    assert bash_mod._check_find_command(["find", ".", "-delete"])
+
+
+def test_gate_inner_shell_payload_apply_policy_returns_3() -> None:
+    with (
+        patch("supporter.tools.bash._verify_binary", return_value=Path("/bin/ls")),
+        patch("supporter.tools.bash._check_execution_location"),
+        patch("supporter.tools.bash._check_complex_syntax"),
+        patch("supporter.tools.bash._apply_path_security"),
+        patch("supporter.tools.bash._apply_policy_checks", return_value=3),
+    ):
+        assert _gate_inner_shell_payload(["ls"], 0) == 3
+
+
+def test_gate_inner_shell_payload_interpreter_payload_blocked() -> None:
+    with (
+        patch(
+            "supporter.tools.bash._verify_binary",
+            return_value=Path("/usr/bin/python3"),
+        ),
+        patch("supporter.tools.bash._check_execution_location"),
+        patch("supporter.tools.bash._check_complex_syntax"),
+        patch("supporter.tools.bash._apply_path_security"),
+        patch("supporter.tools.bash._apply_policy_checks", return_value=1),
+        patch(
+            "supporter.tools.bash._inspect_interpreter_payload",
+            return_value=3,
+        ),
+    ):
+        assert _gate_inner_shell_payload(["python3"], 0) == 3
+
+
+def test_inspect_interpreter_payload_python_mode_keyword_write() -> None:
+    assert (
+        _inspect_interpreter_payload(
+            "python",
+            ["python", "-c", "open('x', mode='wb')"],
+            0,
+        )
+        == 2
+    )
+
+
+def test_inspect_interpreter_payload_python_non_constant_subscript() -> None:
+    assert (
+        _inspect_interpreter_payload(
+            "python",
+            ["python", "-c", "globals()[name]"],
+            0,
+        )
+        == 3
+    )
+
+
+def test_inspect_interpreter_payload_python_call_arg_call() -> None:
+    assert (
+        _inspect_interpreter_payload(
+            "python",
+            ["python", "-c", "__import__(str('os'))"],
+            0,
+        )
+        == 3
+    )
+
+
+def test_inspect_interpreter_payload_unknown_runtime_safe() -> None:
+    assert _inspect_interpreter_payload("ruby", ["ruby", "-e", "puts 'ok'"], 0) == 1
+
+
+def test_apply_policy_checks_open_safe_path() -> None:
+    tier = _apply_policy_checks("open file.txt", ["open", "file.txt"], "open", 1)
+    assert tier == 1
+
+
+def test_apply_policy_checks_find_tier2() -> None:
+    tier = _apply_policy_checks("find . -delete", ["find", ".", "-delete"], "find", 1)
+    assert tier == 2
+
+
+def test_evaluate_final_tier_git_non_tier1_without_callback_raises() -> None:
+    bash_mod._BASH_CONFIRMATION_CALLBACK = None
+    with pytest.raises(PermissionError, match="Tier 2 Confirmation Required"):
+        bash_mod._evaluate_final_tier(
+            "git opaque-subcommand",
+            ["git", "opaque-subcommand"],
+            "git",
+            1,
+            Path("/fake_tmp"),
+        )
+
+
+def test_execute_subprocess_security_block_triggers_notification(
+    tmp_path: Any,
+) -> None:
+    with (
+        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch(
+            "supporter.tools.bash.subprocess.run",
+            side_effect=Exception("Security Block: blocked"),
+        ),
+    ):
+        notify = MagicMock()
+        set_bash_notification_callback(notify)
+        output = bash_mod._execute_subprocess(
+            Path("/usr/bin/ls"),
+            ["ls"],
+            tmp_path,
+            tmp_path,
+            {},
+        )
+    assert "Error executing command" in output
+    notify.assert_called_once()
+
+
+def test_inspect_interpreter_payload_import_with_call_arg_blocks() -> None:
+    payload = "__import__(name_builder())"
+    assert _inspect_interpreter_payload("python", ["python", "-c", payload], 0) == 3
+
+
+def test_inspect_interpreter_payload_eval_addition_arg_blocks() -> None:
+    payload = "obj.eval('a' + 'b')"
+    assert _inspect_interpreter_payload("python", ["python", "-c", payload], 0) == 3
+
+
+def test_inspect_interpreter_payload_eval_fstring_arg_blocks() -> None:
+    payload = "obj.eval(f'{name}')"
+    assert _inspect_interpreter_payload("python", ["python", "-c", payload], 0) == 3
+
+
+def test_inspect_interpreter_payload_eval_call_arg_blocks() -> None:
+    payload = "obj.eval(builder())"
+    assert _inspect_interpreter_payload("python", ["python", "-c", payload], 0) == 3
+
+
+def test_inspect_interpreter_payload_tier3_module_blocks() -> None:
+    assert (
+        _inspect_interpreter_payload("python", ["python", "-c", "import base64"], 0)
+        == 3
+    )
+
+
+def test_apply_path_security_empty_check_value_branch(project_root: Any) -> None:
+    _tier = _apply_path_security(
+        "cmd -d= target",
+        ["cmd", "-d=", "target"],
+        project_root,
+        project_root,
+    )
     assert _tier >= 1
+
+
+def test_execute_subprocess_set_limits_failure_branch(tmp_path: Any) -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        preexec = kwargs.get("preexec_fn")
+        if preexec:
+            preexec()
+        return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
+
+    with (
+        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.subprocess.run", side_effect=fake_run),
+        patch(
+            "supporter.tools.bash.resource.setrlimit",
+            side_effect=RuntimeError("rlimit"),
+        ),
+    ):
+        output = bash_mod._execute_subprocess(
+            Path("/usr/bin/ls"),
+            ["ls"],
+            tmp_path,
+            tmp_path,
+            {},
+        )
+    assert "ok" in output
+
+
+def test_execute_subprocess_set_limits_success_branch(tmp_path: Any) -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        preexec = kwargs.get("preexec_fn")
+        if preexec:
+            preexec()
+        return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
+
+    with (
+        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.subprocess.run", side_effect=fake_run),
+        patch("supporter.tools.bash.os.setsid"),
+        patch("supporter.tools.bash.resource.setrlimit"),
+    ):
+        output = bash_mod._execute_subprocess(
+            Path("/usr/bin/ls"),
+            ["ls"],
+            tmp_path,
+            tmp_path,
+            {},
+        )
+    assert output == "ok"

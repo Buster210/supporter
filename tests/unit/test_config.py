@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supporter.config import AppConfig, _get_project_root, load_config
+from supporter.config import (
+    DEFAULT_SYSTEM_INSTRUCTION,
+    AppConfig,
+    _get_project_root,
+    load_config,
+)
 
 
 class TestGetProjectRoot:
@@ -120,16 +125,64 @@ class TestAppConfig:
             allowed_directories=["/project"],
             require_write_confirmation=True,
             live_thinking_level="medium",
-            retriable_codes={"429"},
-            google_5xx_errors={"InternalServerError"},
-            transient_signals={"unavailable"},
-            http_errors_5xx={500},
-            rate_limit_signals={"429"},
+            retriable_error_strings={"429"},
+            google_api_5xx_exceptions={"InternalServerError"},
+            transient_error_strings={"unavailable"},
+            http_5xx_status_codes={500},
+            rate_limit_error_strings={"429"},
             drain_timeout=2.0,
             context_trigger_tokens=100000,
             context_target_tokens=4000,
             http_retry_attempts=2,
+            delegate_max_hard_cap=5,
+            delegate_default_parallel=3,
+            delegate_default_timeout=180,
+            delegate_max_timeout=600,
+            delegate_max_tasks=10,
+            delegate_max_output_chars=10000,
+            delegate_allowed_tools={
+                "read_file",
+                "write_file",
+                "execute_bash",
+                "google_search",
+            },
+            delegate_default_persona="Default persona",
+            delegate_agent_roster={},
+            delegate_max_retries=2,
         )
         assert config.log_level == "DEBUG"
         assert config.provider == "gemini"
         assert config.require_write_confirmation is True
+
+
+class TestDefaultSystemInstruction:
+    def test_no_longer_forces_always_delegate(self) -> None:
+        assert "Every task should be delegated even if it is one step." not in (
+            DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert "## Delegation Strategy" in DEFAULT_SYSTEM_INSTRUCTION
+
+    def test_includes_completion_signal_query_contract(self) -> None:
+        assert "completion signal" in DEFAULT_SYSTEM_INSTRUCTION
+        assert (
+            "call query_delegation(job_id=..., task_id=...)"
+            in DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert "before answering" in DEFAULT_SYSTEM_INSTRUCTION
+        assert "not a report" in DEFAULT_SYSTEM_INSTRUCTION
+
+    def test_no_longer_puts_assigned_task_in_completion_signal(self) -> None:
+        assert "assigned_task only" not in DEFAULT_SYSTEM_INSTRUCTION
+        assert (
+            "containing job_id, task_id, agent, and assigned_task only."
+            not in DEFAULT_SYSTEM_INSTRUCTION
+        )
+
+    def test_includes_direct_final_answer_synthesis_rule(self) -> None:
+        assert (
+            "answers the user's original request directly" in DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert (
+            "Do not frame the final answer as a sub-agent completion update"
+            in DEFAULT_SYSTEM_INSTRUCTION
+        )
