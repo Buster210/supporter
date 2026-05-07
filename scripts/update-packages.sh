@@ -56,5 +56,3 @@ prek)
     exit 1
     ;;
 esac
-
-clear
