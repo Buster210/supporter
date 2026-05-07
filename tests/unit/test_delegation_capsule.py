@@ -247,21 +247,17 @@ async def test_effective_status_detects_stale_capsule() -> None:
 
     capsule = load_capsule("stale1")
 
-    # Backdate updated_at by 16 minutes
     old_time = (
         (datetime.now(UTC) - timedelta(minutes=16)).isoformat().replace("+00:00", "Z")
     )
     capsule["updated_at"] = old_time
     await save_capsule(capsule)
 
-    # load_capsule must NOT mutate the file
     loaded = load_capsule("stale1")
-    assert loaded["status"] == "running"  # raw file status untouched
+    assert loaded["status"] == "running"
 
-    # effective_status detects stale dynamically without I/O
     assert effective_status(loaded) == "interrupted_by_restart"
 
-    # Completed task data must be preserved
     assert loaded["tasks"]["done"]["status"] == TaskStatus.COMPLETED
     assert loaded["tasks"]["done"]["output"] == "done output"
 
@@ -270,7 +266,6 @@ async def test_effective_status_detects_stale_capsule() -> None:
 async def test_effective_status_live_capsule_unaffected() -> None:
     await create_capsule("live1", "Live", [_task("t1")], 1)
     capsule = load_capsule("live1")
-    # A freshly created capsule should not read as stale
     assert effective_status(capsule) == "running"
 
 
@@ -290,9 +285,7 @@ async def test_delegate_tasks_creates_capsule_at_start() -> None:
         }
 
     tasks_json = json.dumps([{"id": "t1", "task": "slow task"}])
-    with patch(
-        "supporter.tools.delegate._run_sub_agent", side_effect=slow_run
-    ):
+    with patch("supporter.tools.delegate._run_sub_agent", side_effect=slow_run):
         plan = await delegate_tasks("Capsule start", tasks_json, max_parallel=1)
         job_id = next(line for line in plan.splitlines() if "Job ID:" in line).split(
             "`"

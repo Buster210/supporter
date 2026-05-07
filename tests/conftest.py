@@ -23,7 +23,6 @@ def setup_env() -> Generator[None, None, None]:
 
 @pytest.fixture
 def mock_file_ops_config() -> Generator[MagicMock, None, None]:
-    """Patches file_ops config for tests."""
     with patch("supporter.tools.file_ops.config") as mock_config:
         mock_config.allowed_directories = []
         mock_config.require_write_confirmation = False

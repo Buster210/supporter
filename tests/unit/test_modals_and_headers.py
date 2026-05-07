@@ -24,10 +24,6 @@ class TestBashConfirmationModal:
         assert modal.content == "ls -la"
         assert modal.meta == "Working Dir: /home/user"
 
-    def test_command_joined_for_display(self) -> None:
-        modal = ConfirmationModal(title="Git", content="git commit -m test")
-        assert modal.content == "git commit -m test"
-
     def test_modal_compose_displays_command(self, mock_app: Any) -> None:
         modal = ConfirmationModal(title="Bash", content="echo hello", meta="/fake_tmp")
         with patch.object(

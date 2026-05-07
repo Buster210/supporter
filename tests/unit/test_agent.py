@@ -10,7 +10,6 @@ def _make_provider() -> MagicMock:
 
 
 def test_trim_history_deletes_oldest_entries_when_exceeding_cap() -> None:
-    """Covers agent.py line 49: del self.history[: len(self.history) - cap]"""
     provider = _make_provider()
     agent = ChatAgent(provider=provider)
     agent.history = list(range(10))  # type: ignore[arg-type]

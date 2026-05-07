@@ -10,7 +10,6 @@ from tests.tui_mocks import MockApp
 
 
 def _make_manager(app: Any) -> ModeManager:
-    """Create ModeManager with mocked GeminiLiveProvider to avoid IndexError."""
     with patch(
         "supporter.providers.gemini_live_provider.GeminiLiveProvider"
     ) as mock_cls:
@@ -210,12 +209,8 @@ async def test_trigger_live_greeting_shows_loading_then_replaces() -> None:
     assert banner.message == "Hello there!"
 
 
-# --- Tests for uncovered lines ---
-
-
 @pytest.mark.asyncio
 async def test_toggle_mode_already_in_same_mode() -> None:
-    """Lines 85-94: already in requested mode shows bubble."""
     app = MagicMock()
     app.live_mode = True
     active_turn = AsyncMock()
@@ -227,7 +222,6 @@ async def test_toggle_mode_already_in_same_mode() -> None:
 
 @pytest.mark.asyncio
 async def test_toggle_mode_already_in_agent_mode() -> None:
-    """Lines 85-94: already in SINGLE Agent mode, no active_turn."""
     app = MagicMock()
     app.live_mode = False
     app.active_turn = None
@@ -240,7 +234,6 @@ async def test_toggle_mode_already_in_agent_mode() -> None:
 
 @pytest.mark.asyncio
 async def test_toggle_mode_live_greeting_failure() -> None:
-    """Lines 110-111: greeting failure is caught, mode still activates."""
     app = MagicMock()
     app.live_mode = False
     app._start_thinking = MagicMock()
@@ -267,7 +260,6 @@ async def test_toggle_mode_live_greeting_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_live_greeting_empty_text_fallback() -> None:
-    """Line 151: empty stream text falls back to default greeting."""
 
     class Banner:
         def __init__(self) -> None:
@@ -292,7 +284,6 @@ async def test_trigger_live_greeting_empty_text_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_live_greeting_exception_fallback() -> None:
-    """Lines 154-156: exception during greeting sets fallback."""
     app = MagicMock()
     banner = MagicMock()
     app.query_one = MagicMock(return_value=banner)
@@ -312,7 +303,6 @@ async def test_trigger_live_greeting_exception_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_live_greeting_cancels_loading_in_finally() -> None:
-    """Lines 160-162: finally block cancels loading_task if still running."""
     app = MagicMock()
     banner = MagicMock()
     app.query_one = MagicMock(return_value=banner)
@@ -327,5 +317,4 @@ async def test_trigger_live_greeting_cancels_loading_in_finally() -> None:
     manager._greeting_provider.generate_stream = immediate_fail_stream
     manager._warmup_task = None
 
-    # Should not raise - finally block handles cleanup
     await manager.trigger_live_greeting()

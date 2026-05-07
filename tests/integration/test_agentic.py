@@ -42,11 +42,8 @@ async def test_tool_dispatch_to_registry() -> None:
             automatic_function_calling_history=mock_history,
         )
     )
-    time_called = False
 
     def mock_get_time() -> dict[str, str]:
-        nonlocal time_called
-        time_called = True
         return {"time": "12:00 PM"}
 
     agent = ChatAgent(

@@ -86,7 +86,6 @@ async def test_execute_bash_substitution_prohibited() -> None:
 
 @pytest.mark.asyncio
 async def test_execute_bash_pipe_auto_allow() -> None:
-    # ls | grep is now Tier 1 (read-only pipe)
     with (
         patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("supporter.tools.bash._SB_TYPE", "macos"),
