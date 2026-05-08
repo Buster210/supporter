@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from ..agent import ChatAgent
 
 
-class StreamingState:
+class _StreamingState:
     def __init__(self) -> None:
         self.bubble: Any = None
         self.is_first_chunk = True
@@ -30,7 +30,7 @@ class ChatMessageProcessor:
     ) -> Any:
         from .bubble import MessageBubble
 
-        state = StreamingState()
+        state = _StreamingState()
 
         try:
             logger.info(f"UI: starting stream process — text_len={len(text)}")
@@ -47,7 +47,7 @@ class ChatMessageProcessor:
         return state.bubble
 
     async def _handle_chunk(
-        self, chunk: Any, container: Any, state: StreamingState, bubble_class: type
+        self, chunk: Any, container: Any, state: _StreamingState, bubble_class: type
     ) -> None:
         if chunk.is_tool_call:
             await self._handle_tool_chunk(chunk, container, state, bubble_class)
@@ -69,13 +69,13 @@ class ChatMessageProcessor:
         logger.info("UI: creating first content bubble")
         await self._create_and_append_first_chunk(chunk, container, state, bubble_class)
 
-    def _append_to_existing_bubble(self, chunk: Any, state: StreamingState) -> None:
+    def _append_to_existing_bubble(self, chunk: Any, state: _StreamingState) -> None:
         if state.bubble:
             self._update_streaming_status()
             state.bubble.append_token(chunk.text, is_thought=chunk.is_thought)
 
     async def _create_and_append_first_chunk(
-        self, chunk: Any, container: Any, state: StreamingState, bubble_class: type
+        self, chunk: Any, container: Any, state: _StreamingState, bubble_class: type
     ) -> None:
         state.is_first_chunk = False
         state.bubble = await self._initialize_bubble(container, bubble_class)
@@ -83,7 +83,7 @@ class ChatMessageProcessor:
         state.bubble.append_token(chunk.text, is_thought=chunk.is_thought)
 
     async def _handle_tool_chunk(
-        self, chunk: Any, container: Any, state: StreamingState, bubble_class: type
+        self, chunk: Any, container: Any, state: _StreamingState, bubble_class: type
     ) -> None:
         self._handle_tool_call_status(chunk.tool_name)
         if state.is_first_chunk:

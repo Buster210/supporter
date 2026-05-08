@@ -12,7 +12,8 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Input, Label
 
-from .. import ChatAgent, DynamicPool
+from ..agent import ChatAgent
+from ..index import DynamicPool
 from ..logger import init_logger, logger, shutdown_logger
 from ..types import ModeChanged
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from textual.binding import Binding
     from textual.widgets import Button, Input
 
-    from .. import ChatAgent
+    from ..agent import ChatAgent
     from .chat import ChatTurn
 
 CSS = (Path(__file__).parent / "styles.tcss").read_text()
@@ -70,11 +71,11 @@ class SupporterApp(App[None]):
         )
 
     async def on_mount(self) -> None:
-        from ..tools import (
+        from ..tools.bash import (
             set_bash_confirmation_callback,
             set_bash_notification_callback,
-            set_confirmation_callback,
         )
+        from ..tools.file_ops import set_confirmation_callback
 
         init_logger()
         set_confirmation_callback(self._confirm_write)
@@ -97,11 +98,11 @@ class SupporterApp(App[None]):
             self._toast_manager.notify(self, msg, type="system")
 
     async def on_unmount(self) -> None:
-        from ..tools import (
+        from ..tools.bash import (
             set_bash_confirmation_callback,
             set_bash_notification_callback,
-            set_confirmation_callback,
         )
+        from ..tools.file_ops import set_confirmation_callback
 
         set_confirmation_callback(None)
         set_bash_confirmation_callback(None)

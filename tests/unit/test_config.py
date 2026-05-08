@@ -4,12 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supporter.config import (
-    DEFAULT_SYSTEM_INSTRUCTION,
-    AppConfig,
-    _get_project_root,
-    load_config,
-)
+from supporter.config import AppConfig, _get_project_root, load_config
+from supporter.prompts import DEFAULT_SYSTEM_INSTRUCTION
 
 
 class TestGetProjectRoot:

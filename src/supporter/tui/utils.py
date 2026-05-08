@@ -6,7 +6,7 @@ from typing import Any
 
 from rich.text import Text
 
-from ..config import CRYSTAL_GRADIENT_STOPS
+from .constants import CRYSTAL_GRADIENT_STOPS
 
 
 def apply_crystal_gradient(text: str) -> Text:

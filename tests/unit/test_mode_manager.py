@@ -25,9 +25,9 @@ async def test_setup_agent_bash_unavailable() -> None:
     app = MagicMock()
     manager = _make_manager(app)
     with (
-        patch("supporter.tools.check_bash_availability", return_value=False),
-        patch("supporter.tools.notify_bash_unavailable") as mock_notify,
-        patch("supporter.get_provider"),
+        patch("supporter.tools.bash.check_bash_availability", return_value=False),
+        patch("supporter.tools.bash.notify_bash_unavailable") as mock_notify,
+        patch("supporter.index.get_provider"),
         patch("supporter.agent.ChatAgent"),
     ):
         await manager.setup_agent(use_live=False)
@@ -150,13 +150,13 @@ async def test_setup_agent_dispatch() -> None:
     app = MockApp()
     manager = _make_manager(app)
     with (
-        patch("supporter.get_provider") as mock_get_provider,
+        patch("supporter.index.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent") as mock_chat_agent,
-        patch("supporter.tools.check_bash_availability", return_value=True),
-        patch("supporter.tools.execute_bash"),
-        patch("supporter.tools.read_file"),
-        patch("supporter.tools.write_file"),
-        patch("supporter.tools.google_search"),
+        patch("supporter.tools.bash.check_bash_availability", return_value=True),
+        patch("supporter.tools.bash.execute_bash"),
+        patch("supporter.tools.file_ops.read_file"),
+        patch("supporter.tools.file_ops.write_file"),
+        patch("supporter.tools.search.google_search"),
     ):
         mock_provider = MagicMock()
         mock_get_provider.return_value = mock_provider

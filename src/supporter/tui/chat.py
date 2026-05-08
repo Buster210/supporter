@@ -12,12 +12,12 @@ from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.widgets import Label, Static
 
-from ..config import SCROLL_STEP, SPINNER_FRAMES
 from ..logger import logger
 from .bubble import MessageBubble
+from .constants import SCROLL_STEP, SPINNER_FRAMES
 from .utils import apply_crystal_gradient
 
-SUPPORTER_ART = (
+_SUPPORTER_ART = (
     " █▀▀ █ █ █▀█ █▀█ █▀█ █▀█ ▀█▀ █▀▀ █▀█ \n"
     " ▀▀█ █ █ █▀▀ █▀▀ █ █ █▀▄  █  █▀▀ █▀▄ \n"
     " ▀▀▀ ▀▀▀ ▀   ▀   ▀▀▀ ▀ ▀  ▀  ▀▀▀ ▀ ▀ "
@@ -26,7 +26,7 @@ SUPPORTER_ART = (
 
 class SupporterHeader(Static):
     def render(self) -> Text:
-        return apply_crystal_gradient(SUPPORTER_ART)
+        return apply_crystal_gradient(_SUPPORTER_ART)
 
 
 class WelcomeBanner(Static):

@@ -6,7 +6,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static
 
-from ..config import (
+from .constants import (
     MODAL_MAX_WIDTH_PERCENT,
     MODAL_PADDING,
     MODAL_WIDTH_SCALE,

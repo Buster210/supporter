@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from supporter import ChatAgent
+from supporter.agent import ChatAgent
 from supporter.index import (
     DynamicPool,
     LazyFallbackProvider,

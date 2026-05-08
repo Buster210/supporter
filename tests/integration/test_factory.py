@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from supporter import index
+import supporter.index as index
 from supporter.config import load_config
 from supporter.index import LLMResult, get_provider
 

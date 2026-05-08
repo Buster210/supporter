@@ -42,17 +42,21 @@ class ModeManager:
             await self._greeting_provider.close()
 
     async def setup_agent(self, use_live: bool = False) -> None:
-        from .. import get_provider
         from ..agent import ChatAgent
         from ..config import config
-        from ..tools import (
-            cancel_delegation,
+        from ..index import get_provider
+        from ..tools.bash import (
             check_bash_availability,
-            check_delegation,
-            delegate_tasks,
             execute_bash,
             notify_bash_unavailable,
-            query_delegation,
+        )
+        from ..tools.delegate import (
+            cancel_delegation,
+            check_delegation,
+            delegate_tasks,
+        )
+        from ..tools.delegation_capsule import query_delegation
+        from ..tools.file_ops import (
             read_file,
             write_file,
         )
