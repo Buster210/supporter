@@ -17,6 +17,7 @@ from .config import (
 )
 from .logger import logger
 from .providers.gemini_live_provider import GeminiLiveProvider
+from .providers.gemini_messages import GeminiMessageMixin
 from .providers.gemini_provider import GeminiProvider
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
@@ -89,7 +90,7 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
     )
 
 
-class DynamicPool(LLMProvider):
+class DynamicPool(GeminiMessageMixin, LLMProvider):
     _instances: ClassVar[weakref.WeakSet[DynamicPool]] = weakref.WeakSet()
 
     @classmethod
@@ -268,7 +269,7 @@ class DynamicPool(LLMProvider):
         return f"{self.model_name} (Dynamic Pool x{len(self.active_slots)})"
 
 
-class LazyFallbackProvider(LLMProvider):
+class LazyFallbackProvider(GeminiMessageMixin, LLMProvider):
     def __init__(
         self,
         primary_factory: Callable[[], LLMProvider],

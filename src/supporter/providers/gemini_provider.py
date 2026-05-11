@@ -18,21 +18,10 @@ from ..types import (
     LLMOptions,
     LLMResult,
 )
+from .gemini_messages import GeminiMessageMixin
 
 
-def __getattr__(name: str) -> Any:
-    if name == "genai":
-        from google import genai
-
-        return genai
-    if name == "types":
-        from google.genai import types
-
-        return types
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-class GeminiProvider:
+class GeminiProvider(GeminiMessageMixin):
     def __init__(
         self,
         api_key: str,
@@ -65,10 +54,13 @@ class GeminiProvider:
         self,
         prompt: str | list[Content],
         history: list[Content] | None = None,
+        user_content: Content | None = None,
     ) -> list[Content]:
         from google.genai.types import Content, Part
 
         history = history or []
+        if user_content is not None:
+            return [*history, user_content]
         fresh_content = (
             [Content(role="user", parts=[Part(text=prompt)])]
             if isinstance(prompt, str)
@@ -181,7 +173,12 @@ class GeminiProvider:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=cast(
-                    Any, self._prepare_contents(prompt, options.get("history"))
+                    Any,
+                    self._prepare_contents(
+                        prompt,
+                        options.get("history"),
+                        user_content=options.get("user_content"),
+                    ),
                 ),
                 config=generation_config,
             )
@@ -276,7 +273,14 @@ class GeminiProvider:
         )
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=cast(Any, self._prepare_contents(prompt, options.get("history"))),
+            contents=cast(
+                Any,
+                self._prepare_contents(
+                    prompt,
+                    options.get("history"),
+                    user_content=options.get("user_content"),
+                ),
+            ),
             config=generation_config,
         )
 

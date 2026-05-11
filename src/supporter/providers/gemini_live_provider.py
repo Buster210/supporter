@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from google import genai
@@ -18,12 +19,21 @@ from ..types import (
     LLMChunk,
     LLMOptions,
     LLMResult,
-    MockCandidate,
-    MockRaw,
 )
+from .gemini_messages import GeminiMessageMixin
 
 
-class GeminiLiveProvider:
+@dataclass
+class _LiveResultCandidate:
+    grounding_metadata: Any
+
+
+@dataclass
+class _LiveResultRaw:
+    candidates: list[_LiveResultCandidate]
+
+
+class GeminiLiveProvider(GeminiMessageMixin):
     def __init__(
         self,
         api_keys: list[str],
@@ -295,7 +305,9 @@ class GeminiLiveProvider:
                 duration=time.perf_counter() - start_time,
                 thoughts="".join(thoughts),
                 usage={},
-                raw=MockRaw(candidates=[MockCandidate(grounding_metadata=grounding)]),
+                raw=_LiveResultRaw(
+                    candidates=[_LiveResultCandidate(grounding_metadata=grounding)]
+                ),
             )
 
     async def generate_stream(

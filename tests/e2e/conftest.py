@@ -49,6 +49,17 @@ class MockLLMProvider(LLMProvider):
             is_last = i == len(words) - 1
             yield LLMChunk(text=word + " ", model="mock-model", is_last=is_last)
 
+    def build_user_message(self, prompt: str) -> Any:
+        return Content(role="user", parts=[Part(text=prompt)])
+
+    def extract_assistant_message(self, result: LLMResult) -> Any | None:
+        if not result.candidates or not result.candidates[0].content:
+            return None
+        return Content(role="model", parts=result.candidates[0].content.parts)
+
+    def build_assistant_message(self, text: str) -> Any:
+        return Content(role="model", parts=[Part(text=text)])
+
 
 @pytest.fixture(autouse=True)
 def setup_test_env() -> Generator[None, None, None]:
