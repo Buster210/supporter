@@ -108,7 +108,7 @@ class TestPathValidation:
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]
-        with pytest.raises(PermissionError, match="protected internal file"):
+        with pytest.raises(PermissionError, match="protected"):
             _validate_path(str(temp_project / ".env"))
 
     def test_validate_path_gitignore(

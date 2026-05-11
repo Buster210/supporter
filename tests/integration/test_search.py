@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from supporter.tools.base import ToolError
 from supporter.tools.search import google_search
 
 
@@ -81,7 +82,8 @@ async def test_google_search_skips_invalid_chunks_and_returns_text() -> None:
 async def test_google_search_failure() -> None:
     mock_provider = AsyncMock()
     mock_provider.generate.side_effect = Exception("API Error")
-    with patch("supporter.index.get_provider", return_value=mock_provider):
-        response = await google_search("test query")
-        assert "Error performing search" in response
-        assert "API Error" in response
+    with (
+        patch("supporter.index.get_provider", return_value=mock_provider),
+        pytest.raises(ToolError, match="Search failed for 'test query': API Error"),
+    ):
+        await google_search("test query")

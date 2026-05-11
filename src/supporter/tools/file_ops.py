@@ -8,6 +8,7 @@ import pathspec
 
 from ..config import INTERNAL_BLACKLIST, config
 from ..logger import logger
+from .base import ToolError
 
 _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
@@ -49,7 +50,7 @@ def _is_blacklisted(relative_path: str) -> bool:
 
 def _validate_path(path: str) -> Path:
     if not config.allowed_directories:
-        raise PermissionError("Access denied: No allowed directories configured.")
+        raise PermissionError("No allowed directories set. Check your configuration.")
 
     target_path = Path(path).expanduser()
     project_root = Path(config.allowed_directories[0]).expanduser().resolve()
@@ -62,7 +63,8 @@ def _validate_path(path: str) -> Path:
 
     if not (target_path == project_root or project_root in target_path.parents):
         raise PermissionError(
-            f"Access denied: Path {target_path} is outside project root: {project_root}"
+            f"Path '{target_path}' is outside project root '{project_root}'. "
+            "Only files within the project directory are allowed."
         )
 
     relative_path = str(target_path.relative_to(project_root))
@@ -71,13 +73,13 @@ def _validate_path(path: str) -> Path:
 
     if _is_blacklisted(relative_path):
         raise PermissionError(
-            f"Access denied: {relative_path} is a protected internal file."
+            f"File '{relative_path}' is protected and cannot be accessed."
         )
 
     spec = _get_gitignore_spec(project_root)
     if spec and spec.match_file(relative_path):
         raise PermissionError(
-            f"Access denied: {relative_path} is ignored by .gitignore"
+            f"File '{relative_path}' is ignored by .gitignore and cannot be accessed."
         )
 
     return target_path
@@ -105,22 +107,26 @@ async def read_file(
         if not p.exists():
             return f"Error: File not found: {p}"
 
-        with p.open("r", encoding=encoding) as f:
-            if offset is not None:
-                f.seek(offset)
-            if limit is not None:
-                content = f.read(limit)
-                logger.debug(f"read_file full content: {content!r}")
+        try:
+            with p.open("r", encoding=encoding) as f:
+                if offset is not None:
+                    f.seek(offset)
+                content = f.read(limit) if limit is not None else f.read()
+                logger.debug(f"read_file content: {content!r}")
                 return content
-            content = f.read()
-            logger.debug(f"read_file full content: {content!r}")
-        return content
+        except PermissionError:
+            raise
+        except Exception as e:
+            raise ToolError(f"Could not read '{path}': {e}") from e
 
     try:
         return await asyncio.to_thread(_sync_read)
+    except PermissionError as e:
+        raise ToolError(str(e)) from e
+    except ToolError:
+        raise
     except Exception as e:
-        logger.error(f"Tool Failure: read_file [{type(e).__name__}]: {e}")
-        return f"Error reading file: {e!s}"
+        raise ToolError(f"Could not read '{path}': {e}") from e
 
 
 async def write_file(
@@ -235,6 +241,9 @@ async def write_file(
 
     try:
         return await asyncio.to_thread(_sync_write)
+    except PermissionError as e:
+        raise ToolError(str(e)) from e
+    except ToolError:
+        raise
     except Exception as e:
-        logger.error(f"Tool Failure: write_file [{type(e).__name__}]: {e}")
-        return f"Error writing file: {e!s}"
+        raise ToolError(f"Could not write '{path}': {e}") from e

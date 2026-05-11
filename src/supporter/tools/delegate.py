@@ -31,6 +31,7 @@ from ..types import (
     TaskStatus,
     TaskTimedOut,
 )
+from .base import ToolError
 from .bash import execute_bash
 from .delegation_capsule import (
     create_capsule,
@@ -862,8 +863,7 @@ async def delegate_tasks(
         )
         return "\n".join(plan)
     except Exception as e:
-        logger.error(f"Tool Failure: delegate_tasks: {e}")
-        return f"Error: {e}"
+        raise ToolError(f"Delegation failed: {e}") from e
 
 
 async def check_delegation(job_id: str) -> str:

@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from supporter.config import config
+from supporter.tools.base import ToolError
 from supporter.tools.delegate import (
     cancel_delegation,
     check_delegation,
@@ -190,12 +191,14 @@ async def test_delegate_tasks_start_callback_and_error_path() -> None:
     assert called
     assert "Job ID:" in plan
 
-    with patch(
-        "supporter.tools.delegate._validate_tasks",
-        side_effect=ValueError("bad"),
+    with (
+        patch(
+            "supporter.tools.delegate._validate_tasks",
+            side_effect=ValueError("bad"),
+        ),
+        pytest.raises(ToolError, match="Delegation failed"),
     ):
-        msg = await delegate_tasks("bad", "[]", 1)
-    assert msg.startswith("Error:")
+        await delegate_tasks("bad", "[]", 1)
 
 
 @pytest.mark.asyncio

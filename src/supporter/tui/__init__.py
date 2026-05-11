@@ -15,6 +15,7 @@ from textual.widgets import Button, Input, Label
 from ..agent import ChatAgent
 from ..index import DynamicPool
 from ..logger import init_logger, logger, shutdown_logger
+from ..tools.base import ToolError
 from ..types import ModeChanged
 
 if TYPE_CHECKING:
@@ -263,11 +264,21 @@ class SupporterApp(App[None]):
             await self._process_streaming_execution(
                 text, target_container, start_time, self.agent, exclude_from_history
             )
+        except ToolError as e:
+            from .bubble import MessageBubble
+
+            await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
         except Exception as e:
             from .bubble import MessageBubble
 
             logger.error(f"UI Message Cycle Error [{type(e).__name__}]: {e}")
-            await chat_view.mount(MessageBubble(role="agent", content=f"Error: {e}"))
+            await chat_view.mount(
+                MessageBubble(
+                    role="agent",
+                    content="An error occurred while processing your message. "
+                    "Try again or rephrasing your request.",
+                )
+            )
         finally:
             self._is_processing = False
             self._stop_thinking()

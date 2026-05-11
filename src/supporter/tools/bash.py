@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ..config import config
 from ..logger import logger
+from .base import ToolError
 from .bash_defs import (
     AUTO_APPROVED_BINARIES,
     AUTO_APPROVED_GIT_SUBCOMMANDS,
@@ -601,9 +602,14 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
 
     def _sync_execute() -> str:
         if "\x00" in command:
-            raise ValueError("Null bytes not permitted in commands")
+            raise PermissionError(
+                "Tier 3 BLOCK: Command contains null bytes. "
+                "Remove null bytes and try again."
+            )
         if not command.isascii():
-            raise ValueError("Non-ASCII characters not permitted")
+            raise PermissionError(
+                "Tier 3 BLOCK: Command contains non-ASCII characters. Use ASCII-only."
+            )
 
         tokens = _parse_and_strip_env(command)
         if not tokens:
@@ -612,13 +618,17 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
         base_cmd = tokens[0]
         if "/" in base_cmd:
             raise PermissionError(
-                f"Tier 3 BLOCK: Command invocation via full path prohibited: {base_cmd}"
+                "Tier 3 BLOCK: Command uses absolute path. "
+                "Use command name only, e.g., 'ls' not '/bin/ls'."
             )
 
         resolved_binary_path = _verify_binary(base_cmd)
         binary_name = resolved_binary_path.name
         if binary_name in BLOCKED_BINARIES:
-            raise PermissionError(f"Tier 3 BLOCK: Binary prohibited: {binary_name}")
+            raise PermissionError(
+                f"Tier 3 BLOCK: Binary '{binary_name}' is not allowed "
+                "by security policy."
+            )
 
         project_root = Path(config.allowed_directories[0]).expanduser().resolve()
         cwd = project_root
@@ -654,19 +664,16 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
 
     try:
         return await asyncio.to_thread(_sync_execute)
+    except PermissionError as e:
+        return f"Error: {e}"
     except Exception as e:
-        logger.error(f"Tool Failure: execute_bash [{type(e).__name__}]: {e}")
-        return f"Error: {e!s}"
+        raise ToolError(f"Bash execution failed: {e}") from e
 
 
 def _parse_and_strip_env(command: str) -> list[str]:
     clean_command = command.strip()
-    while True:
-        match = re.match(r"^[A-Z_][A-Z0-9_]*=\S+\s+", clean_command)
-        if match:
-            clean_command = clean_command[match.end() :].strip()
-        else:
-            break
+    while match := re.match(r"^[A-Z_][A-Z0-9_]*=\S+\s+", clean_command):
+        clean_command = clean_command[match.end() :].strip()
     return shlex.split(clean_command)
 
 

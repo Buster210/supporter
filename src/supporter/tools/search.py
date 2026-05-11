@@ -1,5 +1,6 @@
 from ..config import config
 from ..logger import logger
+from .base import ToolError
 
 
 async def google_search(query: str) -> str:
@@ -37,17 +38,11 @@ async def google_search(query: str) -> str:
         if not meta:
             return result.text
 
-        sources = []
-        grounding_chunks = getattr(meta, "grounding_chunks", []) or []
-        for chunk in grounding_chunks:
-            web = getattr(chunk, "web", None)
-            if not web:
-                continue
-
-            url = getattr(web, "uri", "")
-            if url:
-                title = getattr(web, "title", "Search Result")
-                sources.append(f"- {title}: {url}")
+        sources = [
+            f"- {getattr(chunk.web, 'title', 'Search Result')}: {chunk.web.uri}"
+            for chunk in getattr(meta, "grounding_chunks", []) or []
+            if getattr(chunk, "web", None) and getattr(chunk.web, "uri", None)
+        ]
 
         if not sources:
             return result.text
@@ -61,5 +56,4 @@ async def google_search(query: str) -> str:
         return full_response
 
     except Exception as e:
-        logger.error(f"Tool Failure: google_search [{type(e).__name__}]: {e}")
-        return f"Error performing search: {e!s}"
+        raise ToolError(f"Search failed for '{query}': {e}") from e
