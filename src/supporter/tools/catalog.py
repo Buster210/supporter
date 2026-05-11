@@ -30,7 +30,7 @@ def build_tool_catalog(
     include_bash: bool = True,
     extra_tools: Mapping[str, ToolSpec | Callable[..., Any]] | None = None,
 ) -> dict[str, ToolSpec]:
-    from .bash import execute_bash
+    from .bash.executor import execute_bash
     from .delegate import cancel_delegation, check_delegation, delegate_tasks
     from .delegation_capsule import query_delegation
     from .file_ops import read_file, write_file

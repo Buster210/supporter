@@ -6,8 +6,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import supporter.tools.bash as bash_mod
-from supporter.tools.bash import (
+import supporter.tools.bash.executor as executor
+import supporter.tools.bash.policy as policy
+import supporter.tools.bash.sandbox as sandbox
+from supporter.tools.bash.executor import (
+    _get_fs_state,
+    _parse_and_strip_env,
+    execute_bash,
+)
+from supporter.tools.bash.policy import (
     _apply_path_security,
     _apply_policy_checks,
     _apply_tier1_allowlist,
@@ -17,15 +24,13 @@ from supporter.tools.bash import (
     _check_open_command,
     _check_package_manager,
     _check_rm_nuclear,
-    _detect_sandbox,
-    _evaluate_final_tier,
     _gate_inner_shell_payload,
-    _get_fs_state,
     _inspect_interpreter_payload,
-    _parse_and_strip_env,
+)
+from supporter.tools.bash.sandbox import (
+    _detect_sandbox,
     _wrap_in_sandbox,
     check_bash_availability,
-    execute_bash,
     notify_bash_unavailable,
     set_bash_confirmation_callback,
     set_bash_notification_callback,
@@ -42,18 +47,20 @@ def project_root(tmp_path: Any) -> Any:
 @pytest.fixture
 def mock_config() -> Generator[MagicMock, None, None]:
     with (
-        patch("supporter.tools.bash.config") as mock_c,
+        patch("supporter.tools.bash.executor.config") as mock_t,
+        patch("supporter.tools.bash.policy.config") as mock_p,
     ):
-        mock_c.allowed_directories = ["/fake_tmp/project"]
-        yield mock_c
+        mock_t.allowed_directories = ["/fake_tmp/project"]
+        mock_p.allowed_directories = ["/fake_tmp/project"]
+        yield mock_t
 
 
 @pytest.fixture(autouse=True)
 def reset_globals() -> Any:
-    bash_mod._SB_TYPE = None
-    bash_mod._SB_BIN = None
-    bash_mod._BASH_NOTIFICATION_CALLBACK = None
-    bash_mod._BASH_CONFIRMATION_CALLBACK = None
+    sandbox._SB_TYPE = None
+    sandbox._SB_BIN = None
+    sandbox._BASH_NOTIFICATION_CALLBACK = None
+    sandbox._BASH_CONFIRMATION_CALLBACK = None
 
 
 @pytest.fixture(autouse=True)
@@ -87,10 +94,10 @@ async def test_execute_bash_substitution_prohibited() -> None:
 @pytest.mark.asyncio
 async def test_execute_bash_pipe_auto_allow() -> None:
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash._verify_binary") as mock_verify,
-        patch("supporter.tools.bash.subprocess.run") as mock_run,
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.policy._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.executor.subprocess.run") as mock_run,
     ):
         mock_verify.side_effect = [Path("/bin/ls"), Path("/usr/bin/grep")]
         mock_run.return_value = MagicMock(stdout=b"out", stderr=b"", returncode=0)
@@ -108,25 +115,29 @@ def test_execute_bash_success(project_root: Any) -> None:
     import asyncio
 
     with (
-        patch("supporter.tools.bash.config") as mock_config_c,
+        patch("supporter.tools.bash.executor.config") as mock_config_t,
+        patch("supporter.tools.bash.policy.config") as mock_config_p,
     ):
-        mock_config_c.allowed_directories = [str(project_root)]
-        with patch("supporter.tools.bash._verify_binary") as mock_verify:
+        mock_config_t.allowed_directories = [str(project_root)]
+        mock_config_p.allowed_directories = [str(project_root)]
+        with patch("supporter.tools.bash.policy._verify_binary") as mock_verify:
             mock_verify.return_value = Path("/usr/bin/ls")
-            with patch("supporter.tools.bash._execute_subprocess") as mock_exec:
+            with patch(
+                "supporter.tools.bash.executor._execute_subprocess"
+            ) as mock_exec:
                 mock_exec.return_value = "file1\nfile2"
                 with (
                     patch(
-                        "supporter.tools.bash._apply_path_security",
+                        "supporter.tools.bash.policy._apply_path_security",
                         return_value=1,
                     ),
                     patch(
-                        "supporter.tools.bash._apply_policy_checks",
+                        "supporter.tools.bash.policy._apply_policy_checks",
                         return_value=1,
                     ),
-                    patch("supporter.tools.bash._evaluate_final_tier"),
+                    patch("supporter.tools.bash.policy._evaluate_final_tier"),
                     patch(
-                        "supporter.tools.bash._get_fs_state",
+                        "supporter.tools.bash.executor._get_fs_state",
                         return_value={},
                     ),
                 ):
@@ -344,7 +355,7 @@ def test_apply_path_security_exceptions() -> None:
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
     with (
-        patch("supporter.tools.bash.SENSITIVE_SYSTEM_PATHS", []),
+        patch("supporter.tools.bash.policy.SENSITIVE_SYSTEM_PATHS", []),
         patch("pathlib.Path.resolve", side_effect=Exception("resolve failure")),
     ):
         _tier = _apply_path_security(
@@ -357,7 +368,7 @@ def test_apply_path_security_boundary_failure() -> None:
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
     with (
-        patch("supporter.tools.bash.SENSITIVE_SYSTEM_PATHS", []),
+        patch("supporter.tools.bash.policy.SENSITIVE_SYSTEM_PATHS", []),
         patch("pathlib.Path.resolve", side_effect=Exception("boundary failure")),
     ):
         _tier = _apply_path_security("ls /outside", ["ls", "/outside"], cwd, root)
@@ -387,7 +398,7 @@ def test_check_rm_nuclear_failure() -> None:
 def test_check_complex_syntax_pipe_to_network() -> None:
     with (
         patch(
-            "supporter.tools.bash._verify_binary",
+            "supporter.tools.bash.policy._verify_binary",
             return_value=Path("/usr/bin/curl"),
         ),
         pytest.raises(PermissionError, match="Pipe-to-network"),
@@ -398,32 +409,36 @@ def test_check_complex_syntax_pipe_to_network() -> None:
 def test_gate_inner_shell_payload_complex() -> None:
     assert _gate_inner_shell_payload([], 0) == 2
     assert _gate_inner_shell_payload(["/bin/ls"], 0) == 3
-    with patch("supporter.tools.bash._verify_binary", side_effect=PermissionError):
+    with patch(
+        "supporter.tools.bash.policy._verify_binary", side_effect=PermissionError
+    ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
-        "supporter.tools.bash._verify_binary",
+        "supporter.tools.bash.policy._verify_binary",
         return_value=Path("/usr/bin/sudo"),
     ):
         assert _gate_inner_shell_payload(["sudo"], 0) == 3
     with patch(
-        "supporter.tools.bash._check_execution_location",
+        "supporter.tools.bash.policy._check_execution_location",
         side_effect=PermissionError,
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
-        "supporter.tools.bash._check_complex_syntax",
+        "supporter.tools.bash.policy._check_complex_syntax",
         side_effect=PermissionError,
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
-        "supporter.tools.bash._apply_path_security", side_effect=PermissionError
+        "supporter.tools.bash.policy._apply_path_security", side_effect=PermissionError
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
     with patch(
-        "supporter.tools.bash._apply_policy_checks", side_effect=PermissionError
+        "supporter.tools.bash.policy._apply_policy_checks", side_effect=PermissionError
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
-    with patch("supporter.tools.bash._inspect_interpreter_payload", return_value=3):
+    with patch(
+        "supporter.tools.bash.policy._inspect_interpreter_payload", return_value=3
+    ):
         assert _gate_inner_shell_payload(["python"], 0) == 3
 
 
@@ -467,8 +482,8 @@ def test_detect_sandbox_none() -> None:
 
 
 def test_wrap_in_sandbox_macos_profile_missing() -> None:
-    bash_mod._SB_TYPE = "macos"
-    bash_mod._SB_BIN = "/usr/bin/sandbox-exec"
+    sandbox._SB_TYPE = "macos"
+    sandbox._SB_BIN = "/usr/bin/sandbox-exec"
     with (
         patch("pathlib.Path.exists", return_value=False),
         pytest.raises(RuntimeError, match="macOS sandbox profile missing"),
@@ -477,8 +492,8 @@ def test_wrap_in_sandbox_macos_profile_missing() -> None:
 
 
 def test_wrap_in_sandbox_linux() -> None:
-    bash_mod._SB_TYPE = "linux"
-    bash_mod._SB_BIN = "/usr/bin/nsjail"
+    sandbox._SB_TYPE = "linux"
+    sandbox._SB_BIN = "/usr/bin/nsjail"
     tokens = ["ls"]
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
@@ -488,8 +503,8 @@ def test_wrap_in_sandbox_linux() -> None:
 
 
 def test_wrap_in_sandbox_unsupported() -> None:
-    bash_mod._SB_TYPE = "unsupported"
-    bash_mod._SB_BIN = "/usr/bin/unknown"
+    sandbox._SB_TYPE = "unsupported"
+    sandbox._SB_BIN = "/usr/bin/unknown"
     with pytest.raises(RuntimeError, match="Unsupported sandbox configuration"):
         _wrap_in_sandbox(["ls"], Path("/fake_tmp"), Path("/fake_tmp"))
 
@@ -499,8 +514,8 @@ def test_wrap_in_sandbox_extended() -> None:
     cwd = Path("/root")
     root = Path("/root")
     with (
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("builtins.open", MagicMock()),
     ):
         wrapped = _wrap_in_sandbox(tokens, cwd, root)
@@ -515,17 +530,17 @@ def test_notification_callbacks() -> None:
 
 
 def test_check_bash_availability() -> None:
-    bash_mod._SB_BIN = None
+    sandbox._SB_BIN = None
     assert check_bash_availability() is False
-    bash_mod._SB_BIN = "/usr/bin/sandbox-exec"
+    sandbox._SB_BIN = "/usr/bin/sandbox-exec"
     assert check_bash_availability() is True
 
 
 @pytest.mark.asyncio
 async def test_execute_bash_resilience() -> None:
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
     ):
         with patch(
             "subprocess.run",
@@ -539,7 +554,7 @@ async def test_execute_bash_resilience() -> None:
         with (
             patch("subprocess.run", return_value=mock_res),
             patch(
-                "supporter.tools.bash._verify_binary",
+                "supporter.tools.bash.policy._verify_binary",
                 return_value=Path("/usr/bin/ls"),
             ),
         ):
@@ -550,9 +565,9 @@ async def test_execute_bash_resilience() -> None:
 @pytest.mark.asyncio
 async def test_execute_bash_tier3() -> None:
     with (
-        patch("supporter.tools.bash._SB_BIN", "/bin/ls"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/bin/ls"),
         patch(
-            "supporter.tools.bash._verify_binary",
+            "supporter.tools.bash.policy._verify_binary",
             return_value=Path("/usr/bin/sudo"),
         ),
     ):
@@ -563,9 +578,9 @@ async def test_execute_bash_tier3() -> None:
 @pytest.mark.asyncio
 async def test_execute_bash_wd_failure() -> None:
     with (
-        patch("supporter.tools.bash._SB_BIN", "/bin/ls"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/bin/ls"),
         patch(
-            "supporter.tools.bash._verify_binary",
+            "supporter.tools.bash.policy._verify_binary",
             return_value=Path("/bin/ls"),
         ),
         patch(
@@ -578,13 +593,15 @@ async def test_execute_bash_wd_failure() -> None:
 
 
 @patch("builtins.open", new_callable=MagicMock)
-@patch("supporter.tools.bash._evaluate_final_tier")
-@patch("supporter.tools.bash._verify_binary")
+@patch("supporter.tools.bash.policy._evaluate_final_tier")
+@patch("supporter.tools.bash.policy._verify_binary")
 @patch("subprocess.run")
-@patch("supporter.tools.bash._apply_path_security")
+@patch("supporter.tools.bash.policy._apply_path_security")
 @patch("resource.setrlimit")
-@patch("supporter.tools.bash._get_fs_state")
+@patch("supporter.tools.bash.executor._get_fs_state")
+@patch("supporter.tools.bash.executor._get_fs_names")
 def test_execute_subprocess_complex_failure(
+    mock_get_names: MagicMock,
     mock_get_fs: MagicMock,
     mock_setlimit: MagicMock,
     mock_path_sec: MagicMock,
@@ -595,10 +612,10 @@ def test_execute_subprocess_complex_failure(
 ) -> None:
     import asyncio
 
-    bash_mod._SB_BIN = "/usr/bin/sandbox-exec"
-    bash_mod._SB_TYPE = "macos"
-    mock_pre = {"f": 1.0}
-    mock_get_fs.side_effect = [mock_pre, {"f": 1.0, "new": 2.0}]
+    sandbox._SB_BIN = "/usr/bin/sandbox-exec"
+    sandbox._SB_TYPE = "macos"
+    mock_get_names.return_value = {"f"}
+    mock_get_fs.return_value = {"f": 1.0, "new": 2.0}
     mock_setlimit.side_effect = Exception("limit failed")
     mock_path_sec.return_value = 2
 
@@ -610,7 +627,7 @@ def test_execute_subprocess_complex_failure(
     assert "[WARNING] Files mutated" in result
 
 
-@patch("supporter.tools.bash._verify_binary")
+@patch("supporter.tools.bash.policy._verify_binary")
 @patch("subprocess.run")
 def test_execute_subprocess_generic_exception(
     mock_run: MagicMock, mock_verify: MagicMock
@@ -618,8 +635,8 @@ def test_execute_subprocess_generic_exception(
     import asyncio
 
     with (
-        patch("supporter.tools.bash._SB_BIN", "/bin/ls"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/bin/ls"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
     ):
         mock_verify.return_value = Path("/bin/ls")
         mock_run.side_effect = Exception("General failure")
@@ -676,7 +693,7 @@ async def test_tier3_block_temp_dir_exec(mock_config: MagicMock) -> None:
 async def test_tier3_block_sensitive_file_symlink(mock_config: MagicMock) -> None:
     with (
         patch("pathlib.Path.resolve"),
-        patch("supporter.tools.bash.fnmatch.fnmatch", return_value=True),
+        patch("supporter.tools.bash.policy.fnmatch.fnmatch", return_value=True),
     ):
         res = await execute_bash("cat my_env_link")
         assert "Tier 3 BLOCK" in res
@@ -687,10 +704,12 @@ async def test_tier2_confirmation_plain_download(mock_config: MagicMock) -> None
     mock_callback = MagicMock(return_value=True)
     set_bash_confirmation_callback(mock_callback)
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.policy._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.executor.subprocess.run") as mock_run,
     ):
+        mock_run.return_value = MagicMock(stdout=b"", stderr=b"", returncode=0)
         mock_verify.return_value = Path("/usr/bin/curl")
         await execute_bash("curl https://example.com")
     mock_callback.assert_called()
@@ -701,10 +720,12 @@ async def test_tier2_high_risk_install(mock_config: MagicMock) -> None:
     mock_callback = MagicMock(return_value=True)
     set_bash_confirmation_callback(mock_callback)
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.policy._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.executor.subprocess.run") as mock_run,
     ):
+        mock_run.return_value = MagicMock(stdout=b"", stderr=b"", returncode=0)
         mock_verify.return_value = Path("/usr/bin/npm")
         await execute_bash("npm install lodash")
     mock_callback.assert_called()
@@ -715,12 +736,12 @@ async def test_tier1_auto_allow(mock_config: MagicMock) -> None:
     mock_callback = MagicMock(return_value=True)
     set_bash_confirmation_callback(mock_callback)
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.policy._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
     ):
         mock_verify.return_value = Path("/usr/bin/ls")
-        with patch("supporter.tools.bash.subprocess.run") as mock_run:
+        with patch("supporter.tools.bash.executor.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout=b"file1", stderr=b"", returncode=0)
             await execute_bash("ls")
     mock_callback.assert_not_called()
@@ -730,7 +751,7 @@ async def test_tier1_auto_allow(mock_config: MagicMock) -> None:
 async def test_unknown_binary_defaults_to_tier2(mock_config: MagicMock) -> None:
     mock_callback = MagicMock(return_value=False)
     set_bash_confirmation_callback(mock_callback)
-    with patch("supporter.tools.bash._verify_binary") as mock_verify:
+    with patch("supporter.tools.bash.policy._verify_binary") as mock_verify:
         mock_verify.return_value = Path("/usr/bin/customtool")
         result = await execute_bash("customtool --version")
 
@@ -742,7 +763,7 @@ async def test_unknown_binary_defaults_to_tier2(mock_config: MagicMock) -> None:
 async def test_blocked_binary_is_rejected_before_policy_allowlist(
     mock_config: MagicMock,
 ) -> None:
-    with patch("supporter.tools.bash._verify_binary") as mock_verify:
+    with patch("supporter.tools.bash.policy._verify_binary") as mock_verify:
         mock_verify.return_value = Path("/usr/bin/env")
         result = await execute_bash("env")
 
@@ -764,27 +785,29 @@ def test_apply_tier1_allowlist_keeps_allowed_git_subcommand_tier1() -> None:
 @pytest.mark.asyncio
 async def test_env_var_stripping(mock_config: MagicMock) -> None:
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.policy._verify_binary") as mock_verify,
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
     ):
         mock_verify.return_value = Path("/usr/bin/ls")
-        with patch("supporter.tools.bash.subprocess.run") as mock_run:
+        with patch("supporter.tools.bash.executor.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout=b"", stderr=b"", returncode=0)
             await execute_bash("NODE_ENV=production ls")
             mock_verify.assert_called_with("ls")
 
 
 def test_evaluate_final_tier_cancellation() -> None:
-    bash_mod._BASH_CONFIRMATION_CALLBACK = lambda tokens, msg: False
+    sandbox._BASH_CONFIRMATION_CALLBACK = lambda tokens, msg: False
     with pytest.raises(PermissionError, match="cancelled by user"):
-        _evaluate_final_tier("rm foo", ["rm", "foo"], "rm", 2, Path("/fake_tmp"))
+        policy._evaluate_final_tier("rm foo", ["rm", "foo"], "rm", 2, Path("/fake_tmp"))
 
 
 def test_evaluate_final_tier_high_risk() -> None:
-    bash_mod._BASH_CONFIRMATION_CALLBACK = MagicMock(return_value=True)
-    _evaluate_final_tier("pkg install", ["pkg", "install"], "pkg", 2, Path("/fake_tmp"))
-    bash_mod._BASH_CONFIRMATION_CALLBACK.assert_called_once()
+    sandbox._BASH_CONFIRMATION_CALLBACK = MagicMock(return_value=True)
+    policy._evaluate_final_tier(
+        "pkg install", ["pkg", "install"], "pkg", 2, Path("/fake_tmp")
+    )
+    sandbox._BASH_CONFIRMATION_CALLBACK.assert_called_once()
 
 
 def test_check_network_egress_httpie_at_file(mock_config: Any) -> None:
@@ -846,7 +869,7 @@ def test_apply_path_security_with_at_flag(mock_config: Any, project_root: Any) -
 
 def test_verify_binary_not_found() -> None:
     with pytest.raises(PermissionError, match="Binary not found"):
-        bash_mod._verify_binary("nonexistent_command_xyz")
+        policy._verify_binary("nonexistent_command_xyz")
 
 
 def test_check_execution_location_curl_upload_flag() -> None:
@@ -884,17 +907,19 @@ def test_apply_path_security_outside_project_boundary(tmp_path: Any) -> None:
 
 
 def test_check_find_command_flags() -> None:
-    assert bash_mod._check_find_command(["find", ".", "-exec", "ls", "{}", ";"])
-    assert bash_mod._check_find_command(["find", ".", "-delete"])
+    assert policy._check_find_command(["find", ".", "-exec", "ls", "{}", ";"])
+    assert policy._check_find_command(["find", ".", "-delete"])
 
 
 def test_gate_inner_shell_payload_apply_policy_returns_3() -> None:
     with (
-        patch("supporter.tools.bash._verify_binary", return_value=Path("/bin/ls")),
-        patch("supporter.tools.bash._check_execution_location"),
-        patch("supporter.tools.bash._check_complex_syntax"),
-        patch("supporter.tools.bash._apply_path_security"),
-        patch("supporter.tools.bash._apply_policy_checks", return_value=3),
+        patch(
+            "supporter.tools.bash.policy._verify_binary", return_value=Path("/bin/ls")
+        ),
+        patch("supporter.tools.bash.policy._check_execution_location"),
+        patch("supporter.tools.bash.policy._check_complex_syntax"),
+        patch("supporter.tools.bash.policy._apply_path_security"),
+        patch("supporter.tools.bash.policy._apply_policy_checks", return_value=3),
     ):
         assert _gate_inner_shell_payload(["ls"], 0) == 3
 
@@ -902,15 +927,15 @@ def test_gate_inner_shell_payload_apply_policy_returns_3() -> None:
 def test_gate_inner_shell_payload_interpreter_payload_blocked() -> None:
     with (
         patch(
-            "supporter.tools.bash._verify_binary",
+            "supporter.tools.bash.policy._verify_binary",
             return_value=Path("/usr/bin/python3"),
         ),
-        patch("supporter.tools.bash._check_execution_location"),
-        patch("supporter.tools.bash._check_complex_syntax"),
-        patch("supporter.tools.bash._apply_path_security"),
-        patch("supporter.tools.bash._apply_policy_checks", return_value=1),
+        patch("supporter.tools.bash.policy._check_execution_location"),
+        patch("supporter.tools.bash.policy._check_complex_syntax"),
+        patch("supporter.tools.bash.policy._apply_path_security"),
+        patch("supporter.tools.bash.policy._apply_policy_checks", return_value=1),
         patch(
-            "supporter.tools.bash._inspect_interpreter_payload",
+            "supporter.tools.bash.policy._inspect_interpreter_payload",
             return_value=3,
         ),
     ):
@@ -965,9 +990,9 @@ def test_apply_policy_checks_find_tier2() -> None:
 
 
 def test_evaluate_final_tier_git_non_tier1_without_callback_raises() -> None:
-    bash_mod._BASH_CONFIRMATION_CALLBACK = None
+    sandbox._BASH_CONFIRMATION_CALLBACK = None
     with pytest.raises(PermissionError, match="Tier 2 Confirmation Required"):
-        bash_mod._evaluate_final_tier(
+        policy._evaluate_final_tier(
             "git opaque-subcommand",
             ["git", "opaque-subcommand"],
             "git",
@@ -980,21 +1005,22 @@ def test_execute_subprocess_security_block_triggers_notification(
     tmp_path: Any,
 ) -> None:
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
         patch(
-            "supporter.tools.bash.subprocess.run",
+            "supporter.tools.bash.executor.subprocess.run",
             side_effect=Exception("Security Block: blocked"),
         ),
     ):
         notify = MagicMock()
         set_bash_notification_callback(notify)
-        output = bash_mod._execute_subprocess(
+        output = executor._execute_subprocess(
             Path("/usr/bin/ls"),
             ["ls"],
             tmp_path,
             tmp_path,
-            {},
+            set(),
+            0.0,
         )
     assert "Error executing command" in output
     notify.assert_called_once()
@@ -1045,20 +1071,21 @@ def test_execute_subprocess_set_limits_failure_branch(tmp_path: Any) -> None:
         return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
 
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash.subprocess.run", side_effect=fake_run),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.executor.subprocess.run", side_effect=fake_run),
         patch(
-            "supporter.tools.bash.resource.setrlimit",
+            "supporter.tools.bash.executor.resource.setrlimit",
             side_effect=RuntimeError("rlimit"),
         ),
     ):
-        output = bash_mod._execute_subprocess(
+        output = executor._execute_subprocess(
             Path("/usr/bin/ls"),
             ["ls"],
             tmp_path,
             tmp_path,
-            {},
+            set(),
+            0.0,
         )
     assert "ok" in output
 
@@ -1071,17 +1098,18 @@ def test_execute_subprocess_set_limits_success_branch(tmp_path: Any) -> None:
         return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
 
     with (
-        patch("supporter.tools.bash._SB_BIN", "/usr/bin/sandbox-exec"),
-        patch("supporter.tools.bash._SB_TYPE", "macos"),
-        patch("supporter.tools.bash.subprocess.run", side_effect=fake_run),
-        patch("supporter.tools.bash.os.setsid"),
-        patch("supporter.tools.bash.resource.setrlimit"),
+        patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
+        patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
+        patch("supporter.tools.bash.executor.subprocess.run", side_effect=fake_run),
+        patch("supporter.tools.bash.executor.os.setsid"),
+        patch("supporter.tools.bash.executor.resource.setrlimit"),
     ):
-        output = bash_mod._execute_subprocess(
+        output = executor._execute_subprocess(
             Path("/usr/bin/ls"),
             ["ls"],
             tmp_path,
             tmp_path,
-            {},
+            set(),
+            0.0,
         )
     assert output == "ok"

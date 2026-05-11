@@ -25,8 +25,10 @@ async def test_setup_agent_bash_unavailable() -> None:
     app = MagicMock()
     manager = _make_manager(app)
     with (
-        patch("supporter.tools.bash.check_bash_availability", return_value=False),
-        patch("supporter.tools.bash.notify_bash_unavailable") as mock_notify,
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=False
+        ),
+        patch("supporter.tools.bash.sandbox.notify_bash_unavailable") as mock_notify,
         patch("supporter.index.get_provider"),
         patch("supporter.agent.ChatAgent"),
     ):
@@ -152,8 +154,10 @@ async def test_setup_agent_dispatch() -> None:
     with (
         patch("supporter.index.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent") as mock_chat_agent,
-        patch("supporter.tools.bash.check_bash_availability", return_value=True),
-        patch("supporter.tools.bash.execute_bash"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=True
+        ),
+        patch("supporter.tools.bash.executor.execute_bash"),
         patch("supporter.tools.file_ops.read_file"),
         patch("supporter.tools.file_ops.write_file"),
         patch("supporter.tools.search.google_search"),
@@ -173,8 +177,10 @@ async def test_setup_agent_registry_tools() -> None:
     with (
         patch("supporter.index.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent"),
-        patch("supporter.tools.bash.check_bash_availability", return_value=True),
-        patch("supporter.tools.bash.execute_bash"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=True
+        ),
+        patch("supporter.tools.bash.executor.execute_bash"),
     ):
         mock_get_provider.return_value = MagicMock()
         await manager.setup_agent(use_live=False)
@@ -198,8 +204,10 @@ async def test_setup_agent_no_bash() -> None:
     with (
         patch("supporter.index.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent"),
-        patch("supporter.tools.bash.check_bash_availability", return_value=False),
-        patch("supporter.tools.bash.notify_bash_unavailable"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=False
+        ),
+        patch("supporter.tools.bash.sandbox.notify_bash_unavailable"),
     ):
         mock_get_provider.return_value = MagicMock()
         await manager.setup_agent(use_live=False)

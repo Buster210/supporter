@@ -72,7 +72,7 @@ class SupporterApp(App[None]):
         )
 
     async def on_mount(self) -> None:
-        from ..tools.bash import (
+        from ..tools.bash.sandbox import (
             set_bash_confirmation_callback,
             set_bash_notification_callback,
         )
@@ -99,7 +99,7 @@ class SupporterApp(App[None]):
             self._toast_manager.notify(self, msg, type="system")
 
     async def on_unmount(self) -> None:
-        from ..tools.bash import (
+        from ..tools.bash.sandbox import (
             set_bash_confirmation_callback,
             set_bash_notification_callback,
         )

@@ -44,7 +44,7 @@ class ModeManager:
         from ..agent import ChatAgent
         from ..config import config
         from ..index import get_provider
-        from ..tools.bash import (
+        from ..tools.bash.sandbox import (
             check_bash_availability,
             notify_bash_unavailable,
         )

@@ -41,7 +41,6 @@ def test_resolve_search_gemma() -> None:
 def test_resolve_search_no_duplicates() -> None:
     p = GeminiLiveProvider(api_keys=["key"], model_name=GEMMA_4_IT)
     assert sum(1 for t in p._resolve_tools() if hasattr(t, "google_search")) == 1
-    assert sum(1 for t in p._resolve_tools() if hasattr(t, "google_search")) == 1
 
 
 @pytest.mark.asyncio
