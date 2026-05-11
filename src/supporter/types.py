@@ -65,7 +65,6 @@ class AppConfig:
     delegate_max_timeout: int
     delegate_max_tasks: int
     delegate_max_output_chars: int
-    delegate_allowed_tools: set[str]
     delegate_default_persona: str
     delegate_agent_roster: dict[str, dict[str, Any]]
     delegate_max_retries: int

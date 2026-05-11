@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import inspect
 import json
 import time
@@ -32,7 +33,7 @@ from ..types import (
     TaskTimedOut,
 )
 from .base import ToolError
-from .bash import execute_bash
+from .catalog import build_tool_catalog, select_delegate_tools
 from .delegation_capsule import (
     create_capsule,
     extract_task_capsule_fields,
@@ -59,8 +60,6 @@ from .event_bus import (
 from .event_bus import (
     remove_bus as remove_bus,
 )
-from .file_ops import read_file, write_file
-from .search import google_search
 
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 _JOB_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -76,18 +75,9 @@ def serialize_capsule_result(job_id: str) -> dict[str, Any]:
     return _serialize_capsule_result(job_id)
 
 
-def _build_tool_registry(
-    tool_names: set[str],
-) -> dict[str, Callable[..., Any]]:
-    all_tools: dict[str, Callable[..., Any]] = {
-        "read_file": read_file,
-        "write_file": write_file,
-        "execute_bash": execute_bash,
-        "google_search": google_search,
-    }
-    registry = {name: func for name, func in all_tools.items() if name in tool_names}
-    registry.pop("delegate_tasks", None)
-    return registry
+@functools.cache
+def _delegate_allowed_tool_names() -> set[str]:
+    return set(select_delegate_tools(build_tool_catalog(), "all"))
 
 
 def _create_sub_agent(
@@ -96,7 +86,7 @@ def _create_sub_agent(
 ) -> tuple[ChatAgent, str]:
     from ..index import get_provider
 
-    registry = _build_tool_registry(task["tools"])
+    registry = select_delegate_tools(build_tool_catalog(), task["tools"])
     if not provider:
         provider = get_provider(
             shared=False, model_name=task["model"], registry=registry
@@ -674,15 +664,16 @@ def _validate_single_task(
 
     profile = _resolve_agent_profile(t)
     raw_tools = profile.get("tools") or t.get("tools", "all")
-    granted_tools = config.delegate_allowed_tools
+    allowed_tools = _delegate_allowed_tool_names()
+    granted_tools = allowed_tools
 
     if isinstance(raw_tools, set):
-        granted_tools = raw_tools.intersection(config.delegate_allowed_tools)
+        granted_tools = raw_tools.intersection(allowed_tools)
     elif raw_tools == "all":
-        granted_tools = config.delegate_allowed_tools
+        granted_tools = allowed_tools
     elif isinstance(raw_tools, str):
         requested = {tool.strip() for tool in raw_tools.split(",") if tool.strip()}
-        granted_tools = requested.intersection(config.delegate_allowed_tools)
+        granted_tools = requested.intersection(allowed_tools)
 
     raw_timeout = t.get("timeout")
     task_timeout = config.delegate_default_timeout

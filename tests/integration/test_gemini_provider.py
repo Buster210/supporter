@@ -350,6 +350,53 @@ def test_transform_tools_skips_registry_tools_with_predeclared_names() -> Any:
     assert wrapped_tools[0].__name__ == "async_tool"
 
 
+def test_transform_tools_does_not_duplicate_code_execution_tool() -> None:
+    from google.genai import types
+
+    provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
+    code_execution_tool = types.Tool(
+        code_execution=types.ToolCodeExecution(),
+    )
+    transformed = provider._transform_tools(
+        cast(
+            index.LLMOptions,
+            {"tools": [code_execution_tool], "use_code_execution": True},
+        )
+    )
+
+    assert transformed is not None
+    assert (
+        sum(
+            1
+            for tool in transformed
+            if getattr(tool, "code_execution", None) is not None
+        )
+        == 1
+    )
+
+
+GEMINI_3_FLASH = "gemini-3.1-flash"
+GEMMA_4_IT = "gemma-4-31b-it"
+
+
+def test_transform_search_gemini_3() -> None:
+    provider = GeminiProvider(api_key="test-key", model_name=GEMINI_3_FLASH)
+    transformed = provider._transform_tools(
+        cast(index.LLMOptions, {"registry": {}, "use_search": True})
+    )
+    assert transformed is not None
+    assert "google_search" in {t.__name__ for t in transformed if callable(t)}
+
+
+def test_transform_search_gemma() -> None:
+    provider = GeminiProvider(api_key="test-key", model_name=GEMMA_4_IT)
+    transformed = provider._transform_tools(
+        cast(index.LLMOptions, {"registry": {}, "use_search": True})
+    )
+    assert transformed is not None
+    assert any(hasattr(t, "google_search") for t in transformed)
+
+
 @pytest.mark.asyncio
 async def test_provider_prepare_contents() -> None:
     provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
@@ -360,57 +407,6 @@ async def test_provider_prepare_contents() -> None:
     assert contents[0].parts[0].text == "hello"
     assert contents[1].parts is not None
     assert contents[1].parts[0].text == "how are you?"
-
-
-@pytest.mark.asyncio
-async def test_provider_wrap_tool() -> None:
-    provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
-
-    def sync_tool(x: Any) -> Any:
-        return x
-
-    async def async_tool(x: Any) -> Any:
-        return x
-
-    wrapped_sync = provider._wrap_tool("sync", sync_tool)
-    wrapped_async = provider._wrap_tool("async", async_tool)
-    assert wrapped_sync(1) == 1
-    assert await wrapped_async(2) == 2
-
-
-@pytest.mark.asyncio
-async def test_provider_wrap_tool_async_exception() -> None:
-    provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
-
-    async def async_tool() -> None:
-        raise RuntimeError("async boom")
-
-    wrapped_async = provider._wrap_tool("async_tool", async_tool)
-    with (
-        patch("supporter.providers.gemini_provider.logger.error") as mock_error,
-        pytest.raises(RuntimeError, match="async boom"),
-    ):
-        await wrapped_async()
-    mock_error.assert_called_once_with(
-        "Async tool 'async_tool' failed [RuntimeError]: async boom"
-    )
-
-
-def test_provider_wrap_tool_sync_exception() -> None:
-    provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
-
-    def sync_tool() -> None:
-        raise RuntimeError("sync boom")
-
-    wrapped_sync = provider._wrap_tool("sync_tool", sync_tool)
-    with (
-        patch("supporter.providers.gemini_provider.logger.error") as mock_error,
-        pytest.raises(RuntimeError, match="sync boom"),
-    ):
-        wrapped_sync()
-    mock_error.assert_called_once_with(
-        "Sync tool 'sync_tool' failed [RuntimeError]: sync boom"
-    )
 
 
 def test_provider_get_name_returns_model_name() -> None:

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from supporter.config import config
+from supporter.tools.catalog import build_tool_catalog, select_delegate_tools
 from supporter.tools.delegate import (
-    _build_tool_registry,
     _create_sub_agent,
     _execute_dag,
     _format_results,
@@ -102,7 +102,9 @@ class TestValidation:
         }
         assert validated[1]["persona"] == "custom"
         assert validated[1]["context"] == "ctx"
-        assert validated[1]["tools"] == config.delegate_allowed_tools
+        assert validated[1]["tools"] == set(
+            select_delegate_tools(build_tool_catalog(), "all")
+        )
 
     def test_malformed_json(self) -> None:
         with pytest.raises(ValueError, match="Invalid JSON"):
@@ -208,16 +210,39 @@ class TestDependencyValidation:
 
 class TestToolRegistry:
     def test_scoping(self) -> None:
-        registry = _build_tool_registry({"read_file", "execute_bash", "unknown_tool"})
+        registry = select_delegate_tools(
+            build_tool_catalog(), {"read_file", "execute_bash", "unknown_tool"}
+        )
         assert "read_file" in registry
         assert "execute_bash" in registry
         assert "write_file" not in registry
         assert "unknown_tool" not in registry
 
     def test_no_recursion(self) -> None:
-        registry = _build_tool_registry({"read_file", "delegate_tasks"})
+        registry = select_delegate_tools(
+            build_tool_catalog(), {"read_file", "delegate_tasks"}
+        )
         assert "read_file" in registry
         assert "delegate_tasks" not in registry
+
+    def test_registry_only_includes_explicit_allowed_tools(self) -> None:
+        requested = {
+            "read_file",
+            "write_file",
+            "execute_bash",
+            "google_search",
+            "delegate_tasks",
+            "check_delegation",
+            "query_delegation",
+            "unknown_tool",
+        }
+        registry = select_delegate_tools(build_tool_catalog(), requested)
+        assert set(registry) == {
+            "read_file",
+            "write_file",
+            "execute_bash",
+            "google_search",
+        }
 
 
 class TestSubAgentFactory:

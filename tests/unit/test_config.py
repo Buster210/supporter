@@ -136,12 +136,6 @@ class TestAppConfig:
             delegate_max_timeout=600,
             delegate_max_tasks=10,
             delegate_max_output_chars=10000,
-            delegate_allowed_tools={
-                "read_file",
-                "write_file",
-                "execute_bash",
-                "google_search",
-            },
             delegate_default_persona="Default persona",
             delegate_agent_roster={},
             delegate_max_retries=2,

@@ -1,5 +1,4 @@
 import asyncio
-import re
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -10,7 +9,11 @@ from google.genai.types import Content
 
 from ..config import config
 from ..logger import logger
-from ..tools.search import google_search
+from ..tools.resolver import (
+    ensure_function_search_tool,
+    needs_function_search,
+    resolve_live_provider_tools,
+)
 from ..types import (
     LLMChunk,
     LLMOptions,
@@ -53,27 +56,22 @@ class GeminiLiveProvider:
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._last_turn_complete = True
 
-        if self._needs_function_search() and "google_search" not in self.registry:
-            self.registry["google_search"] = google_search
+        ensure_function_search_tool(self.model_name, self.registry)
 
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
         self.client = genai.Client(api_key=self.api_keys[self._current_key_index])
 
     def _needs_function_search(self) -> bool:
-        return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
+        return needs_function_search(self.model_name)
 
     def _resolve_tools(self) -> list[Any]:
-        final_tools = list(self.tools) + list(self.registry.values())
-        needs_search = (
-            "2.5" in self.model_name
-            or "gemma" in self.model_name.lower()
-            or "fallback" in self.model_name.lower()
+        return resolve_live_provider_tools(
+            model_name=self.model_name,
+            tools=self.tools,
+            registry=self.registry,
+            google_types=types,
         )
-        has_search = any(hasattr(t, "google_search") for t in final_tools)
-        if needs_search and not has_search:
-            final_tools.append(types.Tool(google_search=types.GoogleSearch()))
-        return final_tools
 
     def _get_session_config(self) -> types.LiveConnectConfig:
         config_kwargs: dict[str, Any] = {

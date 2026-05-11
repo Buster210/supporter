@@ -23,10 +23,25 @@ def provider(api_keys: Any) -> Any:
     return GeminiLiveProvider(api_keys=api_keys)
 
 
+GEMINI_3_FLASH = "gemini-3.1-flash"
+GEMMA_4_IT = "gemma-4-31b-it"
+
+
 @pytest.mark.asyncio
 async def test_auto_register_search() -> None:
-    p = GeminiLiveProvider(api_keys=["key"], model_name="gemini-3.1-flash")
+    p = GeminiLiveProvider(api_keys=["key"], model_name=GEMINI_3_FLASH)
     assert "google_search" in p.registry
+
+
+def test_resolve_search_gemma() -> None:
+    p = GeminiLiveProvider(api_keys=["key"], model_name=GEMMA_4_IT)
+    assert any(hasattr(tool, "google_search") for tool in p._resolve_tools())
+
+
+def test_resolve_search_no_duplicates() -> None:
+    p = GeminiLiveProvider(api_keys=["key"], model_name=GEMMA_4_IT)
+    assert sum(1 for t in p._resolve_tools() if hasattr(t, "google_search")) == 1
+    assert sum(1 for t in p._resolve_tools() if hasattr(t, "google_search")) == 1
 
 
 @pytest.mark.asyncio

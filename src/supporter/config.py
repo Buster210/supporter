@@ -54,6 +54,7 @@ TRANSIENT_ERROR_STRINGS = {
     "overloaded",
     "internal error",
     "service level",
+    "cooldown",
 }
 HTTP_5XX_STATUS_CODES = {HTTP_SERVICE_UNAVAILABLE, HTTP_INTERNAL_ERROR, 502, 504}
 
@@ -67,12 +68,6 @@ DELEGATE_DEFAULT_TIMEOUT = 180
 DELEGATE_MAX_TIMEOUT = 600
 DELEGATE_MAX_TASKS = 10
 DELEGATE_MAX_OUTPUT_CHARS = 10000
-DELEGATE_ALLOWED_TOOLS = {
-    "read_file",
-    "write_file",
-    "execute_bash",
-    "google_search",
-}
 DELEGATE_MAX_RETRIES = 2
 
 DELEGATE_HEARTBEAT_INTERVAL = 30
@@ -135,7 +130,6 @@ def load_config() -> AppConfig:
         delegate_max_timeout=DELEGATE_MAX_TIMEOUT,
         delegate_max_tasks=DELEGATE_MAX_TASKS,
         delegate_max_output_chars=DELEGATE_MAX_OUTPUT_CHARS,
-        delegate_allowed_tools=DELEGATE_ALLOWED_TOOLS,
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
         delegate_max_retries=int(

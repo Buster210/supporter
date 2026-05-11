@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import Callable
 from typing import Any
 
 from ..logger import logger
@@ -47,33 +46,21 @@ class ModeManager:
         from ..index import get_provider
         from ..tools.bash import (
             check_bash_availability,
-            execute_bash,
             notify_bash_unavailable,
         )
-        from ..tools.delegate import (
-            cancel_delegation,
-            check_delegation,
-            delegate_tasks,
-        )
-        from ..tools.delegation_capsule import query_delegation
-        from ..tools.file_ops import (
-            read_file,
-            write_file,
+        from ..tools.catalog import (
+            ORCHESTRATOR_TOOL_NAMES,
+            build_tool_catalog,
+            select_tools,
         )
 
-        tools_registry: dict[str, Callable[..., Any]] = {
-            "read_file": read_file,
-            "write_file": write_file,
-            "delegate_tasks": delegate_tasks,
-            "check_delegation": check_delegation,
-            "cancel_delegation": cancel_delegation,
-            "query_delegation": query_delegation,
-        }
-
-        if check_bash_availability():
-            tools_registry["execute_bash"] = execute_bash
-        else:
+        bash_available = check_bash_availability()
+        if not bash_available:
             notify_bash_unavailable()
+        tools_registry = select_tools(
+            build_tool_catalog(include_bash=bash_available),
+            ORCHESTRATOR_TOOL_NAMES,
+        )
 
         provider = get_provider(live=use_live, registry=tools_registry)
 

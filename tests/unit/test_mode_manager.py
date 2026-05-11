@@ -167,6 +167,48 @@ async def test_setup_agent_dispatch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_agent_registry_tools() -> None:
+    app = MockApp()
+    manager = _make_manager(app)
+    with (
+        patch("supporter.index.get_provider") as mock_get_provider,
+        patch("supporter.agent.ChatAgent"),
+        patch("supporter.tools.bash.check_bash_availability", return_value=True),
+        patch("supporter.tools.bash.execute_bash"),
+    ):
+        mock_get_provider.return_value = MagicMock()
+        await manager.setup_agent(use_live=False)
+
+    registry = mock_get_provider.call_args.kwargs["registry"]
+    assert set(registry) == {
+        "read_file",
+        "write_file",
+        "delegate_tasks",
+        "check_delegation",
+        "cancel_delegation",
+        "query_delegation",
+        "execute_bash",
+    }
+
+
+@pytest.mark.asyncio
+async def test_setup_agent_no_bash() -> None:
+    app = MockApp()
+    manager = _make_manager(app)
+    with (
+        patch("supporter.index.get_provider") as mock_get_provider,
+        patch("supporter.agent.ChatAgent"),
+        patch("supporter.tools.bash.check_bash_availability", return_value=False),
+        patch("supporter.tools.bash.notify_bash_unavailable"),
+    ):
+        mock_get_provider.return_value = MagicMock()
+        await manager.setup_agent(use_live=False)
+
+    registry = mock_get_provider.call_args.kwargs["registry"]
+    assert "execute_bash" not in registry
+
+
+@pytest.mark.asyncio
 async def test_trigger_live_greeting_shows_loading_then_replaces() -> None:
     class Banner:
         def __init__(self) -> None:
