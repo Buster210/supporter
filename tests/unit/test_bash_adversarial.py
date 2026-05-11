@@ -9,16 +9,16 @@ import supporter.tools.bash.sandbox as sandbox
 from supporter.tools.bash.defs import TIER_BLOCK, TIER_CONFIRM
 from supporter.tools.bash.executor import execute_bash
 from supporter.tools.bash.policy import (
-    _apply_policy_checks,
     _check_network_egress,
     _inspect_interpreter_payload,
+    apply_policy_checks,
 )
 
 
 @pytest.fixture(autouse=True)
 def reset_bash_callbacks() -> None:
-    sandbox._BASH_CONFIRMATION_CALLBACK = None
-    sandbox._BASH_NOTIFICATION_CALLBACK = None
+    sandbox.bash_confirmation_callback = None
+    sandbox.bash_notification_callback = None
 
 
 @pytest.mark.parametrize(
@@ -85,7 +85,7 @@ def test_network_upload_and_exfiltration_flags_are_blocked(
 ) -> None:
     assert _check_network_egress(binary, tokens) == TIER_BLOCK
     with pytest.raises(PermissionError, match="Network egress violation"):
-        _apply_policy_checks(" ".join(tokens), tokens, binary, 1)
+        apply_policy_checks(" ".join(tokens), tokens, binary, 1)
 
 
 @pytest.mark.asyncio
@@ -105,7 +105,7 @@ async def test_path_traversal_requires_confirmation_before_execution(
 
     with (
         patch(
-            "supporter.tools.bash.policy._verify_binary",
+            "supporter.tools.bash.policy.verify_binary",
             return_value=Path("/bin/ls"),
         ),
         patch("supporter.tools.bash.executor._execute_subprocess") as mock_exec,
@@ -137,7 +137,7 @@ async def test_symlink_escape_requires_confirmation_before_execution(
 
     with (
         patch(
-            "supporter.tools.bash.policy._verify_binary",
+            "supporter.tools.bash.policy.verify_binary",
             return_value=Path("/bin/ls"),
         ),
         patch("supporter.tools.bash.executor._execute_subprocess") as mock_exec,
@@ -152,7 +152,7 @@ async def test_symlink_escape_requires_confirmation_before_execution(
 @pytest.mark.asyncio
 async def test_critical_rm_targets_are_blocked(target: str) -> None:
     with patch(
-        "supporter.tools.bash.policy._verify_binary",
+        "supporter.tools.bash.policy.verify_binary",
         return_value=Path("/bin/rm"),
     ):
         result = await execute_bash(f"rm -rf {target}")
@@ -186,7 +186,7 @@ async def test_confirmation_required_payload_does_not_auto_execute(
     )
     with (
         patch(
-            "supporter.tools.bash.policy._verify_binary",
+            "supporter.tools.bash.policy.verify_binary",
             return_value=Path("/usr/bin/python3"),
         ),
         patch("supporter.tools.bash.executor._execute_subprocess") as mock_exec,

@@ -1,4 +1,4 @@
-from supporter.tools.event_bus import DelegationBus
+from supporter.tools.delegate.bus import DelegationBus
 from supporter.types import MilestoneCompleted
 
 

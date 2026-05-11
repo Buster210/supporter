@@ -12,7 +12,6 @@ from ..config import config
 from ..logger import logger
 from ..tools.resolver import (
     ensure_function_search_tool,
-    needs_function_search,
     resolve_live_provider_tools,
 )
 from ..types import (
@@ -71,9 +70,6 @@ class GeminiLiveProvider(GeminiMessageMixin):
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
         self.client = genai.Client(api_key=self.api_keys[self._current_key_index])
-
-    def _needs_function_search(self) -> bool:
-        return needs_function_search(self.model_name)
 
     def _resolve_tools(self) -> list[Any]:
         return resolve_live_provider_tools(

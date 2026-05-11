@@ -48,7 +48,7 @@ def _is_blacklisted(relative_path: str) -> bool:
     )
 
 
-def _validate_path(path: str) -> Path:
+def validate_path(path: str) -> Path:
     if not config.allowed_directories:
         raise PermissionError("No allowed directories set. Check your configuration.")
 
@@ -103,7 +103,7 @@ async def read_file(
     logger.info(f"Tool: read_file — path='{path}', offset={offset}, limit={limit}")
 
     def _sync_read() -> str:
-        p = _validate_path(path)
+        p = validate_path(path)
         if not p.exists():
             return f"Error: File not found: {p}"
 
@@ -203,7 +203,7 @@ async def write_file(
         return None
 
     def _sync_write() -> str:
-        p = _validate_path(path)
+        p = validate_path(path)
         logger.debug(f"write_file input: {content!r}")
 
         if error_msg := _confirm_write(p, content, encoding):

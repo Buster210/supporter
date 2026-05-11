@@ -6,11 +6,12 @@ from unittest.mock import patch
 
 import pytest
 
-import supporter.tools.capsule as dc
-import supporter.tools.capsule_query as capsule_query
-import supporter.tools.capsule_view as capsule_view
+import supporter.tools.delegate.capsule as dc
+import supporter.tools.delegate.capsule_query as capsule_query
 from supporter.config import config
-from supporter.tools.capsule import (
+from supporter.tools.delegate.api import delegate_tasks
+from supporter.tools.delegate.bus import get_bus
+from supporter.tools.delegate.capsule import (
     capsule_path,
     create_capsule,
     effective_status,
@@ -25,17 +26,17 @@ from supporter.tools.capsule import (
     mark_task_timed_out,
     save_capsule,
 )
-from supporter.tools.capsule_query import query_delegation, serialize_capsule_result
-from supporter.tools.delegate import (
-    delegate_tasks,
+from supporter.tools.delegate.capsule_query import (
+    query_delegation,
+    serialize_capsule_result,
 )
-from supporter.tools.event_bus import get_bus
 from supporter.types import MilestoneCompleted, TaskStatus
 
 
 @pytest.fixture(autouse=True)
 def isolate_capsules(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
+    dc._CAPSULE_LOCKS.clear()
 
 
 def _task(task_id: str, depends_on: list[str] | None = None) -> dict[str, Any]:
@@ -286,7 +287,9 @@ async def test_delegate_tasks_creates_capsule_at_start() -> None:
         }
 
     tasks_json = json.dumps([{"id": "t1", "task": "slow task"}])
-    with patch("supporter.tools.delegate._run_sub_agent", side_effect=slow_run):
+    with patch(
+        "supporter.tools.delegate.scheduler.run_sub_agent", side_effect=slow_run
+    ):
         plan = await delegate_tasks("Capsule start", tasks_json, max_parallel=1)
         job_id = next(line for line in plan.splitlines() if "Job ID:" in line).split(
             "`"
@@ -338,14 +341,14 @@ def test_effective_status_naive_timestamp_and_invalid_timestamp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_capsule_mutator_exception_returns_none() -> None:
+async def test_update_capsule_mutator_exception_propagates() -> None:
     await create_capsule("muterr01", "Mutator", [_task("a")], 1)
 
     def bad_mutator(capsule: dict[str, Any]) -> None:
         raise RuntimeError("bad mutator")
 
-    result = await dc.update_capsule("muterr01", bad_mutator)
-    assert result is None
+    with pytest.raises(RuntimeError, match="bad mutator"):
+        await dc.update_capsule("muterr01", bad_mutator)
 
 
 @pytest.mark.asyncio
@@ -372,7 +375,7 @@ def test_build_synthesis_skips_non_dict_task_values() -> None:
 
 
 def test_serialize_capsule_result_handles_bad_tasks_and_synthesis_types() -> None:
-    with patch("supporter.tools.capsule_query.load_capsule") as mock_load:
+    with patch("supporter.tools.delegate.capsule_query.load_capsule_safe") as mock_load:
         mock_load.return_value = {
             "job_id": "j",
             "milestone": "m",
@@ -395,9 +398,9 @@ def test_private_helpers_and_query_branches(tmp_path: Any, monkeypatch: Any) -> 
     }
     assert dc._normalize_confidence(1) == "unknown"
     assert dc._string_or_default("", "d") == "d"
-    assert dc._status_value(TaskStatus.ERROR) == "error"
-    assert capsule_view.duration("bad") == 0.0
-    assert dc._preview("abcdef", 3).endswith("[truncated]")
+    assert dc.status_value(TaskStatus.ERROR) == "error"
+    assert capsule_query.duration("bad") == 0.0
+    assert dc.preview("abcdef", 3).endswith("[truncated]")
 
 
 def test_safe_job_id_rejects_invalid() -> None:
@@ -422,15 +425,15 @@ async def test_update_capsule_non_dict_json_object_from_reader() -> None:
     path = capsule_path("nondict2")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("[]", encoding="utf-8")
-    result = await dc.update_capsule("nondict2", lambda c: None)
-    assert result is None
+    with pytest.raises(ValueError, match="not a JSON object"):
+        await dc.update_capsule("nondict2", lambda c: None)
 
 
 @pytest.mark.asyncio
-async def test_mark_task_started_missing_task_returns_none() -> None:
+async def test_mark_task_started_missing_task_propagates() -> None:
     await create_capsule("miss001", "M", [_task("a")], 1)
-    result = await mark_task_started("miss001", "unknown")
-    assert result is None
+    with pytest.raises(KeyError, match="unknown"):
+        await mark_task_started("miss001", "unknown")
 
 
 def test_extract_fields_with_invalid_fenced_and_marked_json() -> None:
@@ -499,7 +502,7 @@ async def test_inspect_task_includes_error_and_skip_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_all_capsules_warns_on_invalid_record_shape() -> None:
+async def testload_all_capsules_warns_on_invalid_record_shape() -> None:
     root = dc.delegations_dir()
     root.mkdir(parents=True, exist_ok=True)
     (root / "badshape.json").write_text('{"foo": "bar"}', encoding="utf-8")
@@ -519,7 +522,7 @@ async def test_load_or_none_warns_on_invalid_json() -> None:
 
 def test_capsule_files_when_root_missing(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
-    assert capsule_view.capsule_files() == []
+    assert capsule_query.capsule_files() == []
 
 
 @pytest.mark.asyncio
@@ -554,4 +557,4 @@ async def test_display_capsule_truncates_output_and_dependency_context() -> None
 
 
 def test_jsonish_non_string_branch() -> None:
-    assert capsule_view.jsonish({"a": 1}) == '{"a": 1}'
+    assert capsule_query.jsonish({"a": 1}) == '{"a": 1}'

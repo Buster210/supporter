@@ -1,227 +1,191 @@
+from __future__ import annotations
+
 import asyncio
 import json
-import time
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
 from supporter.config import config
-from supporter.tools.base import ToolError
-from supporter.tools.delegate import (
+from supporter.tools.delegate.api import (
     cancel_delegation,
     check_delegation,
     delegate_tasks,
-    get_bus,
-    remove_bus,
 )
-from supporter.types import MilestoneCancelled, MilestoneCompleted, TaskStatus
+from supporter.tools.delegate.bus import get_bus
+from supporter.tools.delegate.capsule import capsule_path, load_capsule
+from supporter.tools.delegate.capsule_query import (
+    query_delegation,
+    serialize_capsule_result,
+)
+from supporter.types import (
+    LLMOptions,
+    LLMResult,
+    MilestoneCancelled,
+    MilestoneCompleted,
+)
+
+
+class ScriptedProvider:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def get_name(self) -> str:
+        return "scripted-provider"
+
+    def build_user_message(self, prompt: str) -> str:
+        return prompt
+
+    def extract_assistant_message(self, result: LLMResult) -> str:
+        return result.text
+
+    async def generate(
+        self, prompt: str, options: LLMOptions | None = None
+    ) -> LLMResult:
+        self.prompts.append(prompt)
+        task_id = "synthesize" if "TASK:\nSummarize" in prompt else "map"
+        result = {
+            "summary": f"{task_id} summary",
+            "evidence": {
+                "files_read": [f"src/{task_id}.py"],
+                "files_changed": [],
+                "commands_run": ["pytest"],
+                "sources": [],
+            },
+            "findings": [f"{task_id} finding"],
+            "handoff": f"{task_id} handoff",
+            "confidence": "high",
+        }
+        return LLMResult(
+            text=f"{task_id} raw output\n\nDELEGATION_RESULT:\n{json.dumps(result)}",
+            model="scripted-model",
+            duration=0.01,
+            usage={"total_tokens": 7},
+        )
+
+
+class BlockingProvider:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def get_name(self) -> str:
+        return "blocking-provider"
+
+    def build_user_message(self, prompt: str) -> str:
+        return prompt
+
+    def extract_assistant_message(self, result: LLMResult) -> str:
+        return result.text
+
+    async def generate(
+        self, prompt: str, options: LLMOptions | None = None
+    ) -> LLMResult:
+        self.started.set()
+        await self.release.wait()
+        return LLMResult(text="released", model="blocking-model")
 
 
 @pytest.fixture(autouse=True)
-def isolate_delegation_capsules(tmp_path: Any, monkeypatch: Any) -> None:
+def isolate_delegation_flow(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
 
 
-class TestEndToEnd:
-    @pytest.mark.asyncio
-    async def test_delegate_tasks_returns_plan_immediately(self) -> None:
-        tasks_json = json.dumps(
-            [{"id": "t1", "task": "task 1"}, {"id": "t2", "task": "task 2"}]
-        )
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
-            mock_run.side_effect = [
-                {
-                    "id": "t1",
-                    "status": "completed",
-                    "output": "out1",
-                    "duration": 1.0,
-                    "model": "m",
-                },
-                {
-                    "id": "t2",
-                    "status": "completed",
-                    "output": "out2",
-                    "duration": 1.0,
-                    "model": "m",
-                },
-            ]
-            plan = await delegate_tasks("Test", tasks_json, max_parallel=2)
-
-        assert "Delegation started" in plan
-        assert "Job ID:" in plan
-        assert "t1" in plan
-        assert "t2" in plan
-        assert "check_delegation" in plan
-
-    @pytest.mark.asyncio
-    async def test_check_delegation_returns_snapshot(self) -> None:
-        tasks_json = json.dumps(
-            [{"id": "t1", "task": "task 1"}, {"id": "t2", "task": "task 2"}]
-        )
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
-            mock_run.side_effect = [
-                {
-                    "id": "t1",
-                    "status": "completed",
-                    "output": "out1",
-                    "duration": 1.0,
-                    "model": "m",
-                },
-                {
-                    "id": "t2",
-                    "status": "completed",
-                    "output": "out2",
-                    "duration": 1.0,
-                    "model": "m",
-                },
-            ]
-            plan = await delegate_tasks("Test", tasks_json, max_parallel=2)
-            job_id = next(line for line in plan.splitlines() if "Job ID:" in line)
-            job_id = job_id.split("`")[1]
-            snapshot = await check_delegation(job_id)
-        assert "Test" in snapshot or job_id in snapshot
-
-    @pytest.mark.asyncio
-    async def test_check_delegation_invalid_job(self) -> None:
-        result = await check_delegation("nonexistent")
-        assert "nonexistent" in result
-
-    @pytest.mark.asyncio
-    async def test_delegate_tasks_milestone_completes(self) -> None:
-        tasks_json = json.dumps(
-            [
-                {"id": "a", "task": "first"},
-                {"id": "b", "task": "second", "depends_on": ["a"]},
-            ]
-        )
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
-            mock_run.side_effect = [
-                {
-                    "id": "a",
-                    "status": "completed",
-                    "output": "out_a",
-                    "duration": 1.0,
-                    "model": "m",
-                },
-                {
-                    "id": "b",
-                    "status": "completed",
-                    "output": "out_b",
-                    "duration": 1.0,
-                    "model": "m",
-                },
-            ]
-            plan = await delegate_tasks("DAG Test", tasks_json, max_parallel=2)
-            job_id = next(line for line in plan.splitlines() if "Job ID:" in line)
-            job_id = job_id.split("`")[1]
-
-            bus = get_bus(job_id)
-            queue = bus.subscribe()
-            completed_event = None
-            for _ in range(50):
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
-                if event is None:
-                    break
-                if isinstance(event, MilestoneCompleted):
-                    completed_event = event
-                    break
-
-        assert completed_event is not None
-        assert "after: a" in plan
-        results = completed_event.results
-        completed = [r for r in results if r["status"] == TaskStatus.COMPLETED]
-        assert len(completed) == 2
+def _job_id(plan: str) -> str:
+    return next(line for line in plan.splitlines() if "Job ID:" in line).split("`")[1]
 
 
-class TestCancelDelegation:
-    @pytest.mark.asyncio
-    async def test_cancel_unknown_job(self) -> None:
-        result = await cancel_delegation("nonexistent")
-        assert "nonexistent" in result
-        assert "unknown" in result.lower() or "complete" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_cancel_running_job_publishes_cancelled_event(self) -> None:
-        async def slow_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            await asyncio.sleep(5.0)
-            return {
-                "id": "t1",
-                "status": TaskStatus.COMPLETED,
-                "output": "x",
-                "duration": 5.0,
-                "model": "m",
-            }
-
-        tasks_json = json.dumps([{"id": "t1", "task": "slow"}])
-        with patch("supporter.tools.delegate._run_sub_agent", side_effect=slow_run):
-            plan = await delegate_tasks("Cancel Test", tasks_json, max_parallel=1)
-            job_id = next(
-                line for line in plan.splitlines() if "Job ID:" in line
-            ).split("`")[1]
-
-            bus = get_bus(job_id)
-            queue = bus.subscribe()
-            await asyncio.sleep(0.1)
-
-            confirm = await cancel_delegation(job_id)
-            assert "Cancellation requested" in confirm
-
-            cancelled_event = None
-            for _ in range(20):
-                event = await asyncio.wait_for(queue.get(), timeout=2.0)
-                if event is None:
-                    break
-                if isinstance(event, MilestoneCancelled):
-                    cancelled_event = event
-                    break
-
-        assert cancelled_event is not None
-        assert cancelled_event.milestone == "Cancel Test"
+async def _collect_until_complete(job_id: str) -> list[Any]:
+    queue = get_bus(job_id).subscribe()
+    events: list[Any] = []
+    for _ in range(50):
+        event = await asyncio.wait_for(queue.get(), timeout=2.0)
+        if event is None:
+            break
+        events.append(event)
+        if isinstance(event, (MilestoneCompleted, MilestoneCancelled)):
+            break
+    return events
 
 
 @pytest.mark.asyncio
-async def test_delegate_tasks_start_callback_and_error_path() -> None:
-    called: list[str] = []
+async def test_delegation_lifecycle_completes_with_capsule_and_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ScriptedProvider()
+    monkeypatch.setattr("supporter.pool.get_provider", lambda **_kwargs: provider)
+    tasks_json = json.dumps(
+        [
+            {"id": "map", "task": "Map delegation flow"},
+            {
+                "id": "synthesize",
+                "task": "Summarize delegation flow",
+                "depends_on": ["map"],
+            },
+        ]
+    )
 
-    from supporter.tools.delegate import set_delegation_start_callback
+    plan = await delegate_tasks("Integration lifecycle", tasks_json, max_parallel=2)
+    job_id = _job_id(plan)
+    snapshot = await check_delegation(job_id)
+    events = await _collect_until_complete(job_id)
 
-    set_delegation_start_callback(lambda job: called.append(job))
-    plan = await delegate_tasks("cb", json.dumps([{"id": "t1", "task": "x"}]), 1)
-    assert called
-    assert "Job ID:" in plan
+    completed = [event for event in events if isinstance(event, MilestoneCompleted)]
+    capsule = load_capsule(job_id)
+    payload = serialize_capsule_result(job_id)
+    summary = query_delegation(job_id=job_id)
+    tasks = query_delegation(job_id=job_id, detail="tasks")
+    task_detail = query_delegation(job_id=job_id, task_id="synthesize")
 
-    with (
-        patch(
-            "supporter.tools.delegate._validate_tasks",
-            side_effect=ValueError("bad"),
-        ),
-        pytest.raises(ToolError, match="Delegation failed"),
-    ):
-        await delegate_tasks("bad", "[]", 1)
+    assert "Delegation started" in plan
+    assert "after: map" in plan
+    assert "Integration lifecycle" in snapshot or job_id in snapshot
+    assert completed
+    assert capsule_path(job_id).exists()
+    assert capsule["status"] == "completed"
+    assert capsule["tasks"]["map"]["summary"] == "map summary"
+    assert capsule["tasks"]["synthesize"]["summary"] == "synthesize summary"
+    assert "DEPENDENCY OUTPUTS" in provider.prompts[-1]
+    assert "map raw output" in provider.prompts[-1]
+    assert payload["totals"]["completed"] == 2
+    assert payload["tasks"][1]["summary"] == "synthesize summary"
+    assert "synthesize summary" in summary
+    assert "synthesize handoff" in tasks
+    assert "src/synthesize.py" in task_detail
 
 
 @pytest.mark.asyncio
-async def test_check_delegation_table_rows_for_running_and_done() -> None:
-    bus = get_bus("check1", "milestone")
-    bus.update_task_state(
-        "run",
-        {
-            "status": "RUNNING",
-            "agent_label": "a",
-            "started_at": time.monotonic() - 2,
-            "timeout": 30,
-        },
-    )
-    bus.update_task_state(
-        "done",
-        {
-            "status": "DONE",
-            "agent_label": "b",
-            "duration": 1.2,
-        },
-    )
-    table = await check_delegation("check1")
-    remove_bus("check1")
-    assert "| Task | Status | Agent | Elapsed |" in table
-    assert "`run`" in table and "`done`" in table
+async def test_delegation_lifecycle_validates_bad_tasks() -> None:
+    with pytest.raises(Exception, match="cannot be empty"):
+        await delegate_tasks("Invalid lifecycle", "[]", max_parallel=1)
+
+
+@pytest.mark.asyncio
+async def test_delegation_lifecycle_cancellation_uses_real_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = BlockingProvider()
+    monkeypatch.setattr("supporter.pool.get_provider", lambda **_kwargs: provider)
+    tasks_json = json.dumps([{"id": "slow", "task": "Wait until cancelled"}])
+
+    plan = await delegate_tasks("Integration cancel", tasks_json, max_parallel=1)
+    job_id = _job_id(plan)
+    queue = get_bus(job_id).subscribe()
+    await asyncio.wait_for(provider.started.wait(), timeout=2.0)
+
+    cancellation = await cancel_delegation(job_id)
+    events: list[Any] = []
+    for _ in range(20):
+        event = await asyncio.wait_for(queue.get(), timeout=2.0)
+        if event is None:
+            break
+        events.append(event)
+        if isinstance(event, MilestoneCancelled):
+            break
+
+    capsule = load_capsule(job_id)
+
+    assert "Cancellation requested" in cancellation
+    assert any(isinstance(event, MilestoneCancelled) for event in events)
+    assert capsule["status"] == "cancelled"
+    assert "slow" in capsule["tasks"]

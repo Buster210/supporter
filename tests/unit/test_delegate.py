@@ -5,29 +5,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import supporter.tools.delegate.capsule as capsule_store
 from supporter.config import config
 from supporter.tools.catalog import build_tool_catalog, select_delegate_tools
-from supporter.tools.delegate import (
+from supporter.tools.delegate.agents import (
     _create_sub_agent,
-    _execute_dag,
-    _format_results,
-    _inject_dependency_context,
-    _resolve_agent_profile,
-    _run_heartbeat,
-    _run_milestone,
-    _run_sub_agent,
-    _safe_capsule_call,
-    _should_skip,
     _truncate_delegate_output,
-    _validate_tasks,
+    run_sub_agent,
+)
+from supporter.tools.delegate.capsule import create_capsule
+from supporter.tools.delegate.scheduler import (
+    _execute_dag,
+    _inject_dependency_context,
+    _should_skip,
+    run_heartbeat,
+    run_milestone,
     serialize_results,
 )
+from supporter.tools.delegate.validation import _resolve_agent_profile, validate_tasks
 from supporter.types import LLMResult, TaskCompleted, TaskStatus
 
 
 @pytest.fixture(autouse=True)
 def isolate_delegation_capsules(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
+    capsule_store._CAPSULE_LOCKS.clear()
 
 
 class TestAgentRoster:
@@ -66,11 +68,11 @@ class TestAgentRoster:
         profile = _resolve_agent_profile(task)
         assert profile["persona"] == config.delegate_default_persona
 
-    def test_validate_tasks_with_roster_agent(self) -> None:
+    def testvalidate_tasks_with_roster_agent(self) -> None:
         tasks_json = json.dumps(
             [{"id": "t1", "agent": "test_engineer", "task": "run tests"}]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert (
             validated[0]["persona"]
             == config.delegate_agent_roster["test_engineer"]["persona"]
@@ -94,7 +96,7 @@ class TestValidation:
                 },
             ]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert len(validated) == 2
         assert validated[0]["id"] == "t1"
         assert validated[0]["tools"] == {
@@ -109,21 +111,21 @@ class TestValidation:
 
     def test_malformed_json(self) -> None:
         with pytest.raises(ValueError, match="Invalid JSON"):
-            _validate_tasks("not json")
+            validate_tasks("not json")
 
     def test_not_array(self) -> None:
         with pytest.raises(ValueError, match="must be a JSON array"):
-            _validate_tasks('{"id": "t1"}')
+            validate_tasks('{"id": "t1"}')
 
     def test_missing_fields(self) -> None:
         with pytest.raises(ValueError, match="missing a valid string 'id'"):
-            _validate_tasks('[{"task": "no id"}]')
+            validate_tasks('[{"task": "no id"}]')
         with pytest.raises(ValueError, match="missing a valid string 'task'"):
-            _validate_tasks('[{"id": "no task"}]')
+            validate_tasks('[{"id": "no task"}]')
 
     def test_duplicate_ids(self) -> None:
         with pytest.raises(ValueError, match="Duplicate task ID"):
-            _validate_tasks('[{"id": "t1", "task": "a"}, {"id": "t1", "task": "b"}]')
+            validate_tasks('[{"id": "t1", "task": "a"}, {"id": "t1", "task": "b"}]')
 
     def test_too_many(self) -> None:
         tasks = [
@@ -131,7 +133,7 @@ class TestValidation:
             for i in range(config.delegate_max_tasks + 1)
         ]
         with pytest.raises(ValueError, match="Too many tasks"):
-            _validate_tasks(json.dumps(tasks))
+            validate_tasks(json.dumps(tasks))
 
     def test_timeout_parsing(self) -> None:
         tasks_json = json.dumps(
@@ -141,7 +143,7 @@ class TestValidation:
                 {"id": "t3", "task": "c"},
             ]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert validated[0]["timeout"] == 10
         assert validated[1]["timeout"] == 600
         assert validated[2]["timeout"] == 180
@@ -155,7 +157,7 @@ class TestDependencyValidation:
                 {"id": "b", "task": "second", "depends_on": ["a"]},
             ]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert validated[0]["depends_on"] == []
         assert validated[1]["depends_on"] == ["a"]
 
@@ -167,12 +169,12 @@ class TestDependencyValidation:
             ]
         )
         with pytest.raises(ValueError, match="does not exist"):
-            _validate_tasks(tasks_json)
+            validate_tasks(tasks_json)
 
     def test_depends_on_self(self) -> None:
         tasks_json = json.dumps([{"id": "a", "task": "first", "depends_on": ["a"]}])
         with pytest.raises(ValueError, match="cannot depend on itself"):
-            _validate_tasks(tasks_json)
+            validate_tasks(tasks_json)
 
     def test_cycle_detection(self) -> None:
         tasks_json = json.dumps(
@@ -182,7 +184,7 @@ class TestDependencyValidation:
             ]
         )
         with pytest.raises(ValueError, match="cycle"):
-            _validate_tasks(tasks_json)
+            validate_tasks(tasks_json)
 
     def test_depends_on_string_format(self) -> None:
         tasks_json = json.dumps(
@@ -191,7 +193,7 @@ class TestDependencyValidation:
                 {"id": "b", "task": "second", "depends_on": "a"},
             ]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert validated[1]["depends_on"] == ["a"]
 
     def test_complex_dag_valid(self) -> None:
@@ -204,7 +206,7 @@ class TestDependencyValidation:
                 {"id": "e", "task": "t", "depends_on": ["c", "d"]},
             ]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert len(validated) == 5
         assert validated[4]["depends_on"] == ["c", "d"]
 
@@ -248,7 +250,7 @@ class TestToolRegistry:
 
 class TestSubAgentFactory:
     @patch("supporter.pool.get_provider")
-    @patch("supporter.tools.delegate.ChatAgent")
+    @patch("supporter.tools.delegate.agents.ChatAgent")
     def test_create_sub_agent(
         self, mock_agent_class: Any, mock_get_provider: Any
     ) -> None:
@@ -286,15 +288,15 @@ class TestSubAgentRunner:
         mock_agent = MagicMock()
         mock_agent.execute = AsyncMock(return_value=mock_result)
 
-        from supporter.tools.delegate import DelegationBus
+        from supporter.tools.delegate.bus import DelegationBus
 
         mock_bus = MagicMock(spec=DelegationBus)
 
         with patch(
-            "supporter.tools.delegate._create_sub_agent",
+            "supporter.tools.delegate.agents._create_sub_agent",
             return_value=(mock_agent, "prompt"),
         ):
-            result = await _run_sub_agent(task, semaphore, mock_bus, "job1")
+            result = await run_sub_agent(task, semaphore, mock_bus, "job1")
 
         assert result["id"] == "t1"
         assert result["status"] == TaskStatus.COMPLETED
@@ -315,15 +317,15 @@ class TestSubAgentRunner:
         }
         semaphore = asyncio.Semaphore(1)
 
-        from supporter.tools.delegate import DelegationBus
+        from supporter.tools.delegate.bus import DelegationBus
 
         mock_bus = MagicMock(spec=DelegationBus)
 
-        with patch("supporter.tools.delegate._create_sub_agent") as mock_factory:
+        with patch("supporter.tools.delegate.agents._create_sub_agent") as mock_factory:
             mock_agent = MagicMock()
             mock_agent.execute = AsyncMock(side_effect=asyncio.TimeoutError)
             mock_factory.return_value = (mock_agent, "prompt")
-            result = await _run_sub_agent(task, semaphore, mock_bus, "job1")
+            result = await run_sub_agent(task, semaphore, mock_bus, "job1")
 
         assert result["status"] == TaskStatus.TIMEOUT
         assert "0.01s" in result["output"]
@@ -343,15 +345,15 @@ class TestSubAgentRunner:
         }
         semaphore = asyncio.Semaphore(1)
 
-        from supporter.tools.delegate import DelegationBus
+        from supporter.tools.delegate.bus import DelegationBus
 
         mock_bus = MagicMock(spec=DelegationBus)
 
-        with patch("supporter.tools.delegate._create_sub_agent") as mock_factory:
+        with patch("supporter.tools.delegate.agents._create_sub_agent") as mock_factory:
             mock_agent = MagicMock()
             mock_agent.execute = AsyncMock(side_effect=RuntimeError("Boom"))
             mock_factory.return_value = (mock_agent, "prompt")
-            result = await _run_sub_agent(task, semaphore, mock_bus, "job1")
+            result = await run_sub_agent(task, semaphore, mock_bus, "job1")
 
         assert result["status"] == TaskStatus.ERROR
         assert "Boom" in result["output"]
@@ -384,14 +386,15 @@ class TestDAGExecution:
         ]
         semaphore = asyncio.Semaphore(5)
 
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
+        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
             mock_run.side_effect = [
                 {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
                 {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
             ]
-            from supporter.tools.delegate import DelegationBus
+            from supporter.tools.delegate.bus import DelegationBus
 
             mock_bus = MagicMock(spec=DelegationBus)
+            await create_capsule("test_job", "test", tasks, 5)
             results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
 
         assert len(results) == 2
@@ -425,14 +428,15 @@ class TestDAGExecution:
         ]
         semaphore = asyncio.Semaphore(5)
 
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
+        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
             mock_run.side_effect = [
                 {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
                 {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
             ]
-            from supporter.tools.delegate import DelegationBus
+            from supporter.tools.delegate.bus import DelegationBus
 
             mock_bus = MagicMock(spec=DelegationBus)
+            await create_capsule("test_job", "test", tasks, 5)
             results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
 
         assert len(results) == 2
@@ -466,16 +470,17 @@ class TestDAGExecution:
         ]
         semaphore = asyncio.Semaphore(5)
 
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
+        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
             mock_run.return_value = {
                 "id": "a",
                 "status": "error",
                 "output": "crashed",
                 "duration": 0.5,
             }
-            from supporter.tools.delegate import DelegationBus
+            from supporter.tools.delegate.bus import DelegationBus
 
             mock_bus = MagicMock(spec=DelegationBus)
+            await create_capsule("test_job", "test", tasks, 5)
             results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
 
         assert results[0]["status"] == TaskStatus.ERROR
@@ -515,7 +520,7 @@ class TestDAGExecution:
         ]
         semaphore = asyncio.Semaphore(2)
 
-        with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
+        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
             mock_run.return_value = {
                 "id": "a",
                 "status": TaskStatus.COMPLETED,
@@ -523,9 +528,10 @@ class TestDAGExecution:
                 "duration": 1.0,
                 "model": "m",
             }
-            from supporter.tools.delegate import DelegationBus
+            from supporter.tools.delegate.bus import DelegationBus
 
             mock_bus = MagicMock(spec=DelegationBus)
+            await create_capsule("test_job", "test", tasks, 2)
             await _execute_dag(tasks, semaphore, mock_bus, "test_job", 2)
 
         completion_events = [
@@ -545,32 +551,6 @@ class TestDAGExecution:
             "sources": 1,
         }
         assert event.handoff == "Render capsule fields in task completion UI"
-
-
-class TestFormatResults:
-    def test_mixed_results(self) -> None:
-        results = [
-            {
-                "id": "t1",
-                "status": "completed",
-                "output": "ok",
-                "model": "m1",
-                "duration": 1.5,
-            },
-            {"id": "t2", "status": "error", "output": "fail", "duration": 0.5},
-            {
-                "id": "t3",
-                "status": "skipped",
-                "output": "Skipped: dep failed",
-                "duration": 0.0,
-            },
-        ]
-        report = _format_results("M1", results, 2.0)
-        assert "MILESTONE REPORT: M1" in report
-        assert "1/3 completed" in report
-        assert "1 skipped" in report
-        assert "Task: t1" in report
-        assert "Task: t3" in report
 
 
 class TestSerializeResults:
@@ -654,12 +634,12 @@ class TestToleratesFailures:
         tasks_json = json.dumps(
             [{"id": "t1", "task": "do it", "tolerate_failures": True}]
         )
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert validated[0]["tolerate_failures"] is True
 
     def test_validation_defaults_tolerate_failures_false(self) -> None:
         tasks_json = json.dumps([{"id": "t1", "task": "do it"}])
-        validated = _validate_tasks(tasks_json)
+        validated = validate_tasks(tasks_json)
         assert validated[0]["tolerate_failures"] is False
 
 
@@ -692,16 +672,6 @@ class TestDependencyContextStatus:
         assert enriched is task
 
 
-@pytest.mark.asyncio
-async def test_safe_capsule_call_handles_sync_and_exception() -> None:
-    assert await _safe_capsule_call(lambda: 1) == 1
-
-    def boom() -> None:
-        raise RuntimeError("x")
-
-    assert await _safe_capsule_call(boom) is None
-
-
 def test_validate_tasks_edge_normalization_paths() -> None:
     tasks_json = json.dumps(
         [
@@ -713,15 +683,15 @@ def test_validate_tasks_edge_normalization_paths() -> None:
             }
         ]
     )
-    validated = _validate_tasks(tasks_json)
+    validated = validate_tasks(tasks_json)
     assert validated[0]["depends_on"] == []
     assert validated[0]["pre_approved_commands"] == []
 
     with pytest.raises(ValueError, match="cannot be empty"):
-        _validate_tasks("[]")
+        validate_tasks("[]")
 
     with pytest.raises(ValueError, match="must be an object"):
-        _validate_tasks(json.dumps(["bad"]))
+        validate_tasks(json.dumps(["bad"]))
 
 
 def test_truncate_delegate_output_branch() -> None:
@@ -751,7 +721,7 @@ async def test_execute_dag_timeout_branch_publishes_timeout() -> None:
         }
     ]
     semaphore = asyncio.Semaphore(1)
-    with patch("supporter.tools.delegate._run_sub_agent") as mock_run:
+    with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
         mock_run.return_value = {
             "id": "a",
             "status": TaskStatus.TIMEOUT,
@@ -760,9 +730,10 @@ async def test_execute_dag_timeout_branch_publishes_timeout() -> None:
             "model": "m",
             "tokens": {},
         }
-        from supporter.tools.delegate import DelegationBus
+        from supporter.tools.delegate.bus import DelegationBus
 
         mock_bus = MagicMock(spec=DelegationBus)
+        await create_capsule("job", "test", tasks, 1)
         results = await _execute_dag(tasks, semaphore, mock_bus, "job", 1)
 
     assert results[0]["status"] == TaskStatus.TIMEOUT
@@ -773,7 +744,7 @@ async def test_execute_dag_timeout_branch_publishes_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_heartbeat_emits_anomaly() -> None:
+async def testrun_heartbeat_emits_anomaly() -> None:
     bus = MagicMock()
     bus.milestone = "M"
     state = {
@@ -787,14 +758,14 @@ async def test_run_heartbeat_emits_anomaly() -> None:
 
     with (
         patch(
-            "supporter.tools.delegate.bus_exists",
+            "supporter.tools.delegate.scheduler.bus_exists",
             side_effect=[True, True, False],
         ),
-        patch("supporter.tools.delegate.time.monotonic", return_value=100.0),
-        patch("supporter.tools.delegate.asyncio.sleep", new=AsyncMock()),
-        patch("supporter.tools.delegate.DELEGATE_ANOMALY_THRESHOLD", 0.1),
+        patch("supporter.tools.delegate.scheduler.time.monotonic", return_value=100.0),
+        patch("supporter.tools.delegate.scheduler.asyncio.sleep", new=AsyncMock()),
+        patch("supporter.tools.delegate.scheduler.DELEGATE_ANOMALY_THRESHOLD", 0.1),
     ):
-        await _run_heartbeat(bus, "hbjob", interval=0)
+        await run_heartbeat(bus, "hbjob", interval=0)
 
     published = [call.args[0].__class__.__name__ for call in bus.publish.call_args_list]
     assert "HeartbeatTick" in published
@@ -803,7 +774,7 @@ async def test_run_heartbeat_emits_anomaly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_sub_agent_retry_backoff_and_continue_branch() -> None:
+async def testrun_sub_agent_retry_backoff_and_continue_branch() -> None:
     task = {
         "id": "r1",
         "task": "retry me",
@@ -829,88 +800,76 @@ async def test_run_sub_agent_retry_backoff_and_continue_branch() -> None:
     agent.execute = execute
     with (
         patch(
-            "supporter.tools.delegate._create_sub_agent",
+            "supporter.tools.delegate.agents._create_sub_agent",
             return_value=(agent, "p"),
         ),
-        patch("supporter.tools.delegate.asyncio.sleep", new=AsyncMock()),
+        patch("supporter.tools.delegate.scheduler.asyncio.sleep", new=AsyncMock()),
     ):
-        result = await _run_sub_agent(task, semaphore, bus, "job")
+        result = await run_sub_agent(task, semaphore, bus, "job")
     assert result["status"] == TaskStatus.COMPLETED
     assert calls["n"] == 2
 
 
 @pytest.mark.asyncio
-async def test_run_sub_agent_negative_retries_returns_empty_last_result() -> None:
+async def testrun_sub_agent_negative_retries_returns_empty_last_result() -> None:
     task = {
         "id": "none",
         "task": "noop",
         "max_retries": -1,
     }
-    result = await _run_sub_agent(task, asyncio.Semaphore(1), MagicMock(), "job")
+    result = await run_sub_agent(task, asyncio.Semaphore(1), MagicMock(), "job")
     assert result == {}
 
 
-def test_format_results_includes_token_line() -> None:
-    report = _format_results(
-        "M",
-        [
-            {
-                "id": "t1",
-                "status": TaskStatus.COMPLETED,
-                "output": "ok",
-                "duration": 1.0,
-                "tokens": {"total_tokens": 10},
-            }
-        ],
-        1.0,
-    )
-    assert "Tokens: 10" in report
-
-
 @pytest.mark.asyncio
-async def test_run_heartbeat_early_stop_after_sleep() -> None:
+async def testrun_heartbeat_early_stop_after_sleep() -> None:
     bus = MagicMock()
     with (
-        patch("supporter.tools.delegate.bus_exists", side_effect=[True, False]),
-        patch("supporter.tools.delegate.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "supporter.tools.delegate.scheduler.bus_exists", side_effect=[True, False]
+        ),
+        patch("supporter.tools.delegate.scheduler.asyncio.sleep", new=AsyncMock()),
     ):
-        await _run_heartbeat(bus, "j1", interval=1)
+        await run_heartbeat(bus, "j1", interval=1)
     bus.publish.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_run_heartbeat_skips_non_running_task_state() -> None:
+async def testrun_heartbeat_skips_non_running_task_state() -> None:
     bus = MagicMock()
     bus.milestone = "M"
     bus.get_snapshot.return_value = {"t1": {"status": "DONE"}}
     with (
         patch(
-            "supporter.tools.delegate.bus_exists",
+            "supporter.tools.delegate.scheduler.bus_exists",
             side_effect=[True, True, False],
         ),
-        patch("supporter.tools.delegate.asyncio.sleep", new=AsyncMock()),
-        patch("supporter.tools.delegate.time.monotonic", return_value=10.0),
+        patch("supporter.tools.delegate.scheduler.asyncio.sleep", new=AsyncMock()),
+        patch("supporter.tools.delegate.scheduler.time.monotonic", return_value=10.0),
     ):
-        await _run_heartbeat(bus, "j2", interval=0)
+        await run_heartbeat(bus, "j2", interval=0)
     published = [call.args[0].__class__.__name__ for call in bus.publish.call_args_list]
     assert published == ["HeartbeatTick"]
 
 
 @pytest.mark.asyncio
-async def test_run_milestone_propagates_terminal_capsule_failure() -> None:
+async def testrun_milestone_propagates_terminal_capsule_failure() -> None:
     bus = MagicMock()
     boom = RuntimeError("capsule terminal write failed")
 
     with (
-        patch("supporter.tools.delegate._execute_dag", new=AsyncMock(return_value=[])),
         patch(
-            "supporter.tools.delegate.mark_capsule_completed",
+            "supporter.tools.delegate.scheduler._execute_dag",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.mark_capsule_completed",
             new=AsyncMock(side_effect=boom),
         ),
-        patch("supporter.tools.delegate.remove_bus"),
+        patch("supporter.tools.delegate.scheduler.remove_bus"),
         pytest.raises(RuntimeError, match="capsule terminal write failed"),
     ):
-        await _run_milestone(
+        await run_milestone(
             "m",
             [],
             asyncio.Semaphore(1),

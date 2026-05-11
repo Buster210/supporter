@@ -1,29 +1,25 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
-from ..types import TaskStatus
+from ...logger import logger
+from ...types import TaskStatus
 from .capsule import (
-    _status_value,
     capsule_relative_path,
+    delegations_dir,
     effective_status,
     first_compact_paragraph,
-    load_capsule,
+    load_capsule_safe,
+    status_value,
 )
 
 
 def serialize_capsule_result(job_id: str) -> dict[str, Any]:
-    try:
-        capsule = load_capsule(job_id)
-    except (
-        FileNotFoundError,
-        OSError,
-        json.JSONDecodeError,
-        ValueError,
-        TypeError,
-    ) as exc:
-        return capsule_error_payload(job_id, exc)
+    capsule = load_capsule_safe(job_id)
+    if capsule.get("status") == "unavailable" and "error" in capsule:
+        return capsule
 
     tasks = capsule.get("tasks", {})
     if not isinstance(tasks, dict):
@@ -43,7 +39,7 @@ def serialize_capsule_result(job_id: str) -> dict[str, Any]:
         "tasks": [
             {
                 "id": task.get("id", task_id),
-                "status": _status_value(task.get("status", "")),
+                "status": status_value(task.get("status", "")),
                 "summary": task.get("summary")
                 or first_compact_paragraph(str(task.get("output", ""))),
                 "confidence": task.get("confidence", "unknown"),
@@ -75,7 +71,7 @@ def task_totals(tasks: dict[str, Any]) -> dict[str, int]:
     for task in tasks.values():
         if not isinstance(task, dict):
             continue
-        task_status = _status_value(task.get("status", ""))
+        task_status = status_value(task.get("status", ""))
         if task_status == TaskStatus.COMPLETED.value:
             completed += 1
         elif task_status == TaskStatus.ERROR.value:
@@ -96,34 +92,39 @@ def task_totals(tasks: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def capsule_error_payload(job_id: str, exc: BaseException) -> dict[str, Any]:
-    return {
-        "job_id": job_id,
-        "milestone": "",
-        "status": "unavailable",
-        "capsule_path": capsule_relative_path(job_id),
-        "error": {
-            "type": type(exc).__name__,
-            "message": str(exc),
-            "action": "Start a new delegation or remove the corrupt capsule file.",
-        },
-        "totals": {
-            "completed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-            "tokens": 0,
-        },
-        "key_findings": [],
-        "failed_or_skipped_tasks": [],
-        "recommended_next_steps": [],
-        "tasks": [],
-    }
+def capsule_files() -> list[Path]:
+    root = delegations_dir()
+    if not root.exists():
+        return []
+    return list(root.glob("*.json"))
 
 
-__all__ = [
-    "capsule_error_payload",
-    "query_delegation",
-    "serialize_capsule_result",
-    "task_totals",
-]
+def jsonish(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def duration(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def load_all_capsules() -> list[dict[str, Any]]:
+    capsules: dict[str, dict[str, Any]] = {}
+    for path in capsule_files():
+        try:
+            with path.open(encoding="utf-8") as f:
+                data: Any = json.load(f)
+            if isinstance(data, dict) and "job_id" in data:
+                capsules[str(data["job_id"])] = cast(dict[str, Any], data)
+            else:
+                logger.warning(f"Skipping invalid delegation capsule [path={path}]")
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                f"Failed to load delegation capsule "
+                f"[path={path}, error={type(exc).__name__}: {exc}]"
+            )
+    return list(capsules.values())

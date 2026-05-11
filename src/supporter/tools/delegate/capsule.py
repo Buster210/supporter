@@ -8,15 +8,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from ..config import config
-from ..logger import logger
-from ..types import TaskStatus
+from ...config import config
+from ...logger import logger
+from ...types import TaskStatus
 
 CAPSULE_SCHEMA_VERSION = 1
 ACTIVE_CAPSULE_STATUSES = {"pending", "running"}
-EVIDENCE_KEYS = ("files_read", "files_changed", "commands_run", "sources")
+_PREVIEW_LIMIT = 300
+_SUMMARY_LIMIT = 500
+_EVIDENCE_KEYS = ("files_read", "files_changed", "commands_run", "sources")
+EVIDENCE_KEYS = _EVIDENCE_KEYS
 
 _CAPSULE_LOCKS: dict[str, asyncio.Lock] = {}
+_CAPSULE_CACHE: dict[str, dict[str, Any]] = {}
+_CAPSULE_DIRTY_COUNT: dict[str, int] = {}
 
 
 def utc_now() -> str:
@@ -80,6 +85,45 @@ def load_capsule(job_id: str) -> dict[str, Any]:
     return cast(dict[str, Any], data)
 
 
+def load_capsule_safe(job_id: str) -> dict[str, Any]:
+    try:
+        return load_capsule(job_id)
+    except (
+        FileNotFoundError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        return unavailable_capsule(job_id, exc)
+
+
+def unavailable_capsule(job_id: str, exc: BaseException) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "milestone": "",
+        "status": "unavailable",
+        "capsule_path": capsule_relative_path(job_id),
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "action": "Start a new delegation or remove the corrupt capsule file.",
+        },
+        "totals": {
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+            "tokens": 0,
+        },
+        "key_findings": [],
+        "failed_or_skipped_tasks": [],
+        "recommended_next_steps": [],
+        "tasks": [],
+        "synthesis": {},
+    }
+
+
 def effective_status(capsule: dict[str, Any]) -> str:
     """Return stale running/pending capsules as interrupted without mutating disk."""
     raw = str(capsule.get("status", "unknown"))
@@ -122,8 +166,7 @@ async def update_capsule(
     path = capsule_path(job_id)
     async with _capsule_lock(job_id):
         if not path.exists():
-            logger.warning(f"Delegation capsule missing during update [job={job_id}]")
-            return None
+            raise FileNotFoundError(f"Delegation capsule missing during update: {path}")
         try:
             capsule = await asyncio.to_thread(_read_capsule_sync, path, job_id)
             mutator(capsule)
@@ -135,7 +178,7 @@ async def update_capsule(
                 f"Delegation capsule update failed "
                 f"[job={job_id}, path={path}, error={type(exc).__name__}: {exc}]"
             )
-            return None
+            raise
 
 
 async def mark_task_started(
@@ -267,7 +310,7 @@ async def mark_capsule_completed(job_id: str) -> dict[str, Any] | None:
     def mutate(capsule: dict[str, Any]) -> None:
         tasks = capsule.get("tasks", {})
         statuses = {
-            _status_value(task.get("status", "pending"))
+            status_value(task.get("status", "pending"))
             for task in tasks.values()
             if isinstance(task, dict)
         }
@@ -292,7 +335,7 @@ async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
         for task in capsule.get("tasks", {}).values():
             if not isinstance(task, dict):
                 continue
-            if _status_value(task.get("status", "")) in {
+            if status_value(task.get("status", "")) in {
                 TaskStatus.PENDING.value,
                 TaskStatus.STARTED.value,
             }:
@@ -316,7 +359,7 @@ def extract_task_capsule_fields(output: str) -> dict[str, Any]:
     if parsed is None:
         return {
             "summary": first_compact_paragraph(output),
-            "evidence": _default_evidence(),
+            "evidence": default_evidence(),
             "findings": [],
             "handoff": "",
             "confidence": "unknown",
@@ -346,7 +389,7 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(task, dict):
             continue
         task_id = str(task.get("id", ""))
-        status = _status_value(task.get("status", ""))
+        status = status_value(task.get("status", ""))
         summary = str(
             task.get("summary") or first_compact_paragraph(task.get("output", ""))
         )
@@ -369,7 +412,7 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
                 {
                     "id": task_id,
                     "status": status,
-                    "reason": _preview(reason, 300),
+                    "reason": preview(reason, 300),
                 }
             )
 
@@ -423,7 +466,7 @@ def _initial_task_record(task: dict[str, Any]) -> dict[str, Any]:
         "tokens": {},
         "output": "",
         "summary": "",
-        "evidence": _default_evidence(),
+        "evidence": default_evidence(),
         "findings": [],
         "handoff": "",
         "confidence": "unknown",
@@ -476,15 +519,15 @@ def first_compact_paragraph(output: Any, limit: int = 500) -> str:
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     summary = paragraphs[0] if paragraphs else text
     summary = " ".join(summary.split())
-    return _preview(summary, limit)
+    return preview(summary, limit)
 
 
-def _default_evidence() -> dict[str, list[Any]]:
+def default_evidence() -> dict[str, list[Any]]:
     return {key: [] for key in EVIDENCE_KEYS}
 
 
 def _normalize_evidence(value: Any) -> dict[str, list[Any]]:
-    evidence = _default_evidence()
+    evidence = default_evidence()
     if not isinstance(value, dict):
         return evidence
     for key in EVIDENCE_KEYS:
@@ -504,35 +547,13 @@ def _string_or_default(value: Any, default: str) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else default
 
 
-def _status_value(status: Any) -> str:
+def status_value(status: Any) -> str:
     if isinstance(status, TaskStatus):
         return status.value
     return str(status)
 
 
-def _preview(text: str, limit: int) -> str:
+def preview(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "... [truncated]"
-
-
-__all__ = [
-    "build_synthesis",
-    "capsule_path",
-    "capsule_relative_path",
-    "create_capsule",
-    "delegations_dir",
-    "effective_status",
-    "extract_task_capsule_fields",
-    "first_compact_paragraph",
-    "load_capsule",
-    "mark_capsule_cancelled",
-    "mark_capsule_completed",
-    "mark_task_completed",
-    "mark_task_failed",
-    "mark_task_skipped",
-    "mark_task_started",
-    "mark_task_timed_out",
-    "save_capsule",
-    "update_capsule",
-]

@@ -81,18 +81,6 @@ NETWORK_EGRESS_BINARIES = {
     "tftp",
 }
 
-SHELL_SPECIAL_TOKENS = {
-    "|",
-    ">",
-    ">>",
-    "<",
-    "&",
-    ";",
-    "`",
-    "$(",
-    "&&",
-    "||",
-}
 
 MUTATING_BINARIES = {
     "cp",

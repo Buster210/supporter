@@ -82,7 +82,7 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
                 "Use command name only, e.g., 'ls' not '/bin/ls'."
             )
 
-        binary_path = policy._verify_binary(binary_name)
+        binary_path = policy.verify_binary(binary_name)
         if binary_path.name in BLOCKED_BINARIES:
             raise PermissionError(
                 f"Tier 3 BLOCK: Binary '{binary_path.name}' is not allowed "
@@ -92,22 +92,22 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
         root = _resolved_project_root()
         cwd = root
         if working_directory:
-            from ..file_ops import _validate_path
+            from ..file_ops import validate_path
 
-            cwd = _validate_path(working_directory)
+            cwd = validate_path(working_directory)
 
-        policy._check_execution_location(binary_path)
-        policy._check_rm_nuclear(binary_path.name, tokens, cwd)
-        policy._check_complex_syntax(command)
+        policy.check_execution_location(binary_path)
+        policy.check_rm_nuclear(binary_path.name, tokens, cwd)
+        policy.check_complex_syntax(command)
 
-        tier = policy._apply_path_security(command, tokens, cwd, root)
-        tier = policy._apply_policy_checks(command, tokens, binary_path.name, tier)
-        tier = policy._apply_tier1_allowlist(tokens, binary_path.name, tier)
+        tier = policy.apply_path_security(command, tokens, cwd, root)
+        tier = policy.apply_policy_checks(command, tokens, binary_path.name, tier)
+        tier = policy.apply_tier1_allowlist(tokens, binary_path.name, tier)
 
         logger.info(
             f"Security: binary={binary_path.name}, tier={tier}, tokens={tokens!r}"
         )
-        policy._evaluate_final_tier(command, tokens, binary_path.name, tier, cwd)
+        policy.evaluate_final_tier(command, tokens, binary_path.name, tier, cwd)
 
         sed_in_place = binary_path.name == "sed" and any(
             tok.startswith("-i") for tok in tokens
@@ -176,7 +176,7 @@ def _execute_subprocess(
     is_mutation: bool = True,
 ) -> str:
     args = [str(binary), *tokens[1:]]
-    cmd_tokens = sandbox._wrap_in_sandbox(args, cwd, root)
+    cmd_tokens = sandbox.wrap_in_sandbox(args, cwd, root)
 
     def _set_limits() -> None:
         os.setsid()
@@ -206,7 +206,7 @@ def _execute_subprocess(
         out = res.stdout[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
         err = res.stderr[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
 
-        combined = sandbox._ANSI_ESCAPE.sub("", out + err)
+        combined = sandbox.ANSI_ESCAPE.sub("", out + err)
         output = _redact_secrets(combined)
 
         if is_mutation:
@@ -227,6 +227,6 @@ def _execute_subprocess(
     except subprocess.TimeoutExpired:
         return "Error: Command timed out (30s limit)"
     except Exception as e:
-        if "Security Block" in str(e) and sandbox._BASH_NOTIFICATION_CALLBACK:
-            sandbox._BASH_NOTIFICATION_CALLBACK(f"BASH TOOL FAILED: {e!s}")
+        if "Security Block" in str(e) and sandbox.bash_notification_callback:
+            sandbox.bash_notification_callback(f"BASH TOOL FAILED: {e!s}")
         return f"Error executing command: {e!s}"

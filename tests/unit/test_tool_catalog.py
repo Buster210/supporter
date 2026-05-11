@@ -73,21 +73,21 @@ def test_delegate_selection_rejects_recursive_control_tools() -> None:
 
 
 def test_catalog_only_tool_can_be_selected_without_wiring_changes() -> None:
-    def dummy_preview(_: Any) -> str:
+    def dummypreview(_: Any) -> str:
         return "ready"
 
     catalog = build_tool_catalog(
         extra_tools={
-            "dummy_preview": ToolSpec(
-                name="dummy_preview",
-                callable=dummy_preview,
+            "dummypreview": ToolSpec(
+                name="dummypreview",
+                callable=dummypreview,
                 delegate_allowed=True,
             )
         }
     )
 
-    root_registry = select_tools(catalog, {"dummy_preview"})
-    delegate_registry = select_delegate_tools(catalog, {"dummy_preview"})
+    root_registry = select_tools(catalog, {"dummypreview"})
+    delegate_registry = select_delegate_tools(catalog, {"dummypreview"})
 
-    assert root_registry == {"dummy_preview": dummy_preview}
-    assert delegate_registry == {"dummy_preview": dummy_preview}
+    assert root_registry == {"dummypreview": dummypreview}
+    assert delegate_registry == {"dummypreview": dummypreview}

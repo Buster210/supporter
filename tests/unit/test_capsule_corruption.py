@@ -6,18 +6,24 @@ from typing import Any
 
 import pytest
 
+import supporter.tools.delegate.capsule as capsule_store
 from supporter.config import config
-from supporter.tools.capsule import (
+from supporter.tools.delegate.capsule import (
     capsule_path,
     create_capsule,
     load_capsule,
+    load_capsule_safe,
 )
-from supporter.tools.capsule_query import query_delegation, serialize_capsule_result
+from supporter.tools.delegate.capsule_query import (
+    query_delegation,
+    serialize_capsule_result,
+)
 
 
 @pytest.fixture(autouse=True)
 def isolate_capsules(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
+    capsule_store._CAPSULE_LOCKS.clear()
 
 
 def _write_capsule(job_id: str, content: str) -> Path:
@@ -37,6 +43,16 @@ def test_load_capsule_raises_for_truncated_json() -> None:
 
     with pytest.raises(json.JSONDecodeError):
         load_capsule("badjson1")
+
+
+def test_load_capsule_safe_returns_unavailable_for_truncated_json() -> None:
+    _write_capsule("badjson1", '{"job_id": "badjson1",')
+
+    payload = load_capsule_safe("badjson1")
+
+    assert payload["job_id"] == "badjson1"
+    assert payload["status"] == "unavailable"
+    assert payload["error"]["type"] == "JSONDecodeError"
 
 
 def test_load_capsule_raises_for_invalid_json_shape() -> None:

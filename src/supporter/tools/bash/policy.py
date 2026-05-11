@@ -40,7 +40,7 @@ _RESOLVED_SENSITIVE_SYSTEM_PATHS: tuple[str, ...] = tuple(
 
 
 @lru_cache(maxsize=128)
-def _verify_binary(command_name: str) -> Path:
+def verify_binary(command_name: str) -> Path:
     binary_path = shutil.which(command_name)
     if not binary_path:
         raise PermissionError(f"Binary not found: {command_name}")
@@ -113,7 +113,7 @@ def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
     return TIER_SAFE
 
 
-def _check_complex_syntax(command: str) -> None:
+def check_complex_syntax(command: str) -> None:
     if "$(" in command or "`" in command:
         raise PermissionError("Tier 3 BLOCK: Command substitution prohibited")
 
@@ -132,7 +132,7 @@ def _check_complex_syntax(command: str) -> None:
         if not stage:
             continue
         try:
-            rhs_binary = _verify_binary(stage[0])
+            rhs_binary = verify_binary(stage[0])
         except PermissionError:
             raise
         except Exception:  # noqa: S112 # nosec B112
@@ -153,7 +153,7 @@ def _check_complex_syntax(command: str) -> None:
                 )
 
 
-def _check_execution_location(binary_path: Path) -> None:
+def check_execution_location(binary_path: Path) -> None:
     path_str = str(binary_path)
     for temp_dir in UNTRUSTED_EXECUTION_TEMP_DIRS:
         if path_str.startswith(temp_dir):
@@ -162,7 +162,7 @@ def _check_execution_location(binary_path: Path) -> None:
             )
 
 
-def _check_rm_nuclear(binary_name: str, tokens: list[str], cwd: Path) -> None:
+def check_rm_nuclear(binary_name: str, tokens: list[str], cwd: Path) -> None:
     if binary_name != "rm":
         return
     for token in tokens[1:]:
@@ -190,16 +190,16 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
     if "/" in base_cmd:
         return TIER_BLOCK
     try:
-        binary_path = _verify_binary(base_cmd)
+        binary_path = verify_binary(base_cmd)
         binary_name = binary_path.name
         if binary_name in BLOCKED_BINARIES:
             return TIER_BLOCK
-        _check_execution_location(binary_path)
+        check_execution_location(binary_path)
         inner_command = shlex.join(inner_tokens)
-        _check_complex_syntax(inner_command)
+        check_complex_syntax(inner_command)
         project_root = Path(config.allowed_directories[0]).expanduser().resolve()
-        _apply_path_security(inner_command, inner_tokens, project_root, project_root)
-        tier = _apply_policy_checks(inner_command, inner_tokens, binary_name, TIER_SAFE)
+        apply_path_security(inner_command, inner_tokens, project_root, project_root)
+        tier = apply_policy_checks(inner_command, inner_tokens, binary_name, TIER_SAFE)
         if tier == TIER_BLOCK:
             return TIER_BLOCK
         if binary_name in INLINE_PAYLOAD_INTERPRETER_BINARIES:
@@ -338,7 +338,7 @@ def _inspect_interpreter_payload(
     return TIER_SAFE
 
 
-def _apply_path_security(
+def apply_path_security(
     command: str, tokens: list[str], cwd: Path, project_root: Path
 ) -> int:
     security_tier = TIER_SAFE
@@ -413,7 +413,7 @@ def _resolve_path_string(token: str, cwd: Path) -> str:
         return "\x00"
 
 
-def _apply_policy_checks(
+def apply_policy_checks(
     command: str, tokens: list[str], binary_name: str, security_tier: int
 ) -> int:
     if binary_name in NETWORK_EGRESS_BINARIES:
@@ -453,7 +453,7 @@ def _apply_policy_checks(
     return security_tier
 
 
-def _apply_tier1_allowlist(
+def apply_tier1_allowlist(
     tokens: list[str], binary_name: str, security_tier: int
 ) -> int:
     if security_tier >= TIER_CONFIRM:
@@ -467,7 +467,7 @@ def _apply_tier1_allowlist(
     return TIER_CONFIRM
 
 
-def _evaluate_final_tier(
+def evaluate_final_tier(
     command: str, tokens: list[str], binary_name: str, security_tier: int, cwd: Path
 ) -> None:
     if security_tier == TIER_SAFE and binary_name == "git":
@@ -476,8 +476,8 @@ def _evaluate_final_tier(
             security_tier = TIER_CONFIRM
 
     if security_tier >= TIER_CONFIRM:
-        if sandbox._BASH_CONFIRMATION_CALLBACK:
-            if not sandbox._BASH_CONFIRMATION_CALLBACK(tokens, str(cwd)):
+        if sandbox.bash_confirmation_callback:
+            if not sandbox.bash_confirmation_callback(tokens, str(cwd)):
                 raise PermissionError("Execution cancelled by user.")
         else:
             raise PermissionError(f"Tier 2 Confirmation Required: {command}")

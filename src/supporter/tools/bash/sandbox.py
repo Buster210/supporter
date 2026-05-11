@@ -5,10 +5,10 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-_BASH_CONFIRMATION_CALLBACK: Callable[[list[str], str], bool] | None = None
-_BASH_NOTIFICATION_CALLBACK: Callable[[str], None] | None = None
+bash_confirmation_callback: Callable[[list[str], str], bool] | None = None
+bash_notification_callback: Callable[[str], None] | None = None
 
-_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 def _detect_sandbox() -> tuple[str | None, str | None]:
@@ -42,7 +42,7 @@ def _load_profile_template(profile_path: Path) -> str:
     return content
 
 
-def _wrap_in_sandbox(tokens: list[str], cwd: Path, root: Path) -> list[str]:
+def wrap_in_sandbox(tokens: list[str], cwd: Path, root: Path) -> list[str]:
     if not _SB_BIN:
         raise RuntimeError("Security Block: Sandbox tool not found")
 
@@ -75,8 +75,8 @@ def _wrap_in_sandbox(tokens: list[str], cwd: Path, root: Path) -> list[str]:
 
 def set_bash_notification_callback(callback: Callable[[str], None] | None) -> None:
     """Sets the callback function for security-related notifications."""
-    global _BASH_NOTIFICATION_CALLBACK
-    _BASH_NOTIFICATION_CALLBACK = callback
+    global bash_notification_callback
+    bash_notification_callback = callback
 
 
 def check_bash_availability() -> bool:
@@ -86,13 +86,22 @@ def check_bash_availability() -> bool:
 
 def notify_bash_unavailable() -> None:
     """Triggers a notification if the bash tool is disabled due to missing sandbox."""
-    if _BASH_NOTIFICATION_CALLBACK:
-        _BASH_NOTIFICATION_CALLBACK("BASH TOOL DISABLED: Sandbox tool not found")
+    if bash_notification_callback:
+        bash_notification_callback("BASH TOOL DISABLED: Sandbox tool not found")
 
 
 def set_bash_confirmation_callback(
     callback: Callable[[list[str], str], bool] | None,
 ) -> None:
     """Sets the callback function for user confirmation of risky commands."""
-    global _BASH_CONFIRMATION_CALLBACK
-    _BASH_CONFIRMATION_CALLBACK = callback
+    global bash_confirmation_callback
+    bash_confirmation_callback = callback
+
+
+def register_bash_callbacks(
+    *,
+    confirmation: Callable[[list[str], str], bool] | None,
+    notification: Callable[[str], None] | None,
+) -> None:
+    set_bash_confirmation_callback(confirmation)
+    set_bash_notification_callback(notification)

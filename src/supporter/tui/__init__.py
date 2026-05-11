@@ -83,7 +83,7 @@ class SupporterApp(App[None]):
         set_bash_confirmation_callback(self._confirm_bash)
         set_bash_notification_callback(self._notify_error)
 
-        from ..tools.delegate import set_delegation_start_callback
+        from ..tools.delegate.api import set_delegation_start_callback
 
         set_delegation_start_callback(self._start_delegation_listener)
 
@@ -109,7 +109,7 @@ class SupporterApp(App[None]):
         set_bash_confirmation_callback(None)
         set_bash_notification_callback(None)
 
-        from ..tools.delegate import set_delegation_start_callback
+        from ..tools.delegate.api import set_delegation_start_callback
 
         set_delegation_start_callback(None)
 
@@ -531,8 +531,9 @@ class SupporterApp(App[None]):
     async def _delegation_listener(self, job_id: str) -> None:
         import json
 
-        from ..tools.delegate import serialize_capsule_result, serialize_results
-        from ..tools.event_bus import get_bus
+        from ..tools.delegate.api import serialize_capsule_result
+        from ..tools.delegate.bus import get_bus
+        from ..tools.delegate.scheduler import serialize_results
         from ..types import (
             MilestoneCancelled,
             MilestoneCompleted,
