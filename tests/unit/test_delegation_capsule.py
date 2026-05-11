@@ -512,7 +512,8 @@ async def test_load_or_none_warns_on_invalid_json() -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "badjson01.json").write_text("{", encoding="utf-8")
     out = query_delegation(job_id="badjson01")
-    assert "was not found" in out
+    assert "capsule is unavailable" in out
+    assert "JSONDecodeError" in out
 
 
 def test_capsule_files_when_root_missing(tmp_path: Any, monkeypatch: Any) -> None:

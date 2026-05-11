@@ -14,6 +14,7 @@ from supporter.tools.delegate import (
     _inject_dependency_context,
     _resolve_agent_profile,
     _run_heartbeat,
+    _run_milestone,
     _run_sub_agent,
     _safe_capsule_call,
     _should_skip,
@@ -893,3 +894,27 @@ async def test_run_heartbeat_skips_non_running_task_state() -> None:
         await _run_heartbeat(bus, "j2", interval=0)
     published = [call.args[0].__class__.__name__ for call in bus.publish.call_args_list]
     assert published == ["HeartbeatTick"]
+
+
+@pytest.mark.asyncio
+async def test_run_milestone_propagates_terminal_capsule_failure() -> None:
+    bus = MagicMock()
+    boom = RuntimeError("capsule terminal write failed")
+
+    with (
+        patch("supporter.tools.delegate._execute_dag", new=AsyncMock(return_value=[])),
+        patch(
+            "supporter.tools.delegate.mark_capsule_completed",
+            new=AsyncMock(side_effect=boom),
+        ),
+        patch("supporter.tools.delegate.remove_bus"),
+        pytest.raises(RuntimeError, match="capsule terminal write failed"),
+    ):
+        await _run_milestone(
+            "m",
+            [],
+            asyncio.Semaphore(1),
+            bus,
+            "milestone_fail",
+            parallel_limit=1,
+        )

@@ -605,12 +605,12 @@ async def _run_milestone(
     try:
         results = await _execute_dag(tasks, semaphore, bus, job_id, parallel_limit)
         total_wall = time.perf_counter() - start_wall
-        await _safe_capsule_call(mark_capsule_completed, job_id)
+        await mark_capsule_completed(job_id)
         bus.publish(MilestoneCompleted(job_id, milestone, results, total_wall))
     except asyncio.CancelledError:
         total_wall = time.perf_counter() - start_wall
         logger.info(f"Milestone '{milestone}' (job={job_id}) cancelled")
-        await _safe_capsule_call(mark_capsule_cancelled, job_id)
+        await mark_capsule_cancelled(job_id)
         bus.publish(MilestoneCancelled(job_id, milestone, total_wall))
         raise
     finally:

@@ -388,7 +388,17 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_capsule_result(job_id: str) -> dict[str, Any]:
-    capsule = load_capsule(job_id)
+    try:
+        capsule = load_capsule(job_id)
+    except (
+        FileNotFoundError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        return _capsule_error_payload(job_id, exc)
+
     tasks = capsule.get("tasks", {})
     if not isinstance(tasks, dict):
         tasks = {}
@@ -632,9 +642,16 @@ def _list_delegations(status: str | None = None, limit: int = 10) -> str:
 
 
 def _inspect_delegation(job_id: str, detail: str = "summary") -> str:
-    capsule = _load_or_none(job_id)
-    if capsule is None:
-        return f"Delegation `{job_id}` was not found."
+    try:
+        capsule = load_capsule(job_id)
+    except (
+        FileNotFoundError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        return _format_capsule_load_error(job_id, exc)
 
     detail = detail.lower().strip()
     if detail == "summary":
@@ -647,9 +664,17 @@ def _inspect_delegation(job_id: str, detail: str = "summary") -> str:
 
 
 def _inspect_task(job_id: str, task_id: str) -> str:
-    capsule = _load_or_none(job_id)
-    if capsule is None:
-        return f"Delegation `{job_id}` was not found."
+    try:
+        capsule = load_capsule(job_id)
+    except (
+        FileNotFoundError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        return _format_capsule_load_error(job_id, exc)
+
     tasks = capsule.get("tasks", {})
     task = tasks.get(task_id) if isinstance(tasks, dict) else None
     if not isinstance(task, dict):
@@ -699,17 +724,39 @@ def _load_all_capsules() -> list[dict[str, Any]]:
     return list(capsules.values())
 
 
-def _load_or_none(job_id: str) -> dict[str, Any] | None:
-    try:
-        return load_capsule(job_id)
-    except FileNotFoundError:
-        return None
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        logger.warning(
-            f"Failed to inspect delegation capsule "
-            f"[job={job_id}, error={type(exc).__name__}: {exc}]"
-        )
-        return None
+def _capsule_error_payload(job_id: str, exc: BaseException) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "milestone": "",
+        "status": "unavailable",
+        "capsule_path": capsule_relative_path(job_id),
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "action": "Start a new delegation or remove the corrupt capsule file.",
+        },
+        "totals": {
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+            "tokens": 0,
+        },
+        "key_findings": [],
+        "failed_or_skipped_tasks": [],
+        "recommended_next_steps": [],
+        "tasks": [],
+    }
+
+
+def _format_capsule_load_error(job_id: str, exc: BaseException) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return f"Delegation `{job_id}` was not found."
+    return (
+        f"Delegation `{job_id}` capsule is unavailable "
+        f"({type(exc).__name__}: {exc}). "
+        "Start a new delegation or remove the corrupt capsule file."
+    )
 
 
 def _capsule_files() -> list[Path]:
