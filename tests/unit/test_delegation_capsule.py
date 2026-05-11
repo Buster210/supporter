@@ -6,12 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-import supporter.tools.delegation_capsule as dc
+import supporter.tools.capsule as dc
+import supporter.tools.capsule_query as capsule_query
+import supporter.tools.capsule_view as capsule_view
 from supporter.config import config
-from supporter.tools.delegate import (
-    delegate_tasks,
-)
-from supporter.tools.delegation_capsule import (
+from supporter.tools.capsule import (
     capsule_path,
     create_capsule,
     effective_status,
@@ -24,9 +23,11 @@ from supporter.tools.delegation_capsule import (
     mark_task_skipped,
     mark_task_started,
     mark_task_timed_out,
-    query_delegation,
     save_capsule,
-    serialize_capsule_result,
+)
+from supporter.tools.capsule_query import query_delegation, serialize_capsule_result
+from supporter.tools.delegate import (
+    delegate_tasks,
 )
 from supporter.tools.event_bus import get_bus
 from supporter.types import MilestoneCompleted, TaskStatus
@@ -371,7 +372,7 @@ def test_build_synthesis_skips_non_dict_task_values() -> None:
 
 
 def test_serialize_capsule_result_handles_bad_tasks_and_synthesis_types() -> None:
-    with patch("supporter.tools.delegation_capsule.load_capsule") as mock_load:
+    with patch("supporter.tools.capsule_query.load_capsule") as mock_load:
         mock_load.return_value = {
             "job_id": "j",
             "milestone": "m",
@@ -395,7 +396,7 @@ def test_private_helpers_and_query_branches(tmp_path: Any, monkeypatch: Any) -> 
     assert dc._normalize_confidence(1) == "unknown"
     assert dc._string_or_default("", "d") == "d"
     assert dc._status_value(TaskStatus.ERROR) == "error"
-    assert dc._duration("bad") == 0.0
+    assert capsule_view.duration("bad") == 0.0
     assert dc._preview("abcdef", 3).endswith("[truncated]")
 
 
@@ -458,7 +459,7 @@ def test_extract_fields_with_invalid_marked_json_logs_path() -> None:
 
 
 def test_task_totals_and_list_filtering() -> None:
-    totals = dc._task_totals(
+    totals = capsule_query.task_totals(
         {
             "a": {"status": TaskStatus.COMPLETED},
             "b": {"status": TaskStatus.ERROR},
@@ -518,7 +519,7 @@ async def test_load_or_none_warns_on_invalid_json() -> None:
 
 def test_capsule_files_when_root_missing(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
-    assert dc._capsule_files() == []
+    assert capsule_view.capsule_files() == []
 
 
 @pytest.mark.asyncio
@@ -553,4 +554,4 @@ async def test_display_capsule_truncates_output_and_dependency_context() -> None
 
 
 def test_jsonish_non_string_branch() -> None:
-    assert dc._jsonish({"a": 1}) == '{"a": 1}'
+    assert capsule_view.jsonish({"a": 1}) == '{"a": 1}'

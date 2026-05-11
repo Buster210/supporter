@@ -7,13 +7,12 @@ from typing import Any
 import pytest
 
 from supporter.config import config
-from supporter.tools.delegation_capsule import (
+from supporter.tools.capsule import (
     capsule_path,
     create_capsule,
     load_capsule,
-    query_delegation,
-    serialize_capsule_result,
 )
+from supporter.tools.capsule_query import query_delegation, serialize_capsule_result
 
 
 @pytest.fixture(autouse=True)

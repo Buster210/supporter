@@ -4,7 +4,6 @@ import asyncio
 import json
 import re
 from collections.abc import Callable
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -16,7 +15,6 @@ from ..types import TaskStatus
 CAPSULE_SCHEMA_VERSION = 1
 ACTIVE_CAPSULE_STATUSES = {"pending", "running"}
 EVIDENCE_KEYS = ("files_read", "files_changed", "commands_run", "sources")
-OUTPUT_PREVIEW_CHARS = 1200
 
 _CAPSULE_LOCKS: dict[str, asyncio.Lock] = {}
 
@@ -387,62 +385,6 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def serialize_capsule_result(job_id: str) -> dict[str, Any]:
-    try:
-        capsule = load_capsule(job_id)
-    except (
-        FileNotFoundError,
-        OSError,
-        json.JSONDecodeError,
-        ValueError,
-        TypeError,
-    ) as exc:
-        return _capsule_error_payload(job_id, exc)
-
-    tasks = capsule.get("tasks", {})
-    if not isinstance(tasks, dict):
-        tasks = {}
-    synthesis = capsule.get("synthesis", {})
-    if not isinstance(synthesis, dict):
-        synthesis = {}
-    return {
-        "job_id": capsule.get("job_id", job_id),
-        "milestone": capsule.get("milestone", ""),
-        "status": effective_status(capsule),
-        "capsule_path": capsule_relative_path(job_id),
-        "totals": _task_totals(tasks),
-        "key_findings": synthesis.get("key_findings", []),
-        "failed_or_skipped_tasks": synthesis.get("failed_or_skipped_tasks", []),
-        "recommended_next_steps": synthesis.get("recommended_next_steps", []),
-        "tasks": [
-            {
-                "id": task.get("id", task_id),
-                "status": _status_value(task.get("status", "")),
-                "summary": task.get("summary")
-                or first_compact_paragraph(str(task.get("output", ""))),
-                "confidence": task.get("confidence", "unknown"),
-            }
-            for task_id, task in tasks.items()
-            if isinstance(task, dict)
-        ],
-    }
-
-
-def query_delegation(
-    job_id: str | None = None,
-    task_id: str | None = None,
-    detail: str = "summary",
-    status: str | None = None,
-    limit: int = 10,
-) -> str:
-    """Query delegation capsule state."""
-    if not job_id:
-        return _list_delegations(status=status, limit=limit)
-    if task_id:
-        return _inspect_task(job_id, task_id)
-    return _inspect_delegation(job_id, detail)
-
-
 def _capsule_lock(job_id: str) -> asyncio.Lock:
     safe_job_id = _safe_job_id(job_id)
     lock = _CAPSULE_LOCKS.get(safe_job_id)
@@ -568,291 +510,10 @@ def _status_value(status: Any) -> str:
     return str(status)
 
 
-def _task_totals(tasks: dict[str, Any]) -> dict[str, int]:
-    completed = failed = skipped = timed_out = tokens = 0
-    for task in tasks.values():
-        if not isinstance(task, dict):
-            continue
-        status = _status_value(task.get("status", ""))
-        if status == TaskStatus.COMPLETED.value:
-            completed += 1
-        elif status == TaskStatus.ERROR.value:
-            failed += 1
-        elif status == TaskStatus.SKIPPED.value:
-            skipped += 1
-        elif status == TaskStatus.TIMEOUT.value:
-            timed_out += 1
-        task_tokens = task.get("tokens", {})
-        if isinstance(task_tokens, dict):
-            tokens += int(task_tokens.get("total_tokens") or 0)
-    return {
-        "completed": completed,
-        "failed": failed,
-        "skipped": skipped,
-        "timed_out": timed_out,
-        "tokens": tokens,
-    }
-
-
 def _preview(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "... [truncated]"
-
-
-def _escape_table(text: str) -> str:
-    return text.replace("|", "\\|").replace("\n", " ")
-
-
-def _duration(value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _list_delegations(status: str | None = None, limit: int = 10) -> str:
-    normalized_status = status.strip() if isinstance(status, str) and status else None
-    limit = max(1, min(int(limit), 100))
-    capsules = _load_all_capsules()
-    if normalized_status:
-        capsules = [c for c in capsules if effective_status(c) == normalized_status]
-    capsules.sort(key=lambda c: str(c.get("updated_at", "")), reverse=True)
-    capsules = capsules[:limit]
-    if not capsules:
-        return "No delegation capsules found."
-
-    rows = ["| Job | Status | Tasks | Updated | Milestone |", "|---|---|---:|---|---|"]
-    for capsule in capsules:
-        tasks = capsule.get("tasks", {})
-        totals = _task_totals(tasks if isinstance(tasks, dict) else {})
-        done = totals["completed"]
-        total = len(tasks) if isinstance(tasks, dict) else 0
-        rows.append(
-            "| `{job}` | {status} | {done}/{total} | {updated} | {milestone} |".format(
-                job=capsule.get("job_id", ""),
-                status=effective_status(capsule),
-                done=done,
-                total=total,
-                updated=capsule.get("updated_at", ""),
-                milestone=_escape_table(str(capsule.get("milestone", ""))),
-            )
-        )
-    return "\n".join(rows)
-
-
-def _inspect_delegation(job_id: str, detail: str = "summary") -> str:
-    try:
-        capsule = load_capsule(job_id)
-    except (
-        FileNotFoundError,
-        OSError,
-        json.JSONDecodeError,
-        ValueError,
-        TypeError,
-    ) as exc:
-        return _format_capsule_load_error(job_id, exc)
-
-    detail = detail.lower().strip()
-    if detail == "summary":
-        return _format_capsule_summary(capsule)
-    if detail == "tasks":
-        return _format_capsule_tasks(capsule)
-    if detail == "full":
-        return "```json\n" + json.dumps(_display_capsule(capsule), indent=2) + "\n```"
-    return "Unknown detail. Use `summary`, `tasks`, or `full`."
-
-
-def _inspect_task(job_id: str, task_id: str) -> str:
-    try:
-        capsule = load_capsule(job_id)
-    except (
-        FileNotFoundError,
-        OSError,
-        json.JSONDecodeError,
-        ValueError,
-        TypeError,
-    ) as exc:
-        return _format_capsule_load_error(job_id, exc)
-
-    tasks = capsule.get("tasks", {})
-    task = tasks.get(task_id) if isinstance(tasks, dict) else None
-    if not isinstance(task, dict):
-        return f"Task `{task_id}` was not found in delegation `{job_id}`."
-
-    evidence = task.get("evidence", _default_evidence())
-    findings = task.get("findings", [])
-    summary = first_compact_paragraph(str(task.get("output", "")))
-    depends_on = task.get("depends_on", [])
-    depends_on_text = ", ".join(depends_on) if isinstance(depends_on, list) else "none"
-    lines = [
-        f"**Task `{task_id}`**",
-        f"- Goal: {task.get('goal', '')}",
-        f"- Status: {task.get('status', '')}",
-        f"- Depends on: {depends_on_text or 'none'}",
-        f"- Summary: {summary}",
-        f"- Duration: {_duration(task.get('duration')):.2f}s",
-        f"- Model: {task.get('model', '') or 'unknown'}",
-    ]
-    if task.get("error"):
-        lines.append(f"- Error: {task['error']}")
-    if task.get("skip_reason"):
-        lines.append(f"- Skip reason: {task['skip_reason']}")
-    lines.append(f"- Evidence: `{json.dumps(evidence, ensure_ascii=False)}`")
-    lines.append(f"- Findings: `{json.dumps(findings, ensure_ascii=False)}`")
-    if task.get("output"):
-        output_preview = _preview(str(task["output"]), OUTPUT_PREVIEW_CHARS)
-        lines.append(f"\nOutput preview:\n\n{output_preview}")
-    return "\n".join(lines)
-
-
-def _load_all_capsules() -> list[dict[str, Any]]:
-    capsules: dict[str, dict[str, Any]] = {}
-    for path in _capsule_files():
-        try:
-            with path.open(encoding="utf-8") as f:
-                data: Any = json.load(f)
-            if isinstance(data, dict) and "job_id" in data:
-                capsules[str(data["job_id"])] = cast(dict[str, Any], data)
-            else:
-                logger.warning(f"Skipping invalid delegation capsule [path={path}]")
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(
-                f"Failed to load delegation capsule "
-                f"[path={path}, error={type(exc).__name__}: {exc}]"
-            )
-    return list(capsules.values())
-
-
-def _capsule_error_payload(job_id: str, exc: BaseException) -> dict[str, Any]:
-    return {
-        "job_id": job_id,
-        "milestone": "",
-        "status": "unavailable",
-        "capsule_path": capsule_relative_path(job_id),
-        "error": {
-            "type": type(exc).__name__,
-            "message": str(exc),
-            "action": "Start a new delegation or remove the corrupt capsule file.",
-        },
-        "totals": {
-            "completed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-            "tokens": 0,
-        },
-        "key_findings": [],
-        "failed_or_skipped_tasks": [],
-        "recommended_next_steps": [],
-        "tasks": [],
-    }
-
-
-def _format_capsule_load_error(job_id: str, exc: BaseException) -> str:
-    if isinstance(exc, FileNotFoundError):
-        return f"Delegation `{job_id}` was not found."
-    return (
-        f"Delegation `{job_id}` capsule is unavailable "
-        f"({type(exc).__name__}: {exc}). "
-        "Start a new delegation or remove the corrupt capsule file."
-    )
-
-
-def _capsule_files() -> list[Path]:
-    root = delegations_dir()
-    if not root.exists():
-        return []
-    return list(root.glob("*.json"))
-
-
-def _format_capsule_summary(capsule: dict[str, Any]) -> str:
-    job_id = str(capsule.get("job_id", ""))
-    tasks = capsule.get("tasks", {})
-    totals = _task_totals(tasks if isinstance(tasks, dict) else {})
-    synthesis = capsule.get("synthesis", {})
-    if not isinstance(synthesis, dict):
-        synthesis = {}
-    return "\n".join(
-        [
-            f"**Delegation `{job_id}`**",
-            f"- Milestone: {capsule.get('milestone', '')}",
-            f"- Status: {effective_status(capsule)}",
-            f"- Capsule: {capsule_relative_path(job_id)}",
-            f"- Totals: {json.dumps(totals)}",
-            f"- Answer: {synthesis.get('answer', '') or 'none'}",
-            _format_section("Key findings", synthesis.get("key_findings", [])),
-            _format_section(
-                "Failed or skipped", synthesis.get("failed_or_skipped_tasks", [])
-            ),
-            _format_section(
-                "Recommended next steps", synthesis.get("recommended_next_steps", [])
-            ),
-        ]
-    )
-
-
-def _format_capsule_tasks(capsule: dict[str, Any]) -> str:
-    tasks = capsule.get("tasks", {})
-    if not isinstance(tasks, dict) or not tasks:
-        return "This delegation has no task records."
-    rows = [
-        "| Task | Status | Goal | Findings | Evidence | Handoff |",
-        "|---|---|---|---:|---:|---|",
-    ]
-    for task_id, task in tasks.items():
-        if not isinstance(task, dict):
-            continue
-        evidence = task.get("evidence", {})
-        evidence_count = (
-            sum(len(v) for v in evidence.values() if isinstance(v, list))
-            if isinstance(evidence, dict)
-            else 0
-        )
-        findings = task.get("findings", [])
-        row_template = (
-            "| `{task}` | {status} | {goal} | {findings} | {evidence} | {handoff} |"
-        )
-        rows.append(
-            row_template.format(
-                task=task_id,
-                status=task.get("status", ""),
-                goal=_escape_table(_preview(str(task.get("goal", "")), 120)),
-                findings=len(findings) if isinstance(findings, list) else 0,
-                evidence=evidence_count,
-                handoff=_escape_table(_preview(str(task.get("handoff", "")), 120)),
-            )
-        )
-    return "\n".join(rows)
-
-
-def _format_section(title: str, value: Any) -> str:
-    if not isinstance(value, list) or not value:
-        return f"- {title}: none"
-    rendered = "; ".join(_preview(_jsonish(item), 300) for item in value)
-    return f"- {title}: {rendered}"
-
-
-def _display_capsule(capsule: dict[str, Any]) -> dict[str, Any]:
-    display = deepcopy(capsule)
-    tasks = display.get("tasks", {})
-    if isinstance(tasks, dict):
-        for task in tasks.values():
-            if not isinstance(task, dict):
-                continue
-            if task.get("output"):
-                task["output"] = _preview(str(task["output"]), OUTPUT_PREVIEW_CHARS)
-            if task.get("dependency_context"):
-                task["dependency_context"] = _preview(
-                    str(task["dependency_context"]), OUTPUT_PREVIEW_CHARS
-                )
-    return display
-
-
-def _jsonish(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False)
 
 
 __all__ = [
@@ -872,8 +533,6 @@ __all__ = [
     "mark_task_skipped",
     "mark_task_started",
     "mark_task_timed_out",
-    "query_delegation",
     "save_capsule",
-    "serialize_capsule_result",
     "update_capsule",
 ]

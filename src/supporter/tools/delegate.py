@@ -33,8 +33,7 @@ from ..types import (
     TaskTimedOut,
 )
 from .base import ToolError
-from .catalog import build_tool_catalog, select_delegate_tools
-from .delegation_capsule import (
+from .capsule import (
     create_capsule,
     extract_task_capsule_fields,
     mark_capsule_cancelled,
@@ -45,9 +44,10 @@ from .delegation_capsule import (
     mark_task_started,
     mark_task_timed_out,
 )
-from .delegation_capsule import (
+from .capsule_query import (
     serialize_capsule_result as _serialize_capsule_result,
 )
+from .catalog import build_tool_catalog, select_delegate_tools
 from .event_bus import (
     DelegationBus as DelegationBus,
 )
