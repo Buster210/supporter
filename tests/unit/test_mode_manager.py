@@ -29,7 +29,7 @@ async def test_setup_agent_bash_unavailable() -> None:
             "supporter.tools.bash.sandbox.check_bash_availability", return_value=False
         ),
         patch("supporter.tools.bash.sandbox.notify_bash_unavailable") as mock_notify,
-        patch("supporter.index.get_provider"),
+        patch("supporter.pool.get_provider"),
         patch("supporter.agent.ChatAgent"),
     ):
         await manager.setup_agent(use_live=False)
@@ -152,7 +152,7 @@ async def test_setup_agent_dispatch() -> None:
     app = MockApp()
     manager = _make_manager(app)
     with (
-        patch("supporter.index.get_provider") as mock_get_provider,
+        patch("supporter.pool.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent") as mock_chat_agent,
         patch(
             "supporter.tools.bash.sandbox.check_bash_availability", return_value=True
@@ -175,7 +175,7 @@ async def test_setup_agent_registry_tools() -> None:
     app = MockApp()
     manager = _make_manager(app)
     with (
-        patch("supporter.index.get_provider") as mock_get_provider,
+        patch("supporter.pool.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent"),
         patch(
             "supporter.tools.bash.sandbox.check_bash_availability", return_value=True
@@ -202,7 +202,7 @@ async def test_setup_agent_no_bash() -> None:
     app = MockApp()
     manager = _make_manager(app)
     with (
-        patch("supporter.index.get_provider") as mock_get_provider,
+        patch("supporter.pool.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent"),
         patch(
             "supporter.tools.bash.sandbox.check_bash_availability", return_value=False

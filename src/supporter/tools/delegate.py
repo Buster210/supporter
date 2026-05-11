@@ -84,7 +84,7 @@ def _create_sub_agent(
     task: dict[str, Any],
     provider: LLMProvider | None = None,
 ) -> tuple[ChatAgent, str]:
-    from ..index import get_provider
+    from ..pool import get_provider
 
     registry = select_delegate_tools(build_tool_catalog(), task["tools"])
     if not provider:
@@ -284,7 +284,7 @@ async def _execute_dag(
     job_id: str,
     parallel_limit: int,
 ) -> list[dict[str, Any]]:
-    from ..index import get_provider
+    from ..pool import get_provider
 
     results: dict[str, dict[str, Any]] = {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}

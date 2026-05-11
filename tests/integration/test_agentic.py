@@ -6,7 +6,7 @@ from google.genai import types
 from google.genai.types import Content, Part
 
 from supporter.agent import ChatAgent
-from supporter.index import LLMChunk, LLMResult
+from supporter.pool import LLMChunk, LLMResult
 
 
 def _build_user_message(prompt: str) -> Content:

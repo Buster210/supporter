@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from google.genai.types import Content, Part
 
-from supporter.index import LLMProvider, clear_providers
+from supporter.pool import LLMProvider, clear_providers
 from supporter.types import LLMChunk, LLMOptions, LLMResult
 
 TEST_MODEL = "gemini-3.1-flash-lite-preview"

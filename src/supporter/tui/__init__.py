@@ -13,8 +13,8 @@ from textual.reactive import reactive
 from textual.widgets import Button, Input, Label
 
 from ..agent import ChatAgent
-from ..index import DynamicPool
 from ..logger import init_logger, logger, shutdown_logger
+from ..pool import DynamicPool
 from ..tools.base import ToolError
 from ..types import ModeChanged
 

@@ -43,7 +43,7 @@ class ModeManager:
     async def setup_agent(self, use_live: bool = False) -> None:
         from ..agent import ChatAgent
         from ..config import config
-        from ..index import get_provider
+        from ..pool import get_provider
         from ..tools.bash.sandbox import (
             check_bash_availability,
             notify_bash_unavailable,

@@ -246,7 +246,7 @@ class TestToolRegistry:
 
 
 class TestSubAgentFactory:
-    @patch("supporter.index.get_provider")
+    @patch("supporter.pool.get_provider")
     @patch("supporter.tools.delegate.ChatAgent")
     def test_create_sub_agent(
         self, mock_agent_class: Any, mock_get_provider: Any

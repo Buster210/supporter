@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from supporter.agent import ChatAgent
-from supporter.index import (
+from supporter.pool import (
     DynamicPool,
     LazyFallbackProvider,
     LLMProvider,
@@ -68,7 +68,7 @@ async def test_conversation_clear_history() -> None:
 @pytest.mark.asyncio
 async def test_conversation_with_pool() -> None:
     mock_provider_instance = MockLLMProvider("Pool response")
-    with patch("supporter.index.GeminiProvider") as mock_gemini:
+    with patch("supporter.pool.GeminiProvider") as mock_gemini:
         mock_gemini.return_value = mock_provider_instance
         mock_gemini.get_name = lambda self: "MockedGemini"
         pool = DynamicPool(

@@ -12,7 +12,7 @@ async def google_search(query: str) -> str:
     """
     logger.info(f"Tool: google_search — query='{query}'")
 
-    from ..index import get_provider
+    from ..pool import get_provider
 
     provider = get_provider(live=True, model_name=config.gemini_live_fallback_model)
 

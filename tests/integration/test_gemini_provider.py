@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from google.genai.types import Content, Part
 
-import supporter.index as index
+import supporter.pool as index
 from supporter.config import load_config
-from supporter.index import get_provider
+from supporter.pool import get_provider
 from supporter.providers.gemini_provider import GeminiProvider
 from tests.mocks import build_mock_stream_chunk, build_mock_stream_part
 

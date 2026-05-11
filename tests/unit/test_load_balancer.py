@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from supporter.index import DynamicPool, LLMChunk, LLMResult, clear_providers
+from supporter.pool import DynamicPool, LLMChunk, LLMResult, clear_providers
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def create_mock_provider(name: str) -> MagicMock:
 async def test_round_robin_cycling() -> None:
     p1 = create_mock_provider("P1")
     p2 = create_mock_provider("P2")
-    with patch("supporter.index.GeminiProvider", side_effect=[p1, p2]):
+    with patch("supporter.pool.GeminiProvider", side_effect=[p1, p2]):
         lb = DynamicPool(["key1", "key2"], model_name="P1")
         res1 = await lb.generate("test")
         assert res1.text == "Response from P1"
@@ -44,7 +44,7 @@ async def test_round_robin_cycling() -> None:
 async def test_round_robin_streaming() -> None:
     p1 = create_mock_provider("P1")
     p2 = create_mock_provider("P2")
-    with patch("supporter.index.GeminiProvider", side_effect=[p1, p2]):
+    with patch("supporter.pool.GeminiProvider", side_effect=[p1, p2]):
         lb = DynamicPool(["key1", "key2"], model_name="P1")
         stream1 = lb.generate_stream("test")
         chunk1 = await stream1.__anext__()
@@ -58,7 +58,7 @@ async def test_round_robin_streaming() -> None:
 async def test_load_balancer_name() -> None:
     p1 = create_mock_provider("P1")
     p2 = create_mock_provider("P2")
-    with patch("supporter.index.GeminiProvider", side_effect=[p1, p2]):
+    with patch("supporter.pool.GeminiProvider", side_effect=[p1, p2]):
         lb = DynamicPool(["key1", "key2"], model_name="P1")
         await lb.generate("test")
         await lb.generate("test")
@@ -66,7 +66,7 @@ async def test_load_balancer_name() -> None:
 
 
 def test_error_categorization() -> None:
-    from supporter.index import is_model_error, is_rate_limit, should_trigger_fallback
+    from supporter.pool import is_model_error, is_rate_limit, should_trigger_fallback
 
     mock_rate_limit = MagicMock()
     mock_rate_limit.status = 429
@@ -80,7 +80,7 @@ def test_error_categorization() -> None:
 
 
 def test_model_cooldown() -> None:
-    from supporter.index import (
+    from supporter.pool import (
         _is_model_in_cooldown,
         _mark_model_cooldown,
         _model_cooldowns,
@@ -91,7 +91,7 @@ def test_model_cooldown() -> None:
     assert _is_model_in_cooldown(model) is False
     _mark_model_cooldown(model, minutes=1)
     assert _is_model_in_cooldown(model) is True
-    with patch("supporter.index.datetime") as mock_dt:
+    with patch("supporter.pool.datetime") as mock_dt:
         from datetime import datetime, timedelta
 
         mock_dt.now.return_value = datetime.now() + timedelta(minutes=2)
@@ -100,7 +100,7 @@ def test_model_cooldown() -> None:
 
 @pytest.mark.asyncio
 async def test_lazy_fallback_provider() -> None:
-    from supporter.index import LazyFallbackProvider
+    from supporter.pool import LazyFallbackProvider
 
     primary = create_mock_provider("Primary")
     fallback = create_mock_provider("Fallback")
@@ -118,7 +118,7 @@ async def test_lazy_fallback_provider() -> None:
 
 
 def test_get_provider_registry() -> None:
-    from supporter.index import clear_providers, get_provider
+    from supporter.pool import clear_providers, get_provider
 
     clear_providers()
     p1 = get_provider("gemini")

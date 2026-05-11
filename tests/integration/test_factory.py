@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import supporter.index as index
+import supporter.pool as index
 from supporter.config import load_config
-from supporter.index import LLMResult, get_provider
+from supporter.pool import LLMResult, get_provider
 
 
 def test_default_to_gemini() -> None:
@@ -60,7 +60,7 @@ async def test_multiple_api_keys_round_robin() -> None:
             },
             clear=True,
         ),
-        patch("supporter.index.GeminiProvider", side_effect=mock_provider_factory),
+        patch("supporter.pool.GeminiProvider", side_effect=mock_provider_factory),
     ):
         index.clear_providers()
         index.config = load_config()
