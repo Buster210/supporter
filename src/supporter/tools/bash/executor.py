@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import resource
 import shlex
 import subprocess
 import sys
@@ -29,6 +28,12 @@ from .defs import (
 
 _LITERAL_SECRET_PATTERNS = tuple(re.compile(p) for p in SECRET_LITERAL_PATTERNS)
 _KEYWORD_SECRET_PATTERN = re.compile(SECRET_KEYWORD_PATTERN)
+
+
+def _wrap_with_limits(cmd_tokens: list[str]) -> list[str]:
+    mem_kb = MEM_LIMIT_BYTES // 1024
+    limit_script = f'ulimit -t {CPU_LIMIT_SEC} -v {mem_kb} && exec "$@"'
+    return ["/bin/bash", "-c", limit_script, "_", *cmd_tokens]
 
 
 def _resolved_project_root() -> Path:
@@ -178,13 +183,8 @@ def _execute_subprocess(
     args = [str(binary), *tokens[1:]]
     cmd_tokens = sandbox.wrap_in_sandbox(args, cwd, root)
 
-    def _set_limits() -> None:
-        os.setsid()
-        try:
-            resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_SEC, CPU_LIMIT_SEC))
-            resource.setrlimit(resource.RLIMIT_AS, (MEM_LIMIT_BYTES, MEM_LIMIT_BYTES))
-        except Exception:  # noqa: S110 # nosec B110
-            pass
+    if sys.platform != "win32":
+        cmd_tokens = _wrap_with_limits(cmd_tokens)
 
     try:
         res = subprocess.run(  # nosec B603 # noqa: S603
@@ -200,7 +200,7 @@ def _execute_subprocess(
             capture_output=True,
             timeout=EXECUTION_TIMEOUT_SEC,
             close_fds=True,
-            preexec_fn=_set_limits if sys.platform != "win32" else None,
+            start_new_session=sys.platform != "win32",
         )
 
         out = res.stdout[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
