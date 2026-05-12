@@ -170,19 +170,19 @@ def test_parse_and_strip_env() -> None:
     assert _parse_and_strip_env("VAR=val ls -la") == ["ls", "-la"]
 
 
-def testcheck_complex_syntax() -> None:
+def test_check_complex_syntax() -> None:
     with pytest.raises(PermissionError):
         check_complex_syntax("echo $(ls)")
 
 
-def testcheck_complex_syntax_ignores_quoted_pipe() -> None:
+def test_check_complex_syntax_ignores_quoted_pipe() -> None:
     with patch("supporter.tools.bash.policy.verify_binary") as mock_verify:
         check_complex_syntax('grep "a|b" sample.txt')
 
     mock_verify.assert_not_called()
 
 
-def testcheck_complex_syntax_detects_unspaced_pipe_to_shell() -> None:
+def test_check_complex_syntax_detects_unspaced_pipe_to_shell() -> None:
     def fake_verify(binary: str) -> Path:
         return Path(f"/usr/bin/{binary}")
 
@@ -193,7 +193,7 @@ def testcheck_complex_syntax_detects_unspaced_pipe_to_shell() -> None:
         check_complex_syntax("cat /tmp/x|bash")
 
 
-def testcheck_rm_nuclear() -> None:
+def test_check_rm_nuclear() -> None:
     cwd = Path("/root")
     with pytest.raises(PermissionError, match="targeting system-critical path"):
         check_rm_nuclear("rm", ["rm", "-rf", "/"], cwd)

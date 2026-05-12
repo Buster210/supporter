@@ -117,7 +117,9 @@ def check_complex_syntax(command: str) -> None:
     if "$(" in command or "`" in command:
         raise PermissionError("Tier 3 BLOCK: Command substitution prohibited")
 
-    all_tokens = shlex.split(command)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="|")
+    lexer.whitespace_split = True
+    all_tokens = list(lexer)
     if "|" not in all_tokens:
         return
 
