@@ -51,11 +51,17 @@ class MockApp:
     def _on_agent_active(self, agent_role: str) -> None:
         self.current_active_agent = agent_role
 
-    def _start_thinking(self) -> None:
+    def start_thinking(self) -> None:
         self.active_queries += 1
 
-    def _stop_thinking(self) -> None:
+    def stop_thinking(self) -> None:
         self.active_queries = max(0, self.active_queries - 1)
+
+    def _start_thinking(self) -> None:
+        self.start_thinking()
+
+    def _stop_thinking(self) -> None:
+        self.stop_thinking()
 
     def exit(self) -> None:
         self.exited = True
@@ -69,9 +75,12 @@ class MockApp:
     def action_clear_screen(self) -> None:
         self.cleared = True
 
-    def _toggle_mode(self, live: bool = False) -> None:
+    def set_live_mode(self, live: bool = False) -> None:
         if live:
             self.toggled_live = True
+
+    def _toggle_mode(self, live: bool = False) -> None:
+        self.set_live_mode(live=live)
 
     def query_one(self, selector: str, type: Any = None) -> Any:
         return MockWidget(selector)

@@ -71,8 +71,8 @@ async def test_handle_command_unknown() -> None:
 async def test_toggle_mode_live_set() -> None:
     app = MagicMock()
     app.live_mode = False
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app.is_activating_mode = False
     app.post_message = MagicMock()
     manager = _make_manager(app)
@@ -89,8 +89,8 @@ async def test_toggle_mode_live_set() -> None:
 async def test_toggle_mode_agent_set() -> None:
     app = MagicMock()
     app.live_mode = True
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app.is_activating_mode = False
     app.post_message = MagicMock()
     manager = _make_manager(app)
@@ -105,11 +105,11 @@ async def test_toggle_mode_agent_set() -> None:
 @pytest.mark.asyncio
 async def test_handle_command_agent() -> None:
     app = MagicMock()
-    app._toggle_mode = AsyncMock()
+    app.set_live_mode = AsyncMock()
     manager = _make_manager(app)
     result = await manager.handle_command("/agent")
     assert result is True
-    app._toggle_mode.assert_called_once_with(live=False)
+    app.set_live_mode.assert_called_once_with(live=False)
 
 
 @pytest.mark.asyncio
@@ -286,8 +286,8 @@ async def test_toggle_mode_already_in_agent_mode() -> None:
 async def test_toggle_mode_live_greeting_failure() -> None:
     app = MagicMock()
     app.live_mode = False
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app.is_activating_mode = False
     app.post_message = MagicMock()
     manager = _make_manager(app)
@@ -305,7 +305,7 @@ async def test_toggle_mode_live_greeting_failure() -> None:
         await manager.toggle_mode(live=True)
     assert app.live_mode is True
     assert app.is_activating_mode is False
-    app._stop_thinking.assert_called_once()
+    app.stop_thinking.assert_called_once()
 
 
 @pytest.mark.asyncio

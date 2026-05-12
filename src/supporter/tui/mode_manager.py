@@ -92,7 +92,7 @@ class ModeManager:
         self._app.live_mode = live if live is not None else not self._app.live_mode
 
         logger.info(f"ModeManager: toggling mode — live={self._app.live_mode}")
-        self._app._start_thinking()
+        self._app.start_thinking()
         self._app.is_activating_mode = True
 
         try:
@@ -107,7 +107,7 @@ class ModeManager:
                     logger.error(f"ModeManager: Failed to queue greeting worker: {e}")
         finally:
             self._app.is_activating_mode = False
-            self._app._stop_thinking()
+            self._app.stop_thinking()
 
     async def trigger_live_greeting(self) -> None:
         import datetime
@@ -189,8 +189,8 @@ class ModeManager:
         handlers = {
             "/exit": self._app.exit,
             "/clear": self._app.action_clear_screen,
-            "/live": lambda: self._app._toggle_mode(live=True),
-            "/agent": lambda: self._app._toggle_mode(live=False),
+            "/live": lambda: self._app.set_live_mode(live=True),
+            "/agent": lambda: self._app.set_live_mode(live=False),
         }
 
         if cmd not in handlers:

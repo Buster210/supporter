@@ -242,6 +242,9 @@ class SupporterApp(App[None]):
     async def set_live_mode(self, live: bool = False) -> None:
         await self._mode_manager.toggle_mode(live=live)
 
+    async def _toggle_mode(self, live: bool = False) -> None:
+        await self.set_live_mode(live=live)
+
     async def _process_message_cycle(
         self,
         text: str,
