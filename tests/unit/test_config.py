@@ -176,3 +176,10 @@ class TestDefaultSystemInstruction:
             "Do not frame the final answer as a sub-agent completion update"
             in DEFAULT_SYSTEM_INSTRUCTION
         )
+
+    def test_single_delegation_names_agent_role(self) -> None:
+        assert (
+            "If N=1: Delegating **<milestone>** to **<agent_role>**:"
+            in DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert "instead of '1 subagent'" in DEFAULT_SYSTEM_INSTRUCTION
