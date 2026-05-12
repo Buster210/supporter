@@ -360,14 +360,14 @@ def test_inspect_interpreter_payload_bash() -> None:
     assert _inspect_interpreter_payload("bash", ["bash", "-c", "ls 'unclosed"], 0) == 3
 
 
-def testapply_path_security() -> None:
+def test_apply_path_security() -> None:
     root = Path("/root")
     cwd = Path("/root/src")
     with pytest.raises(PermissionError, match="sensitive directory"):
         apply_path_security("ls /etc", ["ls", "/etc"], cwd, root)
 
 
-def testapply_path_security_flag_parsing() -> None:
+def test_apply_path_security_flag_parsing() -> None:
     cwd = Path("/fake_tmp/subdir")
     root = Path("/fake_tmp")
     cwd = cwd.resolve()
@@ -385,7 +385,7 @@ def testapply_path_security_flag_parsing() -> None:
     assert _tier == 1
 
 
-def testapply_path_security_exceptions() -> None:
+def test_apply_path_security_exceptions() -> None:
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
     with (
@@ -398,7 +398,7 @@ def testapply_path_security_exceptions() -> None:
         assert _tier == 1
 
 
-def testapply_path_security_boundary_failure() -> None:
+def test_apply_path_security_boundary_failure() -> None:
     cwd = Path("/fake_tmp")
     root = Path("/fake_tmp")
     with (
@@ -424,12 +424,12 @@ def test_get_fs_state_oserror() -> None:
         assert _get_fs_state(Path("/fake_tmp")) == {}
 
 
-def testcheck_rm_nuclear_failure() -> None:
+def test_check_rm_nuclear_failure() -> None:
     with patch("pathlib.Path.expanduser", side_effect=Exception("parse error")):
         check_rm_nuclear("rm", ["rm", "invalid/path"], Path("/fake_tmp"))
 
 
-def testcheck_complex_syntax_pipe_to_network() -> None:
+def test_check_complex_syntax_pipe_to_network() -> None:
     with (
         patch(
             "supporter.tools.bash.policy.verify_binary",
@@ -476,7 +476,7 @@ def test_gate_inner_shell_payload_complex() -> None:
         assert _gate_inner_shell_payload(["python"], 0) == 3
 
 
-def testapply_policy_checks_raises() -> None:
+def test_apply_policy_checks_raises() -> None:
     with pytest.raises(PermissionError, match="Network egress violation"):
         apply_policy_checks("curl -F x=y", ["curl", "-F", "x=y"], "curl", 1)
     with pytest.raises(PermissionError, match="Package manager supply chain"):
@@ -515,7 +515,7 @@ def test_detect_sandbox_none() -> None:
         assert sb_bin is None
 
 
-def testwrap_in_sandbox_macos_profile_missing() -> None:
+def test_wrap_in_sandbox_macos_profile_missing() -> None:
     sandbox._SB_TYPE = "macos"
     sandbox._SB_BIN = "/usr/bin/sandbox-exec"
     with (
@@ -525,7 +525,7 @@ def testwrap_in_sandbox_macos_profile_missing() -> None:
         wrap_in_sandbox(["ls"], Path("/fake_tmp"), Path("/fake_tmp"))
 
 
-def testwrap_in_sandbox_linux() -> None:
+def test_wrap_in_sandbox_linux() -> None:
     sandbox._SB_TYPE = "linux"
     sandbox._SB_BIN = "/usr/bin/nsjail"
     tokens = ["ls"]
@@ -536,14 +536,14 @@ def testwrap_in_sandbox_linux() -> None:
     assert "ls" in wrapped
 
 
-def testwrap_in_sandbox_unsupported() -> None:
+def test_wrap_in_sandbox_unsupported() -> None:
     sandbox._SB_TYPE = "unsupported"
     sandbox._SB_BIN = "/usr/bin/unknown"
     with pytest.raises(RuntimeError, match="Unsupported sandbox configuration"):
         wrap_in_sandbox(["ls"], Path("/fake_tmp"), Path("/fake_tmp"))
 
 
-def testwrap_in_sandbox_extended() -> None:
+def test_wrap_in_sandbox_extended() -> None:
     tokens = ["ls"]
     cwd = Path("/root")
     root = Path("/root")
@@ -801,15 +801,15 @@ async def test_blocked_binary_is_rejected_before_policy_allowlist(
     assert "Tier 3 BLOCK:" in result
 
 
-def testapply_tier1_allowlist_defaults_unknown_to_tier2() -> None:
+def test_apply_tier1_allowlist_defaults_unknown_to_tier2() -> None:
     assert apply_tier1_allowlist(["customtool"], "customtool", 1) == 2
 
 
-def testapply_tier1_allowlist_keeps_allowed_binary_tier1() -> None:
+def test_apply_tier1_allowlist_keeps_allowed_binary_tier1() -> None:
     assert apply_tier1_allowlist(["ls"], "ls", 1) == 1
 
 
-def testapply_tier1_allowlist_keeps_allowed_git_subcommand_tier1() -> None:
+def test_apply_tier1_allowlist_keeps_allowed_git_subcommand_tier1() -> None:
     assert apply_tier1_allowlist(["git", "status"], "git", 1) == 1
 
 
@@ -827,13 +827,13 @@ async def test_env_var_stripping(mock_config: MagicMock) -> None:
             mock_verify.assert_called_with("ls")
 
 
-def testevaluate_final_tier_cancellation() -> None:
+def test_evaluate_final_tier_cancellation() -> None:
     sandbox.bash_confirmation_callback = lambda tokens, msg: False
     with pytest.raises(PermissionError, match="cancelled by user"):
         policy.evaluate_final_tier("rm foo", ["rm", "foo"], "rm", 2, Path("/fake_tmp"))
 
 
-def testevaluate_final_tier_high_risk() -> None:
+def test_evaluate_final_tier_high_risk() -> None:
     sandbox.bash_confirmation_callback = MagicMock(return_value=True)
     policy.evaluate_final_tier(
         "pkg install", ["pkg", "install"], "pkg", 2, Path("/fake_tmp")
@@ -883,7 +883,7 @@ def test_inspect_interpreter_payload_bash_short(mock_config: Any) -> None:
     assert result == 1
 
 
-def testapply_path_security_with_eq_flag(mock_config: Any, project_root: Any) -> None:
+def test_apply_path_security_with_eq_flag(mock_config: Any, project_root: Any) -> None:
     tokens = ["ls", "--format=long=none", "file"]
     _tier = apply_path_security(
         "ls " + " ".join(tokens), tokens, project_root, project_root
@@ -891,31 +891,31 @@ def testapply_path_security_with_eq_flag(mock_config: Any, project_root: Any) ->
     assert _tier >= 1
 
 
-def testapply_path_security_with_at_flag(mock_config: Any, project_root: Any) -> None:
+def test_apply_path_security_with_at_flag(mock_config: Any, project_root: Any) -> None:
     at_delimited_path = "file@data.txt"
     _tier = apply_path_security(
         "cmd file@x", ["cmd", at_delimited_path], project_root, project_root
     )
 
 
-def testverify_binary_not_found() -> None:
+def test_verify_binary_not_found() -> None:
     with pytest.raises(PermissionError, match="Binary not found"):
         policy.verify_binary("nonexistent_command_xyz")
 
 
-def testcheck_execution_location_curl_upload_flag() -> None:
+def test_check_execution_location_curl_upload_flag() -> None:
     assert (
         _check_network_egress("curl", ["curl", "-T", "file.txt", "https://example.com"])
         == 3
     )
 
 
-def testcheck_execution_location_private_tmp_blocked() -> None:
+def test_check_execution_location_private_tmp_blocked() -> None:
     with pytest.raises(PermissionError, match="temp directory"):
         check_execution_location(Path("/private/tmp/script"))
 
 
-def testcheck_execution_location_var_folders_blocked() -> None:
+def test_check_execution_location_var_folders_blocked() -> None:
     with pytest.raises(PermissionError, match="temp directory"):
         check_execution_location(Path("/var/folders/xx/malicious"))
 
@@ -927,7 +927,7 @@ def test_check_network_egress_data_binary_inline_token() -> None:
     )
 
 
-def testapply_path_security_outside_project_boundary(tmp_path: Any) -> None:
+def test_apply_path_security_outside_project_boundary(tmp_path: Any) -> None:
     root = tmp_path / "project"
     root.mkdir()
     cwd = root
@@ -1010,17 +1010,17 @@ def test_inspect_interpreter_payload_unknown_runtime_safe() -> None:
     assert _inspect_interpreter_payload("ruby", ["ruby", "-e", "puts 'ok'"], 0) == 1
 
 
-def testapply_policy_checks_open_safe_path() -> None:
+def test_apply_policy_checks_open_safe_path() -> None:
     tier = apply_policy_checks("open file.txt", ["open", "file.txt"], "open", 1)
     assert tier == 1
 
 
-def testapply_policy_checks_find_tier2() -> None:
+def test_apply_policy_checks_find_tier2() -> None:
     tier = apply_policy_checks("find . -delete", ["find", ".", "-delete"], "find", 1)
     assert tier == 2
 
 
-def testevaluate_final_tier_git_non_tier1_without_callback_raises() -> None:
+def test_evaluate_final_tier_git_non_tier1_without_callback_raises() -> None:
     sandbox.bash_confirmation_callback = None
     with pytest.raises(PermissionError, match="Tier 2 Confirmation Required"):
         policy.evaluate_final_tier(
@@ -1084,7 +1084,7 @@ def test_inspect_interpreter_payload_tier3_module_blocks() -> None:
     )
 
 
-def testapply_path_security_empty_check_value_branch(project_root: Any) -> None:
+def test_apply_path_security_empty_check_value_branch(project_root: Any) -> None:
     _tier = apply_path_security(
         "cmd -d= target",
         ["cmd", "-d=", "target"],

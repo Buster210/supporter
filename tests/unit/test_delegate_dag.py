@@ -224,7 +224,7 @@ async def test_wide_fan_out_skips_only_failed_branch() -> None:
 
 
 @pytest.mark.asyncio
-async def testrun_sub_agent_retry_exhaustion_becomes_error() -> None:
+async def test_run_sub_agent_retry_exhaustion_becomes_error() -> None:
     task = validate_tasks('[{"id": "retry", "task": "retry task", "max_retries": 1}]')[
         0
     ]

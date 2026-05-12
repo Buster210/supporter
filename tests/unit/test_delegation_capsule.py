@@ -502,7 +502,7 @@ async def test_inspect_task_includes_error_and_skip_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def testload_all_capsules_warns_on_invalid_record_shape() -> None:
+async def test_load_all_capsules_warns_on_invalid_record_shape() -> None:
     root = dc.delegations_dir()
     root.mkdir(parents=True, exist_ok=True)
     (root / "badshape.json").write_text('{"foo": "bar"}', encoding="utf-8")

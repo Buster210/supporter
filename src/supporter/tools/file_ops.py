@@ -19,6 +19,12 @@ def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> N
     _CONFIRMATION_CALLBACK = callback
 
 
+def register_confirmation_callback(
+    callback: Callable[[Path, str], bool] | None,
+) -> None:
+    set_confirmation_callback(callback)
+
+
 def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
     gitignore_path = project_root / ".gitignore"
     if not gitignore_path.exists():

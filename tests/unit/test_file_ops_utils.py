@@ -128,26 +128,26 @@ class TestFileOpsUtils:
 
 
 class TestPathValidation:
-    def testvalidate_path_no_allowed(self, mock_file_ops_config: Any) -> None:
+    def test_validate_path_no_allowed(self, mock_file_ops_config: Any) -> None:
         mock_file_ops_config.allowed_directories = []
         with pytest.raises(PermissionError, match="No allowed directories"):
             validate_path("test.txt")
 
-    def testvalidate_path_outside_root(
+    def test_validate_path_outside_root(
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]
         with pytest.raises(PermissionError, match="outside project root"):
             validate_path("/tmp/outside.txt")  # noqa: S108
 
-    def testvalidate_path_blacklisted(
+    def test_validate_path_blacklisted(
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]
         with pytest.raises(PermissionError, match="protected"):
             validate_path(str(temp_project / ".env"))
 
-    def testvalidate_path_gitignore(
+    def test_validate_path_gitignore(
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]

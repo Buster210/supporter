@@ -68,7 +68,7 @@ class TestAgentRoster:
         profile = _resolve_agent_profile(task)
         assert profile["persona"] == config.delegate_default_persona
 
-    def testvalidate_tasks_with_roster_agent(self) -> None:
+    def test_validate_tasks_with_roster_agent(self) -> None:
         tasks_json = json.dumps(
             [{"id": "t1", "agent": "test_engineer", "task": "run tests"}]
         )
@@ -744,7 +744,7 @@ async def test_execute_dag_timeout_branch_publishes_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def testrun_heartbeat_emits_anomaly() -> None:
+async def test_run_heartbeat_emits_anomaly() -> None:
     bus = MagicMock()
     bus.milestone = "M"
     state = {
@@ -774,7 +774,7 @@ async def testrun_heartbeat_emits_anomaly() -> None:
 
 
 @pytest.mark.asyncio
-async def testrun_sub_agent_retry_backoff_and_continue_branch() -> None:
+async def test_run_sub_agent_retry_backoff_and_continue_branch() -> None:
     task = {
         "id": "r1",
         "task": "retry me",
@@ -811,7 +811,7 @@ async def testrun_sub_agent_retry_backoff_and_continue_branch() -> None:
 
 
 @pytest.mark.asyncio
-async def testrun_sub_agent_negative_retries_returns_empty_last_result() -> None:
+async def test_run_sub_agent_negative_retries_returns_empty_last_result() -> None:
     task = {
         "id": "none",
         "task": "noop",
@@ -822,7 +822,7 @@ async def testrun_sub_agent_negative_retries_returns_empty_last_result() -> None
 
 
 @pytest.mark.asyncio
-async def testrun_heartbeat_early_stop_after_sleep() -> None:
+async def test_run_heartbeat_early_stop_after_sleep() -> None:
     bus = MagicMock()
     with (
         patch(
@@ -835,7 +835,7 @@ async def testrun_heartbeat_early_stop_after_sleep() -> None:
 
 
 @pytest.mark.asyncio
-async def testrun_heartbeat_skips_non_running_task_state() -> None:
+async def test_run_heartbeat_skips_non_running_task_state() -> None:
     bus = MagicMock()
     bus.milestone = "M"
     bus.get_snapshot.return_value = {"t1": {"status": "DONE"}}
@@ -853,7 +853,7 @@ async def testrun_heartbeat_skips_non_running_task_state() -> None:
 
 
 @pytest.mark.asyncio
-async def testrun_milestone_propagates_terminal_capsule_failure() -> None:
+async def test_run_milestone_propagates_terminal_capsule_failure() -> None:
     bus = MagicMock()
     boom = RuntimeError("capsule terminal write failed")
 
