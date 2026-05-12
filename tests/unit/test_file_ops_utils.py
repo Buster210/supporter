@@ -4,9 +4,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from supporter.tools.file_ops import (
-    _emit_confirmation_line,
     _get_gitignore_spec,
     _is_blacklisted,
+    emit_confirmation_line,
     register_confirmation_callback,
     set_confirmation_callback,
     validate_path,
@@ -73,7 +73,7 @@ class TestIsBlacklisted:
 class TestFileOpsUtils:
     def test_emit_confirmation_line_prints_without_textual_app(self) -> None:
         with patch("builtins.print") as mock_print:
-            _emit_confirmation_line("confirm this")
+            emit_confirmation_line("confirm this")
 
         mock_print.assert_called_once_with("confirm this")
 
@@ -84,7 +84,7 @@ class TestFileOpsUtils:
         token = active_app.set(app)
         try:
             with patch("builtins.print") as mock_print:
-                _emit_confirmation_line("confirm this")
+                emit_confirmation_line("confirm this")
         finally:
             active_app.reset(token)
 

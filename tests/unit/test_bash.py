@@ -630,11 +630,7 @@ async def test_execute_bash_wd_failure() -> None:
 @patch("supporter.tools.bash.policy.evaluate_final_tier")
 @patch("supporter.tools.bash.policy.verify_binary")
 @patch("subprocess.run")
-<<<<<<< HEAD
 @patch("supporter.tools.bash.policy.apply_path_security")
-=======
-@patch("supporter.tools.bash.policy._apply_path_security")
->>>>>>> 57b7f48 (fix(security): drop preexec_fn from executor)
 @patch("supporter.tools.bash.executor._get_fs_state")
 @patch("supporter.tools.bash.executor._get_fs_names")
 def test_execute_subprocess_complex_failure(

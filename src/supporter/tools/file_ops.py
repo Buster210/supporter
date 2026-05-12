@@ -25,6 +25,18 @@ def register_confirmation_callback(
     set_confirmation_callback(callback)
 
 
+def emit_confirmation_line(message: str = "") -> None:
+    try:
+        from textual._context import active_app
+
+        app = active_app.get()
+    except (LookupError, RuntimeError):
+        print(message)
+        return
+
+    app.log(message)
+
+
 def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
     gitignore_path = project_root / ".gitignore"
     if not gitignore_path.exists():
@@ -190,15 +202,18 @@ async def write_file(
             if not _CONFIRMATION_CALLBACK(p, display_diff):
                 return "Write operation cancelled by user security preference."
         elif sys.stdin.isatty():
-            print("\n" + "=" * 60)
-            print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
-            print(f" TARGET FILE: {p}")
-            print("-" * 60)
-            print(" PROPOSED DIFF ".center(60, "-"))
-            print(display_diff)
-            print("-" * 60)
+            emit_confirmation_line()
+            emit_confirmation_line("=" * 60)
+            emit_confirmation_line(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
+            emit_confirmation_line(f" TARGET FILE: {p}")
+            emit_confirmation_line("-" * 60)
+            emit_confirmation_line(" PROPOSED DIFF ".center(60, "-"))
+            for line in display_diff.splitlines():
+                emit_confirmation_line(line)
+            emit_confirmation_line("-" * 60)
             confirm = input(" Proceed with write? (y/n): ").lower().strip()
-            print("=" * 60 + "\n")
+            emit_confirmation_line("=" * 60)
+            emit_confirmation_line()
             if confirm not in ("y", "yes"):
                 return "Write operation cancelled by user security preference."
         else:
