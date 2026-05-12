@@ -78,6 +78,17 @@ MessageBubble.right {
     align-horizontal: right;
 }
 
+.delegation-signal {
+    width: 100%;
+    height: auto;
+    color: $accent;
+    text-style: bold;
+    text-align: center;
+    content-align: center middle;
+    padding: 0 2;
+    margin: 1 0;
+}
+
 .bubble {
     height: auto;
     padding: 0 2;

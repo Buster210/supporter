@@ -1,13 +1,18 @@
-from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from textual.containers import Vertical
 
 from supporter.tui import SupporterApp
+from supporter.tui.delegation_listener import (
+    DelegationListener,
+    format_completed_task_signal,
+    format_delegation_progress,
+)
 
 
 def test_completed_task_signal_contains_only_ids() -> None:
-    signal = SupporterApp._format_completed_task_signal("job123", "get_time")
+    signal = format_completed_task_signal("job123", "get_time")
 
     assert signal.startswith("<br/>\n")
     assert signal.endswith("\n<br/>")
@@ -25,15 +30,6 @@ def test_completed_task_signal_contains_only_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_task_event_injects_explicit_completion_signal() -> None:
-    class FakeApp:
-        def __init__(self) -> None:
-            self._upsert_delegation_progress = AsyncMock()
-            self._inject_system_message = MagicMock()
-            self._format_task_signal = SupporterApp._format_task_signal
-
-        def _safe_call(self, callback: Any, *args: Any, **kwargs: Any) -> None:
-            callback(*args, **kwargs)
-
     bus = MagicMock()
     bus.notify_per_task = True
     bus.get_snapshot.return_value = {
@@ -42,22 +38,25 @@ async def test_task_event_injects_explicit_completion_signal() -> None:
             "task_goal": "Find current time in India.",
         }
     }
-    app = FakeApp()
-    signal = SupporterApp._format_completed_task_signal("job123", "get_time")
+    upsert_progress = AsyncMock()
+    inject_message = MagicMock()
+    listener = DelegationListener(
+        inject_message=inject_message,
+        upsert_progress=upsert_progress,
+        drop_progress=MagicMock(),
+    )
+    signal = format_completed_task_signal("job123", "get_time")
 
-    await SupporterApp._emit_task_event(
-        cast(Any, app),
+    await listener._emit_task_event(
         bus,
         "job123",
         "DONE",
         "get_time",
-        6.94,
-        "Visible summary only.",
         sys_body=signal,
     )
 
-    app._upsert_delegation_progress.assert_awaited_once_with(job_id="job123", bus=bus)
-    system_call = app._inject_system_message.call_args.args[0]
+    upsert_progress.assert_awaited_once_with("job123", bus)
+    system_call = inject_message.call_args.args[0]
     assert system_call == signal
     assert "DELEGATION_TASK_DONE:" not in system_call
 
@@ -80,7 +79,7 @@ def test_delegation_progress_omits_task_details_and_summaries() -> None:
         },
     }
 
-    output = SupporterApp._format_delegation_progress("job123", bus)
+    output = format_delegation_progress("job123", bus)
 
     assert "| Task | Agent | Status | Time |" in output
     assert "| map | scout | working |  |" in output
@@ -90,3 +89,51 @@ def test_delegation_progress_omits_task_details_and_summaries() -> None:
     assert "Review findings" not in output
     assert "Completed summaries" not in output
     assert "Review completed." not in output
+
+
+@pytest.mark.asyncio
+async def test_delegation_signal_renders_immediately_and_queues_for_agent() -> None:
+    app = MagicMock()
+    app._is_processing = True
+    app._user_message_queue = []
+    app.run_worker = MagicMock()
+    app.query_one = MagicMock()
+
+    signal = format_completed_task_signal("job123", "get_time")
+    bound = SupporterApp._inject_system_message.__get__(app, SupporterApp)
+    bound(signal)
+
+    app.run_worker.assert_called_once()
+    assert app._user_message_queue == [(signal, True)]
+
+
+@pytest.mark.asyncio
+async def test_render_delegation_signal_mounts_centered_label() -> None:
+    app = MagicMock()
+    chat_view = MagicMock(spec=Vertical)
+    chat_view.mount = AsyncMock()
+    chat_view.scroll_end = MagicMock()
+    app.query_one = MagicMock(return_value=chat_view)
+    app.active_turn = None
+
+    bound = SupporterApp._render_delegation_signal.__get__(app, SupporterApp)
+    await bound(format_completed_task_signal("job123", "get_time"))
+
+    chat_view.mount.assert_awaited_once()
+    label = chat_view.mount.call_args.args[0]
+    assert label.has_class("delegation-signal")
+    rendered = str(label.render())
+    assert "Delegation task completed" in rendered
+    assert "job_id: job123" in rendered
+    assert "<br/>" not in rendered
+    assert "`" not in rendered
+
+
+def test_drop_delegation_progress_removes_stale_entry() -> None:
+    app = MagicMock()
+    app._delegation_bubbles = {"job123": object()}
+
+    bound = SupporterApp._drop_delegation_progress.__get__(app, SupporterApp)
+    bound("job123")
+
+    assert app._delegation_bubbles == {}
