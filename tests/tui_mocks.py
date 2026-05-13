@@ -6,11 +6,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 
-@dataclass
-class MockMessage:
-    pass
-
-
 class MockApp:
     def __init__(self) -> None:
         self.status_label = "Thinking"
