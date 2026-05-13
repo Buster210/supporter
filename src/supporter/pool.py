@@ -17,6 +17,7 @@ from .config import (
 )
 from .logger import logger
 from .providers.gemini_live_provider import GeminiLiveProvider
+from .providers.gemini_messages import GeminiMessageMixin
 from .providers.gemini_provider import GeminiProvider
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
@@ -43,20 +44,41 @@ _provider_registry: dict[str, LLMProvider] = {}
 _provider_lock = threading.Lock()
 
 
+def _genai_error_classes() -> tuple[type[BaseException], ...]:
+    try:
+        from google.genai import errors as genai_errors
+
+        return (genai_errors.ClientError, genai_errors.ServerError)
+    except ImportError:
+        return ()
+
+
+def _status_code(error: Any) -> int | None:
+    code = getattr(error, "status", None) or getattr(error, "code", None)
+    if isinstance(code, int):
+        return code
+    return None
+
+
 def is_rate_limit(error: Any) -> bool:
-    if getattr(error, "status", None) == HTTP_RATE_LIMIT:
+    if _status_code(error) == HTTP_RATE_LIMIT:
         return True
     message = str(error).lower()
     return any(sig in message for sig in config.rate_limit_error_strings)
 
 
 def is_model_error(error: Any, model_name: str | None = None) -> bool:
+    genai_errors = _genai_error_classes()
+    if genai_errors and isinstance(error, genai_errors):
+        status = _status_code(error)
+        if status is not None and status in config.http_5xx_status_codes:
+            return True
+
     error_class_name = error.__class__.__name__
     if error_class_name in config.google_api_5xx_exceptions:
         return True
 
-    status = getattr(error, "status", None)
-    if status in config.http_5xx_status_codes:
+    if _status_code(error) in config.http_5xx_status_codes:
         return True
 
     message = str(error).lower()
@@ -89,7 +111,7 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
     )
 
 
-class DynamicPool(LLMProvider):
+class DynamicPool(GeminiMessageMixin, LLMProvider):
     _instances: ClassVar[weakref.WeakSet[DynamicPool]] = weakref.WeakSet()
 
     @classmethod
@@ -268,7 +290,7 @@ class DynamicPool(LLMProvider):
         return f"{self.model_name} (Dynamic Pool x{len(self.active_slots)})"
 
 
-class LazyFallbackProvider(LLMProvider):
+class LazyFallbackProvider(GeminiMessageMixin, LLMProvider):
     def __init__(
         self,
         primary_factory: Callable[[], LLMProvider],
@@ -340,7 +362,7 @@ def get_provider(
     pool_size: int = 2,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
-    cache_key = f"{target_type}_{live}_{model_name or 'default'}"
+    cache_key = f"{target_type}_{live}_{model_name or 'default'}_ps{pool_size}"
 
     if shared and cache_key in _provider_registry:
         logger.debug(f"Provider cache hit: {cache_key}")

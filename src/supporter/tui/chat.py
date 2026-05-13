@@ -12,12 +12,13 @@ from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.widgets import Label, Static
 
-from ..config import SCROLL_STEP, SPINNER_FRAMES
-from ..logger import logger
 from .bubble import MessageBubble
+from .constants import SCROLL_STEP, SPINNER_FRAMES
 from .utils import apply_crystal_gradient
 
-SUPPORTER_ART = (
+_AT_BOTTOM_THRESHOLD = 4
+
+_SUPPORTER_ART = (
     " █▀▀ █ █ █▀█ █▀█ █▀█ █▀█ ▀█▀ █▀▀ █▀█ \n"
     " ▀▀█ █ █ █▀▀ █▀▀ █ █ █▀▄  █  █▀▀ █▀▄ \n"
     " ▀▀▀ ▀▀▀ ▀   ▀   ▀▀▀ ▀ ▀  ▀  ▀▀▀ ▀ ▀ "
@@ -26,7 +27,7 @@ SUPPORTER_ART = (
 
 class SupporterHeader(Static):
     def render(self) -> Text:
-        return apply_crystal_gradient(SUPPORTER_ART)
+        return apply_crystal_gradient(_SUPPORTER_ART)
 
 
 class WelcomeBanner(Static):
@@ -50,30 +51,31 @@ class ChatContainer(Vertical):
             self.scroll_up()
         event.prevent_default()
 
-    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
-        self._was_at_bottom = new_value >= self.max_scroll_y - 4
+    def watch_scroll_y(self, _old_value: float, new_value: float) -> None:
+        self._was_at_bottom = new_value >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
         self._update_scroll_btn()
 
-    def watch_virtual_size(self, old_value: object, new_value: object) -> None:
+    def watch_virtual_size(self, _old_value: object, new_value: object) -> None:
         if getattr(self, "_was_at_bottom", True):
             self.scroll_end(animate=False)
         self._update_scroll_btn()
 
     def _update_scroll_btn(self) -> None:
+        from textual.css.query import NoMatches
+
         try:
             if not hasattr(self, "_scroll_wrapper"):
                 self._scroll_wrapper = self.app.query_one("#scroll-btn-wrapper")
+        except NoMatches:
+            return
 
-            wrapper = self._scroll_wrapper
-            at_bottom = self.scroll_y >= self.max_scroll_y - 4
-            if not at_bottom:
-                if wrapper.has_class("hidden"):
-                    wrapper.remove_class("hidden")
-            else:
-                if not wrapper.has_class("hidden"):
-                    wrapper.add_class("hidden")
-        except (KeyError, Exception) as e:
-            logger.debug(f"Scroll button update failed: {e}")
+        wrapper = self._scroll_wrapper
+        at_bottom = self.scroll_y >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
+        if not at_bottom:
+            if wrapper.has_class("hidden"):
+                wrapper.remove_class("hidden")
+        elif not wrapper.has_class("hidden"):
+            wrapper.add_class("hidden")
 
 
 class ChatTurn(Vertical):

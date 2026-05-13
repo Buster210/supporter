@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import supporter.index
-from supporter.index import (
+import supporter.pool
+from supporter.pool import (
     DynamicPool,
     LazyFallbackProvider,
     LLMChunk,
@@ -56,7 +56,7 @@ async def test_dynamic_pool_non_fallbackable_error() -> None:
     p1 = MagicMock()
     p1.generate = AsyncMock(side_effect=ValueError("Specific error"))
     with (
-        patch("supporter.index.GeminiProvider", return_value=p1),
+        patch("supporter.pool.GeminiProvider", return_value=p1),
         pytest.raises(ValueError, match="Specific error"),
     ):
         await lb.generate("test")
@@ -68,7 +68,7 @@ async def test_dynamic_pool_exhausted_retries() -> None:
     p1 = MagicMock()
     p1.generate = AsyncMock(side_effect=Exception("quota"))
     with (
-        patch("supporter.index.GeminiProvider", return_value=p1),
+        patch("supporter.pool.GeminiProvider", return_value=p1),
         pytest.raises(Exception, match="quota"),
     ):
         await lb.generate("test")
@@ -96,7 +96,7 @@ async def test_dynamic_pool_streaming_error_handling() -> None:
         yield LLMChunk(text="success", is_last=True)
 
     p2.generate_stream = MagicMock(side_effect=success_gen)
-    with patch("supporter.index.GeminiProvider", side_effect=[p1, p2, p2, p2]):
+    with patch("supporter.pool.GeminiProvider", side_effect=[p1, p2, p2, p2]):
         chunks = []
         async for chunk in lb2.generate_stream("test"):
             chunks.append(chunk)
@@ -131,7 +131,7 @@ async def test_lazy_fallback_streaming() -> None:
 
 @pytest.mark.asyncio
 async def test_get_provider_live_and_registry() -> None:
-    with patch.object(supporter.index.config, "gemini_api_keys", ["key1"]):
+    with patch.object(supporter.pool.config, "gemini_api_keys", ["key1"]):
         clear_providers()
         p1 = get_provider(live=True, registry={"tool": lambda: "test"})
         new_registry = {"other": lambda: "val"}
@@ -143,7 +143,7 @@ async def test_get_provider_live_and_registry() -> None:
 
 @pytest.mark.asyncio
 async def test_get_provider_missing_keys() -> None:
-    with patch.object(supporter.index.config, "gemini_api_keys", []):
+    with patch.object(supporter.pool.config, "gemini_api_keys", []):
         clear_providers()
         with pytest.raises(ValueError, match="GEMINI_API_KEYS is missing"):
             get_provider()
@@ -160,7 +160,7 @@ async def test_dynamic_pool_5xx_error_generate() -> None:
     error.status = 500
     p1.generate = AsyncMock(side_effect=error)
     with (
-        patch("supporter.index.GeminiProvider", return_value=p1),
+        patch("supporter.pool.GeminiProvider", return_value=p1),
         pytest.raises(Exception, match="Internal Server Error"),
     ):
         await lb.generate("test")
@@ -184,7 +184,7 @@ async def test_dynamic_pool_5xx_error_stream() -> None:
 
     p1.generate_stream = MagicMock(side_effect=error_gen)
     with (
-        patch("supporter.index.GeminiProvider", return_value=p1),
+        patch("supporter.pool.GeminiProvider", return_value=p1),
         pytest.raises(Exception, match="Service Unavailable"),
     ):
         async for _ in lb.generate_stream("test"):
@@ -195,9 +195,9 @@ async def test_dynamic_pool_5xx_error_stream() -> None:
 @pytest.mark.asyncio
 async def test_get_provider_factories() -> None:
     with (
-        patch.object(supporter.index.config, "gemini_api_keys", ["key1"]),
+        patch.object(supporter.pool.config, "gemini_api_keys", ["key1"]),
         patch.object(
-            supporter.index.config, "gemini_live_fallback_model", "fallback-live"
+            supporter.pool.config, "gemini_live_fallback_model", "fallback-live"
         ),
     ):
         clear_providers()
@@ -207,7 +207,7 @@ async def test_get_provider_factories() -> None:
         assert "Fallback" in name
         clear_providers()
         with patch.object(
-            supporter.index.config, "gemini_fallback_model", "fallback-model"
+            supporter.pool.config, "gemini_fallback_model", "fallback-model"
         ):
             p_non_live = get_provider(live=False)
             name_non_live = p_non_live.get_name()
@@ -233,7 +233,7 @@ async def test_dynamic_pool_all_keys_fail_non_fallback() -> None:
     p1 = MagicMock()
     p1.generate = AsyncMock(side_effect=ValueError("Invalid prompt"))
     with (
-        patch("supporter.index.GeminiProvider", return_value=p1),
+        patch("supporter.pool.GeminiProvider", return_value=p1),
         pytest.raises(ValueError, match="Invalid prompt"),
     ):
         await lb.generate("test")
@@ -268,7 +268,7 @@ async def test_dynamic_pool_stream_fail_no_chunks_no_fallback() -> None:
 
     p1.generate_stream = MagicMock(side_effect=error_gen)
     with (
-        patch("supporter.index.GeminiProvider", return_value=p1),
+        patch("supporter.pool.GeminiProvider", return_value=p1),
         pytest.raises(ValueError, match="Invalid input"),
     ):
         async for _ in lb.generate_stream("test"):
@@ -278,8 +278,8 @@ async def test_dynamic_pool_stream_fail_no_chunks_no_fallback() -> None:
 @pytest.mark.asyncio
 async def test_get_provider_live_without_fallback_model() -> None:
     with (
-        patch.object(supporter.index.config, "gemini_api_keys", ["key1"]),
-        patch.object(supporter.index.config, "gemini_live_fallback_model", None),
+        patch.object(supporter.pool.config, "gemini_api_keys", ["key1"]),
+        patch.object(supporter.pool.config, "gemini_live_fallback_model", None),
     ):
         clear_providers()
         p = get_provider(live=True)
@@ -324,7 +324,7 @@ async def test_retry_on_429() -> None:
         m.generate = AsyncMock(return_value=LLMResult(text="Mocked Success"))
         return m
 
-    with patch("supporter.index.GeminiProvider", side_effect=provider_factory):
+    with patch("supporter.pool.GeminiProvider", side_effect=provider_factory):
         lb = DynamicPool(["key1", "key2", "key3"], model_name="test-model")
         result = await lb.generate("test")
     assert result.text in ["Success from Key 2", "Success from Key 3"]
@@ -362,7 +362,7 @@ async def test_fast_fail_on_503_no_retry() -> None:
         m.generate = AsyncMock(return_value=LLMResult(text="Mocked Success"))
         return m
 
-    with patch("supporter.index.GeminiProvider", side_effect=provider_factory):
+    with patch("supporter.pool.GeminiProvider", side_effect=provider_factory):
         lb = DynamicPool(["key1", "key2", "key3"], model_name="test-model")
         result = await lb.generate("test")
         assert (

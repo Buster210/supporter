@@ -23,7 +23,6 @@ def setup_env() -> Generator[None, None, None]:
 
 @pytest.fixture
 def mock_file_ops_config() -> Generator[MagicMock, None, None]:
-    """Patches file_ops config for tests."""
     with patch("supporter.tools.file_ops.config") as mock_config:
         mock_config.allowed_directories = []
         mock_config.require_write_confirmation = False
@@ -35,7 +34,7 @@ def mock_file_ops_config() -> Generator[MagicMock, None, None]:
 
 @pytest.fixture
 def mock_genai_client() -> Generator[MagicMock, None, None]:
-    with patch("supporter.providers.gemini_provider.genai.Client") as mock_client:
+    with patch("google.genai.Client") as mock_client:
         instance = create_mock_genai_client()
         mock_client.return_value = instance
         mock_client.side_effect = lambda **kwargs: instance

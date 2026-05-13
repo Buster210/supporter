@@ -8,6 +8,7 @@ import pathspec
 
 from ..config import INTERNAL_BLACKLIST, config
 from ..logger import logger
+from .base import ToolError
 
 _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
@@ -16,6 +17,24 @@ _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
 def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> None:
     global _CONFIRMATION_CALLBACK
     _CONFIRMATION_CALLBACK = callback
+
+
+def register_confirmation_callback(
+    callback: Callable[[Path, str], bool] | None,
+) -> None:
+    set_confirmation_callback(callback)
+
+
+def emit_confirmation_line(message: str = "") -> None:
+    try:
+        from textual._context import active_app
+
+        app = active_app.get()
+    except (LookupError, RuntimeError):
+        print(message)
+        return
+
+    app.log(message)
 
 
 def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
@@ -47,9 +66,9 @@ def _is_blacklisted(relative_path: str) -> bool:
     )
 
 
-def _validate_path(path: str) -> Path:
+def validate_path(path: str) -> Path:
     if not config.allowed_directories:
-        raise PermissionError("Access denied: No allowed directories configured.")
+        raise PermissionError("No allowed directories set. Check your configuration.")
 
     target_path = Path(path).expanduser()
     project_root = Path(config.allowed_directories[0]).expanduser().resolve()
@@ -62,7 +81,8 @@ def _validate_path(path: str) -> Path:
 
     if not (target_path == project_root or project_root in target_path.parents):
         raise PermissionError(
-            f"Access denied: Path {target_path} is outside project root: {project_root}"
+            f"Path '{target_path}' is outside project root '{project_root}'. "
+            "Only files within the project directory are allowed."
         )
 
     relative_path = str(target_path.relative_to(project_root))
@@ -71,13 +91,13 @@ def _validate_path(path: str) -> Path:
 
     if _is_blacklisted(relative_path):
         raise PermissionError(
-            f"Access denied: {relative_path} is a protected internal file."
+            f"File '{relative_path}' is protected and cannot be accessed."
         )
 
     spec = _get_gitignore_spec(project_root)
     if spec and spec.match_file(relative_path):
         raise PermissionError(
-            f"Access denied: {relative_path} is ignored by .gitignore"
+            f"File '{relative_path}' is ignored by .gitignore and cannot be accessed."
         )
 
     return target_path
@@ -101,26 +121,30 @@ async def read_file(
     logger.info(f"Tool: read_file — path='{path}', offset={offset}, limit={limit}")
 
     def _sync_read() -> str:
-        p = _validate_path(path)
+        p = validate_path(path)
         if not p.exists():
             return f"Error: File not found: {p}"
 
-        with p.open("r", encoding=encoding) as f:
-            if offset is not None:
-                f.seek(offset)
-            if limit is not None:
-                content = f.read(limit)
-                logger.debug(f"read_file full content: {content!r}")
+        try:
+            with p.open("r", encoding=encoding) as f:
+                if offset is not None:
+                    f.seek(offset)
+                content = f.read(limit) if limit is not None else f.read()
+                logger.debug(f"read_file content: {content!r}")
                 return content
-            content = f.read()
-            logger.debug(f"read_file full content: {content!r}")
-        return content
+        except PermissionError:
+            raise
+        except Exception as e:
+            raise ToolError(f"Could not read '{path}': {e}") from e
 
     try:
         return await asyncio.to_thread(_sync_read)
+    except PermissionError as e:
+        raise ToolError(str(e)) from e
+    except ToolError:
+        raise
     except Exception as e:
-        logger.error(f"Tool Failure: read_file [{type(e).__name__}]: {e}")
-        return f"Error reading file: {e!s}"
+        raise ToolError(f"Could not read '{path}': {e}") from e
 
 
 async def write_file(
@@ -178,15 +202,18 @@ async def write_file(
             if not _CONFIRMATION_CALLBACK(p, display_diff):
                 return "Write operation cancelled by user security preference."
         elif sys.stdin.isatty():
-            print("\n" + "=" * 60)
-            print(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
-            print(f" TARGET FILE: {p}")
-            print("-" * 60)
-            print(" PROPOSED DIFF ".center(60, "-"))
-            print(display_diff)
-            print("-" * 60)
+            emit_confirmation_line()
+            emit_confirmation_line("=" * 60)
+            emit_confirmation_line(" SECURITY CONFIRMATION REQUIRED ".center(60, "="))
+            emit_confirmation_line(f" TARGET FILE: {p}")
+            emit_confirmation_line("-" * 60)
+            emit_confirmation_line(" PROPOSED DIFF ".center(60, "-"))
+            for line in display_diff.splitlines():
+                emit_confirmation_line(line)
+            emit_confirmation_line("-" * 60)
             confirm = input(" Proceed with write? (y/n): ").lower().strip()
-            print("=" * 60 + "\n")
+            emit_confirmation_line("=" * 60)
+            emit_confirmation_line()
             if confirm not in ("y", "yes"):
                 return "Write operation cancelled by user security preference."
         else:
@@ -197,7 +224,7 @@ async def write_file(
         return None
 
     def _sync_write() -> str:
-        p = _validate_path(path)
+        p = validate_path(path)
         logger.debug(f"write_file input: {content!r}")
 
         if error_msg := _confirm_write(p, content, encoding):
@@ -235,6 +262,9 @@ async def write_file(
 
     try:
         return await asyncio.to_thread(_sync_write)
+    except PermissionError as e:
+        raise ToolError(str(e)) from e
+    except ToolError:
+        raise
     except Exception as e:
-        logger.error(f"Tool Failure: write_file [{type(e).__name__}]: {e}")
-        return f"Error writing file: {e!s}"
+        raise ToolError(f"Could not write '{path}': {e}") from e

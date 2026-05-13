@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import Callable
 from typing import Any
 
 from ..logger import logger
@@ -42,34 +41,26 @@ class ModeManager:
             await self._greeting_provider.close()
 
     async def setup_agent(self, use_live: bool = False) -> None:
-        from .. import get_provider
         from ..agent import ChatAgent
         from ..config import config
-        from ..tools import (
-            cancel_delegation,
+        from ..pool import get_provider
+        from ..tools.bash.sandbox import (
             check_bash_availability,
-            check_delegation,
-            delegate_tasks,
-            execute_bash,
             notify_bash_unavailable,
-            query_delegation,
-            read_file,
-            write_file,
+        )
+        from ..tools.catalog import (
+            ORCHESTRATOR_TOOL_NAMES,
+            build_tool_catalog,
+            select_tools,
         )
 
-        tools_registry: dict[str, Callable[..., Any]] = {
-            "read_file": read_file,
-            "write_file": write_file,
-            "delegate_tasks": delegate_tasks,
-            "check_delegation": check_delegation,
-            "cancel_delegation": cancel_delegation,
-            "query_delegation": query_delegation,
-        }
-
-        if check_bash_availability():
-            tools_registry["execute_bash"] = execute_bash
-        else:
+        bash_available = check_bash_availability()
+        if not bash_available:
             notify_bash_unavailable()
+        tools_registry = select_tools(
+            build_tool_catalog(include_bash=bash_available),
+            ORCHESTRATOR_TOOL_NAMES,
+        )
 
         provider = get_provider(live=use_live, registry=tools_registry)
 
@@ -101,7 +92,7 @@ class ModeManager:
         self._app.live_mode = live if live is not None else not self._app.live_mode
 
         logger.info(f"ModeManager: toggling mode — live={self._app.live_mode}")
-        self._app._start_thinking()
+        self._app.start_thinking()
         self._app.is_activating_mode = True
 
         try:
@@ -116,7 +107,7 @@ class ModeManager:
                     logger.error(f"ModeManager: Failed to queue greeting worker: {e}")
         finally:
             self._app.is_activating_mode = False
-            self._app._stop_thinking()
+            self._app.stop_thinking()
 
     async def trigger_live_greeting(self) -> None:
         import datetime
@@ -198,8 +189,8 @@ class ModeManager:
         handlers = {
             "/exit": self._app.exit,
             "/clear": self._app.action_clear_screen,
-            "/live": lambda: self._app._toggle_mode(live=True),
-            "/agent": lambda: self._app._toggle_mode(live=False),
+            "/live": lambda: self._app.set_live_mode(live=True),
+            "/agent": lambda: self._app.set_live_mode(live=False),
         }
 
         if cmd not in handlers:

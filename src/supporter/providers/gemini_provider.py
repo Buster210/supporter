@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-import functools
 import logging
-import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -15,27 +12,16 @@ if TYPE_CHECKING:
 
 from ..config import config
 from ..logger import logger
-from ..tools.search import google_search
+from ..tools.resolver import extract_declared_tool_names, resolve_provider_tools
 from ..types import (
     LLMChunk,
     LLMOptions,
     LLMResult,
 )
+from .gemini_messages import GeminiMessageMixin
 
 
-def __getattr__(name: str) -> Any:
-    if name == "genai":
-        from google import genai
-
-        return genai
-    if name == "types":
-        from google.genai import types
-
-        return types
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-class GeminiProvider:
+class GeminiProvider(GeminiMessageMixin):
     def __init__(
         self,
         api_key: str,
@@ -68,55 +54,19 @@ class GeminiProvider:
         self,
         prompt: str | list[Content],
         history: list[Content] | None = None,
+        user_content: Content | None = None,
     ) -> list[Content]:
         from google.genai.types import Content, Part
 
         history = history or []
+        if user_content is not None:
+            return [*history, user_content]
         fresh_content = (
             [Content(role="user", parts=[Part(text=prompt)])]
             if isinstance(prompt, str)
             else prompt
         )
         return history + fresh_content
-
-    def _wrap_tool(self, name: str, func: Callable[..., Any]) -> Callable[..., Any]:
-
-        @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            if logger.isEnabledFor(logging.INFO):
-                logger.info(
-                    f"Tool '{name}' invoked (async): args={args!r}, kwargs={kwargs!r}"
-                )
-            try:
-                result = await func(*args, **kwargs)
-                logger.info(f"Tool '{name}' completed successfully")
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Tool '{name}' full result: {result!r}")
-                return result
-            except Exception as e:
-                logger.error(f"Async tool '{name}' failed [{type(e).__name__}]: {e}")
-                raise
-
-        @functools.wraps(func)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            if logger.isEnabledFor(logging.INFO):
-                logger.info(
-                    f"Tool '{name}' invoked (sync): args={args!r}, kwargs={kwargs!r}"
-                )
-            try:
-                result = func(*args, **kwargs)
-                logger.info(f"Tool '{name}' completed successfully")
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Tool '{name}' full result: {result!r}")
-                return result
-            except Exception as e:
-                logger.error(f"Sync tool '{name}' failed [{type(e).__name__}]: {e}")
-                raise
-
-        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
-
-    def _needs_function_search(self) -> bool:
-        return bool(re.search(r"gemini.*-3\.", self.model_name.lower()))
 
     def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
         if not options:
@@ -144,42 +94,21 @@ class GeminiProvider:
 
         from google.genai import types
 
-        final_tools: list[Any] = list(tools) if tools else []
-        declared_names = self._extract_declared_tool_names(final_tools)
-
-        for name, func in registry.items():
-            if name not in declared_names:
-                final_tools.append(self._wrap_tool(name, func))
-
-        if use_search:
-            if self._needs_function_search():
-                if "google_search" not in registry:
-                    final_tools.append(self._wrap_tool("google_search", google_search))
-            else:
-                final_tools.append(types.Tool(google_search=types.GoogleSearch()))
-        if use_code_execution:
-            final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+        final_tools = resolve_provider_tools(
+            model_name=self.model_name,
+            tools=tools,
+            registry=registry,
+            use_search=use_search,
+            use_code_execution=use_code_execution,
+            google_types=types,
+        )
 
         self._tool_cache = final_tools or None
         self._last_tool_key = current_identity_key
         return self._tool_cache
 
     def _extract_declared_tool_names(self, tools: list[Any]) -> set[str]:
-        names = set()
-        for tool in tools:
-            declarations = getattr(tool, "function_declarations", [])
-            if isinstance(tool, dict):
-                declarations = tool.get("function_declarations", [])
-
-            for decl in declarations:
-                name = (
-                    decl.get("name")
-                    if isinstance(decl, dict)
-                    else getattr(decl, "name", None)
-                )
-                if name:
-                    names.add(name)
-        return names
+        return extract_declared_tool_names(tools)
 
     async def generate(
         self,
@@ -244,7 +173,12 @@ class GeminiProvider:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=cast(
-                    Any, self._prepare_contents(prompt, options.get("history"))
+                    Any,
+                    self._prepare_contents(
+                        prompt,
+                        options.get("history"),
+                        user_content=options.get("user_content"),
+                    ),
                 ),
                 config=generation_config,
             )
@@ -339,7 +273,14 @@ class GeminiProvider:
         )
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=cast(Any, self._prepare_contents(prompt, options.get("history"))),
+            contents=cast(
+                Any,
+                self._prepare_contents(
+                    prompt,
+                    options.get("history"),
+                    user_content=options.get("user_content"),
+                ),
+            ),
             config=generation_config,
         )
 

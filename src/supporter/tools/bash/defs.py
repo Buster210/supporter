@@ -28,9 +28,6 @@ AUTO_APPROVED_BINARIES = {
     "stat",
     "sed",
     "awk",
-    "tar",
-    "zip",
-    "unzip",
     "gzip",
     "ln",
 }
@@ -84,22 +81,24 @@ NETWORK_EGRESS_BINARIES = {
     "tftp",
 }
 
-SHELL_SPECIAL_TOKENS = {
-    "|",
-    ">",
-    ">>",
-    "<",
-    "&",
-    ";",
-    "$",
-    "~",
-    "`",
-    "$(",
-    ")",
-    "(",
-    "&&",
-    "||",
+
+MUTATING_BINARIES = {
+    "cp",
+    "mv",
+    "rm",
+    "mkdir",
+    "rmdir",
+    "touch",
+    "tee",
+    "dd",
+    "chmod",
+    "chown",
+    "ln",
+    "install",
+    "patch",
 }
+
+WRITE_REDIRECT_TOKENS = {">", ">>"}
 
 SENSITIVE_SYSTEM_PATHS = {
     "/etc",
@@ -141,13 +140,17 @@ SENSITIVE_FILE_PATTERNS = [
     ".kube/config",
 ]
 
-SECRET_VALUE_PATTERNS = [
+SECRET_LITERAL_PATTERNS = [
     r"AIza[0-9A-Za-z\-_]{35}",
     r"sk-[a-zA-Z0-9]{32,}",
     r"AKIA[0-9A-Z]{16}",
     r"ghp_[a-zA-Z0-9]{36}",
-    r"(?i)(password|secret|token|api_key)\s*[=:]\s*\S+",
 ]
+
+SECRET_KEYWORD_TRIGGERS = ("password", "secret", "token", "api_key")
+SECRET_KEYWORD_PATTERN = (
+    r"(?i)(" + "|".join(SECRET_KEYWORD_TRIGGERS) + r")\s*[=:]\s*\S+"
+)
 
 NETWORK_UPLOAD_FLAGS = {
     "-F",
@@ -172,24 +175,16 @@ PACKAGE_MANAGER_BINARIES = {
 }
 
 AUTO_APPROVED_GIT_SUBCOMMANDS = {
-    "add",
     "branch",
     "describe",
     "diff",
-    "fetch",
     "log",
     "ls-files",
     "remote",
     "rev-parse",
     "shortlog",
     "show",
-    "stash",
     "status",
-    "commit",
-    "checkout",
-    "merge",
-    "push",
-    "pull",
 }
 
 INLINE_PAYLOAD_INTERPRETER_BINARIES = {
@@ -311,3 +306,28 @@ CONFIRMATION_REQUIRED_BINARIES = {
     "xargs",
     "parallel",
 }
+
+# Security Tiers
+TIER_SAFE = 1
+TIER_CONFIRM = 2
+TIER_BLOCK = 3
+
+# Resource Limits
+CPU_LIMIT_SEC = 10
+MEM_LIMIT_BYTES = 1024 * 1024 * 1024
+
+# Timeouts
+EXECUTION_TIMEOUT_SEC = 30
+
+# Buffers
+OUTPUT_BUFFER_LIMIT = 100 * 1024
+
+# Network Data Prefixes
+NETWORK_DATA_PREFIXES = [
+    "-d@",
+    "--data@",
+    "-d @",
+    "--data @",
+    "--data-binary @",
+    "--data-urlencode @",
+]

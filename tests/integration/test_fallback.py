@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from supporter.index import LazyFallbackProvider
+from supporter.pool import LazyFallbackProvider
 
 
 @pytest.mark.asyncio

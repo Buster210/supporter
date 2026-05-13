@@ -33,6 +33,7 @@ class LLMOptions(TypedDict, total=False):
     top_k: int
     max_output_tokens: int
     config: GenerateContentConfig
+    user_content: Any
 
 
 @dataclass
@@ -65,23 +66,12 @@ class AppConfig:
     delegate_max_timeout: int
     delegate_max_tasks: int
     delegate_max_output_chars: int
-    delegate_allowed_tools: set[str]
     delegate_default_persona: str
     delegate_agent_roster: dict[str, dict[str, Any]]
     delegate_max_retries: int
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
     history_max_turns: int = 200
-
-
-@dataclass
-class MockCandidate:
-    grounding_metadata: Any
-
-
-@dataclass
-class MockRaw:
-    candidates: list[MockCandidate]
 
 
 @dataclass
@@ -125,6 +115,12 @@ class LLMProvider(Protocol):
     ) -> AsyncIterator[LLMChunk]: ...
 
     def get_name(self) -> str: ...
+
+    def build_user_message(self, prompt: str) -> Any: ...
+
+    def extract_assistant_message(self, result: LLMResult) -> Any | None: ...
+
+    def build_assistant_message(self, text: str) -> Any: ...
 
 
 @dataclass(frozen=True)

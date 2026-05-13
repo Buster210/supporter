@@ -12,7 +12,7 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Label, Static
 
-from ..config import (
+from .constants import (
     COLLAPSED_SUMMARY_LEN,
     MARKDOWN_SYNTAX_MARKERS,
     RENDER_COALESCE_INTERVAL,

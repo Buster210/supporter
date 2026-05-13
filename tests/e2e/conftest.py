@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from google.genai.types import Content, Part
 
-from supporter.index import LLMProvider, clear_providers
+from supporter.pool import LLMProvider, clear_providers
 from supporter.types import LLMChunk, LLMOptions, LLMResult
 
 TEST_MODEL = "gemini-3.1-flash-lite-preview"
@@ -48,6 +48,17 @@ class MockLLMProvider(LLMProvider):
         for i, word in enumerate(words):
             is_last = i == len(words) - 1
             yield LLMChunk(text=word + " ", model="mock-model", is_last=is_last)
+
+    def build_user_message(self, prompt: str) -> Any:
+        return Content(role="user", parts=[Part(text=prompt)])
+
+    def extract_assistant_message(self, result: LLMResult) -> Any | None:
+        if not result.candidates or not result.candidates[0].content:
+            return None
+        return Content(role="model", parts=result.candidates[0].content.parts)
+
+    def build_assistant_message(self, text: str) -> Any:
+        return Content(role="model", parts=[Part(text=text)])
 
 
 @pytest.fixture(autouse=True)

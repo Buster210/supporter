@@ -4,12 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supporter.config import (
-    DEFAULT_SYSTEM_INSTRUCTION,
-    AppConfig,
-    _get_project_root,
-    load_config,
-)
+from supporter.config import AppConfig, _get_project_root, load_config
+from supporter.prompts import DEFAULT_SYSTEM_INSTRUCTION
 
 
 class TestGetProjectRoot:
@@ -140,12 +136,6 @@ class TestAppConfig:
             delegate_max_timeout=600,
             delegate_max_tasks=10,
             delegate_max_output_chars=10000,
-            delegate_allowed_tools={
-                "read_file",
-                "write_file",
-                "execute_bash",
-                "google_search",
-            },
             delegate_default_persona="Default persona",
             delegate_agent_roster={},
             delegate_max_retries=2,
@@ -186,3 +176,10 @@ class TestDefaultSystemInstruction:
             "Do not frame the final answer as a sub-agent completion update"
             in DEFAULT_SYSTEM_INSTRUCTION
         )
+
+    def test_single_delegation_names_agent_role(self) -> None:
+        assert (
+            "If N=1: Delegating **<milestone>** to **<agent_role>**:"
+            in DEFAULT_SYSTEM_INSTRUCTION
+        )
+        assert "instead of '1 subagent'" in DEFAULT_SYSTEM_INSTRUCTION

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +9,15 @@ from textual.widgets import Input
 from supporter.tui import SupporterApp
 
 from .conftest import MockLLMProvider
+
+
+def test_tui_uses_tool_registration_boundary() -> None:
+    tui_source = Path("src/supporter/tui/__init__.py").read_text()
+
+    assert "register_confirmation_callback" in tui_source
+    assert "register_bash_callbacks" in tui_source
+    assert "set_confirmation_callback" not in tui_source
+    assert "set_bash_confirmation_callback" not in tui_source
 
 
 @pytest.mark.e2e

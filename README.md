@@ -1,14 +1,15 @@
-# Suppporter
+# Supporter
 
 A Python-based TUI AI chat client using the Google Gemini model.
 
 ## Features
 
-- **Round-Robin Load Balancing**: Support for multiple Gemini API keys.
+- **Multi-agent Delegation**: Integrated DAG-based task scheduling and multi-agent collaboration.
+- **Round-Robin Load Balancing**: Support for multiple Gemini API keys with health-aware rotation.
 - **Model Fallback**: Automatically switches to a fallback model if the primary model fails.
 - **Real-time Streaming**: Asynchronous response streaming for immediate feedback.
-- **TUI Interface**: A beautiful terminal user interface built with Textual.
-- **Tool Support**: Integrated tool registry for agentic capabilities.
+- **TUI Interface**: A beautiful terminal user interface built with Textual and Rich.
+- **Tool Support**: Integrated tool registry for agentic capabilities (Bash, File Ops, Search).
 - **Observability**: Detailed lifecycle logging and diagnostic tracing.
 
 ## Installation
@@ -34,6 +35,7 @@ uv sync --extra dev
    ```bash
    GEMINI_API_KEYS=your_key_1,your_key_2
    GEMINI_MODEL=gemma-4-31b-it
+   GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
    GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
    LOG_LEVEL=info
    ```
@@ -41,13 +43,7 @@ uv sync --extra dev
 2. Run the TUI:
 
    ```bash
-   supporter
-   ```
-
-   Or directly:
-
-   ```bash
-   uv run python src/supporter/tui.py
+   uv run supporter
    ```
 
 ## Testing
@@ -69,5 +65,7 @@ uv run pytest tests -m e2e           # e2e tests only
 ## Linting
 
 ```bash
-uv run ruff check .
+uv run ruff check .      # Lint check
+uv run ruff format .     # Format code
+uv run mypy .            # Type check
 ```

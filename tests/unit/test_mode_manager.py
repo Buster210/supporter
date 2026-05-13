@@ -10,7 +10,6 @@ from tests.tui_mocks import MockApp
 
 
 def _make_manager(app: Any) -> ModeManager:
-    """Create ModeManager with mocked GeminiLiveProvider to avoid IndexError."""
     with patch(
         "supporter.providers.gemini_live_provider.GeminiLiveProvider"
     ) as mock_cls:
@@ -26,9 +25,11 @@ async def test_setup_agent_bash_unavailable() -> None:
     app = MagicMock()
     manager = _make_manager(app)
     with (
-        patch("supporter.tools.check_bash_availability", return_value=False),
-        patch("supporter.tools.notify_bash_unavailable") as mock_notify,
-        patch("supporter.get_provider"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=False
+        ),
+        patch("supporter.tools.bash.sandbox.notify_bash_unavailable") as mock_notify,
+        patch("supporter.pool.get_provider"),
         patch("supporter.agent.ChatAgent"),
     ):
         await manager.setup_agent(use_live=False)
@@ -70,8 +71,8 @@ async def test_handle_command_unknown() -> None:
 async def test_toggle_mode_live_set() -> None:
     app = MagicMock()
     app.live_mode = False
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app.is_activating_mode = False
     app.post_message = MagicMock()
     manager = _make_manager(app)
@@ -88,8 +89,8 @@ async def test_toggle_mode_live_set() -> None:
 async def test_toggle_mode_agent_set() -> None:
     app = MagicMock()
     app.live_mode = True
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app.is_activating_mode = False
     app.post_message = MagicMock()
     manager = _make_manager(app)
@@ -104,11 +105,11 @@ async def test_toggle_mode_agent_set() -> None:
 @pytest.mark.asyncio
 async def test_handle_command_agent() -> None:
     app = MagicMock()
-    app._toggle_mode = AsyncMock()
+    app.set_live_mode = AsyncMock()
     manager = _make_manager(app)
     result = await manager.handle_command("/agent")
     assert result is True
-    app._toggle_mode.assert_called_once_with(live=False)
+    app.set_live_mode.assert_called_once_with(live=False)
 
 
 @pytest.mark.asyncio
@@ -151,13 +152,15 @@ async def test_setup_agent_dispatch() -> None:
     app = MockApp()
     manager = _make_manager(app)
     with (
-        patch("supporter.get_provider") as mock_get_provider,
+        patch("supporter.pool.get_provider") as mock_get_provider,
         patch("supporter.agent.ChatAgent") as mock_chat_agent,
-        patch("supporter.tools.check_bash_availability", return_value=True),
-        patch("supporter.tools.execute_bash"),
-        patch("supporter.tools.read_file"),
-        patch("supporter.tools.write_file"),
-        patch("supporter.tools.google_search"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=True
+        ),
+        patch("supporter.tools.bash.executor.execute_bash"),
+        patch("supporter.tools.file_ops.read_file"),
+        patch("supporter.tools.file_ops.write_file"),
+        patch("supporter.tools.search.google_search"),
     ):
         mock_provider = MagicMock()
         mock_get_provider.return_value = mock_provider
@@ -165,6 +168,52 @@ async def test_setup_agent_dispatch() -> None:
         mock_get_provider.assert_called_with(live=True, registry=ANY)
         mock_chat_agent.assert_called_once()
         assert app.agent is not None
+
+
+@pytest.mark.asyncio
+async def test_setup_agent_registry_tools() -> None:
+    app = MockApp()
+    manager = _make_manager(app)
+    with (
+        patch("supporter.pool.get_provider") as mock_get_provider,
+        patch("supporter.agent.ChatAgent"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=True
+        ),
+        patch("supporter.tools.bash.executor.execute_bash"),
+    ):
+        mock_get_provider.return_value = MagicMock()
+        await manager.setup_agent(use_live=False)
+
+    registry = mock_get_provider.call_args.kwargs["registry"]
+    assert set(registry) == {
+        "read_file",
+        "write_file",
+        "delegate_tasks",
+        "check_delegation",
+        "cancel_delegation",
+        "query_delegation",
+        "execute_bash",
+    }
+
+
+@pytest.mark.asyncio
+async def test_setup_agent_no_bash() -> None:
+    app = MockApp()
+    manager = _make_manager(app)
+    with (
+        patch("supporter.pool.get_provider") as mock_get_provider,
+        patch("supporter.agent.ChatAgent"),
+        patch(
+            "supporter.tools.bash.sandbox.check_bash_availability", return_value=False
+        ),
+        patch("supporter.tools.bash.sandbox.notify_bash_unavailable"),
+    ):
+        mock_get_provider.return_value = MagicMock()
+        await manager.setup_agent(use_live=False)
+
+    registry = mock_get_provider.call_args.kwargs["registry"]
+    assert "execute_bash" not in registry
 
 
 @pytest.mark.asyncio
@@ -210,12 +259,8 @@ async def test_trigger_live_greeting_shows_loading_then_replaces() -> None:
     assert banner.message == "Hello there!"
 
 
-# --- Tests for uncovered lines ---
-
-
 @pytest.mark.asyncio
 async def test_toggle_mode_already_in_same_mode() -> None:
-    """Lines 85-94: already in requested mode shows bubble."""
     app = MagicMock()
     app.live_mode = True
     active_turn = AsyncMock()
@@ -227,7 +272,6 @@ async def test_toggle_mode_already_in_same_mode() -> None:
 
 @pytest.mark.asyncio
 async def test_toggle_mode_already_in_agent_mode() -> None:
-    """Lines 85-94: already in SINGLE Agent mode, no active_turn."""
     app = MagicMock()
     app.live_mode = False
     app.active_turn = None
@@ -240,11 +284,10 @@ async def test_toggle_mode_already_in_agent_mode() -> None:
 
 @pytest.mark.asyncio
 async def test_toggle_mode_live_greeting_failure() -> None:
-    """Lines 110-111: greeting failure is caught, mode still activates."""
     app = MagicMock()
     app.live_mode = False
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app.is_activating_mode = False
     app.post_message = MagicMock()
     manager = _make_manager(app)
@@ -262,12 +305,11 @@ async def test_toggle_mode_live_greeting_failure() -> None:
         await manager.toggle_mode(live=True)
     assert app.live_mode is True
     assert app.is_activating_mode is False
-    app._stop_thinking.assert_called_once()
+    app.stop_thinking.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_trigger_live_greeting_empty_text_fallback() -> None:
-    """Line 151: empty stream text falls back to default greeting."""
 
     class Banner:
         def __init__(self) -> None:
@@ -292,7 +334,6 @@ async def test_trigger_live_greeting_empty_text_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_live_greeting_exception_fallback() -> None:
-    """Lines 154-156: exception during greeting sets fallback."""
     app = MagicMock()
     banner = MagicMock()
     app.query_one = MagicMock(return_value=banner)
@@ -312,7 +353,6 @@ async def test_trigger_live_greeting_exception_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_live_greeting_cancels_loading_in_finally() -> None:
-    """Lines 160-162: finally block cancels loading_task if still running."""
     app = MagicMock()
     banner = MagicMock()
     app.query_one = MagicMock(return_value=banner)
@@ -327,5 +367,4 @@ async def test_trigger_live_greeting_cancels_loading_in_finally() -> None:
     manager._greeting_provider.generate_stream = immediate_fail_stream
     manager._warmup_task = None
 
-    # Should not raise - finally block handles cleanup
     await manager.trigger_live_greeting()

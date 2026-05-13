@@ -1,4 +1,4 @@
-from supporter.config import CRYSTAL_GRADIENT_STOPS, THEME
+from supporter.tui.constants import CRYSTAL_GRADIENT_STOPS, THEME
 from supporter.tui.utils import apply_crystal_gradient
 
 

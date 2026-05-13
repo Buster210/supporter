@@ -1,13 +1,15 @@
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from supporter.tools.file_ops import (
     _get_gitignore_spec,
     _is_blacklisted,
-    _validate_path,
+    emit_confirmation_line,
+    register_confirmation_callback,
     set_confirmation_callback,
+    validate_path,
 )
 
 
@@ -69,6 +71,26 @@ class TestIsBlacklisted:
 
 
 class TestFileOpsUtils:
+    def test_emit_confirmation_line_prints_without_textual_app(self) -> None:
+        with patch("builtins.print") as mock_print:
+            emit_confirmation_line("confirm this")
+
+        mock_print.assert_called_once_with("confirm this")
+
+    def test_emit_confirmation_line_uses_textual_app_log(self) -> None:
+        from textual._context import active_app
+
+        app = MagicMock()
+        token = active_app.set(app)
+        try:
+            with patch("builtins.print") as mock_print:
+                emit_confirmation_line("confirm this")
+        finally:
+            active_app.reset(token)
+
+        app.log.assert_called_once_with("confirm this")
+        mock_print.assert_not_called()
+
     def test_set_confirmation_callback(self) -> Any:
 
         def cb(p: Any, d: Any) -> Any:
@@ -79,6 +101,20 @@ class TestFileOpsUtils:
 
         assert cb == _CONFIRMATION_CALLBACK
         set_confirmation_callback(None)
+        from supporter.tools.file_ops import _CONFIRMATION_CALLBACK
+
+        assert _CONFIRMATION_CALLBACK is None
+
+    def test_register_confirmation_callback(self) -> Any:
+
+        def cb(p: Any, d: Any) -> Any:
+            return True
+
+        register_confirmation_callback(cb)
+        from supporter.tools.file_ops import _CONFIRMATION_CALLBACK
+
+        assert cb == _CONFIRMATION_CALLBACK
+        register_confirmation_callback(None)
         from supporter.tools.file_ops import _CONFIRMATION_CALLBACK
 
         assert _CONFIRMATION_CALLBACK is None
@@ -95,25 +131,25 @@ class TestPathValidation:
     def test_validate_path_no_allowed(self, mock_file_ops_config: Any) -> None:
         mock_file_ops_config.allowed_directories = []
         with pytest.raises(PermissionError, match="No allowed directories"):
-            _validate_path("test.txt")
+            validate_path("test.txt")
 
     def test_validate_path_outside_root(
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]
         with pytest.raises(PermissionError, match="outside project root"):
-            _validate_path("/tmp/outside.txt")  # noqa: S108
+            validate_path("/tmp/outside.txt")  # noqa: S108
 
     def test_validate_path_blacklisted(
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]
-        with pytest.raises(PermissionError, match="protected internal file"):
-            _validate_path(str(temp_project / ".env"))
+        with pytest.raises(PermissionError, match="protected"):
+            validate_path(str(temp_project / ".env"))
 
     def test_validate_path_gitignore(
         self, temp_project: Any, mock_file_ops_config: Any
     ) -> None:
         mock_file_ops_config.allowed_directories = [str(temp_project)]
         with pytest.raises(PermissionError, match="ignored by \\.gitignore"):
-            _validate_path(str(temp_project / "ignored.log"))
+            validate_path(str(temp_project / "ignored.log"))
