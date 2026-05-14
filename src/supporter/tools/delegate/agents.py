@@ -25,7 +25,11 @@ def _create_sub_agent(
     registry = select_delegate_tools(build_tool_catalog(), task["tools"])
     if not provider:
         provider = get_provider(
-            shared=False, model_name=task["model"], registry=registry
+            shared=False,
+            live=task.get("live", False),
+            model_name=task["model"],
+            registry=registry,
+            system_instruction=task["persona"],
         )
 
     agent = ChatAgent(
@@ -84,6 +88,7 @@ async def run_sub_agent(
                 f"Sub-agent '{task_id}' [{agent_label}] attempt {attempt + 1} started"
             )
 
+            agent: ChatAgent | None = None
             try:
                 agent, prompt = _create_sub_agent(
                     task,
@@ -138,5 +143,16 @@ async def run_sub_agent(
                 if attempt < max_retries:
                     continue
                 return last_result
+            finally:
+                if task.get("live") and agent is not None:
+                    close_fn = getattr(agent.provider, "close", None)
+                    if close_fn:
+                        try:
+                            await close_fn()
+                        except Exception as close_err:
+                            logger.warning(
+                                f"Sub-agent '{task_id}' live session close failed: "
+                                f"{close_err}"
+                            )
 
     return last_result

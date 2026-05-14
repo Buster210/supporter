@@ -18,10 +18,9 @@ from ..types import (
     LLMOptions,
     LLMResult,
 )
-from .gemini_messages import GeminiMessageMixin
 
 
-class GeminiProvider(GeminiMessageMixin):
+class GeminiProvider:
     def __init__(
         self,
         api_key: str,

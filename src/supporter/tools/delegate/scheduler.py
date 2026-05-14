@@ -107,7 +107,7 @@ async def _execute_dag(
     priorities: dict[str, int] = {
         t["id"]: _compute_priority(t["id"], tasks) for t in tasks
     }
-    milestone_pools: dict[str, LLMProvider] = {}
+    milestone_pools: dict[tuple[str, bool], LLMProvider] = {}
 
     async def _run_with_gate(task: dict[str, Any]) -> None:
         for dep_id in task["depends_on"]:
@@ -173,13 +173,19 @@ async def _execute_dag(
         )
 
         model = task["model"]
-        if model not in milestone_pools:
-            milestone_pools[model] = get_provider(
-                shared=False, model_name=model, pool_size=parallel_limit
-            )
+        live = task.get("live", False)
+        if live:
+            provider = None
+        else:
+            pool_key = (model, live)
+            if pool_key not in milestone_pools:
+                milestone_pools[pool_key] = get_provider(
+                    shared=False, model_name=model, pool_size=parallel_limit
+                )
+            provider = milestone_pools[pool_key]
 
         result = await run_sub_agent(
-            enriched, semaphore, bus, job_id, provider=milestone_pools[model]
+            enriched, semaphore, bus, job_id, provider=provider
         )
         results[task_id] = result
 

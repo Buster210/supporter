@@ -19,7 +19,6 @@ from ..types import (
     LLMOptions,
     LLMResult,
 )
-from .gemini_messages import GeminiMessageMixin
 
 
 @dataclass
@@ -32,7 +31,7 @@ class _LiveResultRaw:
     candidates: list[_LiveResultCandidate]
 
 
-class GeminiLiveProvider(GeminiMessageMixin):
+class GeminiLiveProvider:
     def __init__(
         self,
         api_keys: list[str],

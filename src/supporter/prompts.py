@@ -18,6 +18,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         ),
         "tools": {"read_file", "execute_bash"},
         "model": None,
+        "live": False,
     },
     "test_engineer": {
         "persona": (
@@ -27,6 +28,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         ),
         "tools": {"read_file", "execute_bash"},
         "model": None,
+        "live": False,
     },
     "code_writer": {
         "persona": (
@@ -36,6 +38,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         ),
         "tools": {"read_file", "write_file", "execute_bash"},
         "model": None,
+        "live": False,
     },
     "researcher": {
         "persona": (
@@ -45,6 +48,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         ),
         "tools": {"read_file", "google_search"},
         "model": None,
+        "live": False,
     },
     "code_reviewer": {
         "persona": (
@@ -54,6 +58,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         ),
         "tools": {"read_file"},
         "model": None,
+        "live": False,
     },
     "scout": {
         "persona": (
@@ -66,7 +71,8 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "be a dense summary designed to minimize token usage for the next agent."
         ),
         "tools": {"read_file", "execute_bash"},
-        "model": "gemini-3.1-flash-lite-preview",
+        "model": None,
+        "live": False,
     },
 }
 

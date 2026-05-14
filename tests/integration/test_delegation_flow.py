@@ -33,12 +33,6 @@ class ScriptedProvider:
     def get_name(self) -> str:
         return "scripted-provider"
 
-    def build_user_message(self, prompt: str) -> str:
-        return prompt
-
-    def extract_assistant_message(self, result: LLMResult) -> str:
-        return result.text
-
     async def generate(
         self, prompt: str, options: LLMOptions | None = None
     ) -> LLMResult:
@@ -71,12 +65,6 @@ class BlockingProvider:
 
     def get_name(self) -> str:
         return "blocking-provider"
-
-    def build_user_message(self, prompt: str) -> str:
-        return prompt
-
-    def extract_assistant_message(self, result: LLMResult) -> str:
-        return result.text
 
     async def generate(
         self, prompt: str, options: LLMOptions | None = None
