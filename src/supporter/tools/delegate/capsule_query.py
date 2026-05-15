@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -112,9 +113,14 @@ def duration(value: Any) -> float:
         return 0.0
 
 
-def load_all_capsules() -> list[dict[str, Any]]:
+def load_all_capsules(limit: int | None = None) -> list[dict[str, Any]]:
+    paths = list(capsule_files())
+    with contextlib.suppress(OSError):
+        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if limit is not None:
+        paths = paths[: max(limit * 2, limit + 10)]
     capsules: dict[str, dict[str, Any]] = {}
-    for path in capsule_files():
+    for path in paths:
         try:
             with path.open(encoding="utf-8") as f:
                 data: Any = json.load(f)
@@ -127,4 +133,8 @@ def load_all_capsules() -> list[dict[str, Any]]:
                 f"Failed to load delegation capsule "
                 f"[path={path}, error={type(exc).__name__}: {exc}]"
             )
-    return list(capsules.values())
+    result = list(capsules.values())
+    if limit is not None:
+        result.sort(key=lambda c: str(c.get("updated_at", "")), reverse=True)
+        result = result[:limit]
+    return result

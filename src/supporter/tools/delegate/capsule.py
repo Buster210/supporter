@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,8 +21,21 @@ _EVIDENCE_KEYS = ("files_read", "files_changed", "commands_run", "sources")
 EVIDENCE_KEYS = _EVIDENCE_KEYS
 
 _CAPSULE_LOCKS: dict[str, asyncio.Lock] = {}
-_CAPSULE_CACHE: dict[str, dict[str, Any]] = {}
+_CAPSULE_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _CAPSULE_DIRTY_COUNT: dict[str, int] = {}
+
+CAPSULE_FLUSH_EVERY = 5
+CAPSULE_CACHE_MAX = 64
+TERMINAL_CAPSULE_STATUSES = {"completed", "completed_with_failures", "cancelled"}
+
+
+async def _cache_set(job_id: str, capsule: dict[str, Any]) -> None:
+    _CAPSULE_CACHE[job_id] = capsule
+    _CAPSULE_CACHE.move_to_end(job_id)
+    while len(_CAPSULE_CACHE) > CAPSULE_CACHE_MAX:
+        evict_id, evict_capsule = _CAPSULE_CACHE.popitem(last=False)
+        if _CAPSULE_DIRTY_COUNT.pop(evict_id, 0) > 0:
+            await asyncio.to_thread(_save_capsule_sync, evict_capsule)
 
 
 def utc_now() -> str:
@@ -73,10 +87,14 @@ async def create_capsule(
     }
     async with _capsule_lock(job_id):
         await save_capsule(capsule)
+        await _cache_set(job_id, capsule)
     return capsule
 
 
 def load_capsule(job_id: str) -> dict[str, Any]:
+    cached = _CAPSULE_CACHE.get(job_id)
+    if cached is not None:
+        return cached
     path = capsule_path(job_id)
     with path.open(encoding="utf-8") as f:
         data: Any = json.load(f)
@@ -151,7 +169,7 @@ def _save_capsule_sync(capsule: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.tmp")
     with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(capsule, f, indent=2, ensure_ascii=False)
+        json.dump(capsule, f, ensure_ascii=False)
         f.write("\n")
     tmp_path.replace(path)
 
@@ -165,13 +183,36 @@ async def update_capsule(
 ) -> dict[str, Any] | None:
     path = capsule_path(job_id)
     async with _capsule_lock(job_id):
-        if not path.exists():
-            raise FileNotFoundError(f"Delegation capsule missing during update: {path}")
         try:
-            capsule = await asyncio.to_thread(_read_capsule_sync, path, job_id)
+            capsule = _CAPSULE_CACHE.get(job_id)
+            if capsule is None:
+                if not path.exists():
+                    raise FileNotFoundError(
+                        f"Delegation capsule missing during update: {path}"
+                    )
+                capsule = await asyncio.to_thread(_read_capsule_sync, path, job_id)
+                await _cache_set(job_id, capsule)
+            else:
+                _CAPSULE_CACHE.move_to_end(job_id)
+            pre_status = capsule.get("status")
             mutator(capsule)
             capsule["updated_at"] = utc_now()
-            await save_capsule(capsule)
+            post_status = capsule.get("status")
+            status_changed = pre_status != post_status
+            dirty = _CAPSULE_DIRTY_COUNT.get(job_id, 0) + 1
+            is_terminal = post_status in TERMINAL_CAPSULE_STATUSES
+            if is_terminal or status_changed or dirty >= CAPSULE_FLUSH_EVERY:
+                try:
+                    await save_capsule(capsule)
+                except Exception:
+                    _CAPSULE_CACHE.pop(job_id, None)
+                    _CAPSULE_DIRTY_COUNT.pop(job_id, None)
+                    raise
+                _CAPSULE_DIRTY_COUNT[job_id] = 0
+                if is_terminal:
+                    _CAPSULE_CACHE.pop(job_id, None)
+            else:
+                _CAPSULE_DIRTY_COUNT[job_id] = dirty
             return capsule
         except Exception as exc:
             logger.error(
