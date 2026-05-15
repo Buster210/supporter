@@ -1,3 +1,5 @@
+import re
+
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 THEME = {
@@ -25,12 +27,15 @@ SCROLL_STEP = 5
 COLLAPSED_SUMMARY_LEN = 50
 RENDER_COALESCE_INTERVAL = 0.08
 MARKDOWN_SYNTAX_MARKERS = [
-    r"[*+-]\s",
-    r"\d+\.\s",
-    r"#+\s",
-    r"\*\*.*?\*\*",
-    r"\*.*?\*",
-    r"`.*?`",
-    r"\[.*?\]\(.*?\)",
-    r">\s",
+    re.compile(p, re.MULTILINE)
+    for p in (
+        r"[*+-]\s",
+        r"\d+\.\s",
+        r"#+\s",
+        r"\*\*.*?\*\*",
+        r"\*.*?\*",
+        r"`.*?`",
+        r"\[.*?\]\(.*?\)",
+        r">\s",
+    )
 ]

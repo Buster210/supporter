@@ -134,7 +134,7 @@ class MessageBubble(Vertical):
     def _should_use_markdown(self, text: str) -> bool:
         if not _MARKDOWN_TRIGGER_RE.search(text):
             return False
-        return any(re.search(m, text, re.MULTILINE) for m in MARKDOWN_SYNTAX_MARKERS)
+        return any(m.search(text) for m in MARKDOWN_SYNTAX_MARKERS)
 
     def _element_is_markdown(self, el: dict[str, Any]) -> bool:
         if el.get("is_markdown") is True:

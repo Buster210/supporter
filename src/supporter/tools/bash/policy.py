@@ -38,6 +38,15 @@ _RESOLVED_SENSITIVE_SYSTEM_PATHS: tuple[str, ...] = tuple(
     str(Path(d).expanduser().resolve()) for d in SENSITIVE_SYSTEM_PATHS
 )
 
+_GLOBAL_FLAGS: frozenset[str] = frozenset({"-g", "--global", "--user"})
+
+_RISKY_NODE_RE = re.compile(
+    r"(require\((?!['\"][\w./\-@]+['\"])|import\(|child_process|"
+    r"fs\.(?:write|unlink|rm|rename|truncate)|process\.|eval|Function\(|"
+    r"Buffer\.from\(.*'base64'\)|atob\(|btoa\(|"
+    r"(?:global|globalThis|process)\s*\[)"
+)
+
 
 @lru_cache(maxsize=128)
 def verify_binary(command_name: str) -> Path:
@@ -94,7 +103,7 @@ def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
     ):
         return TIER_BLOCK
 
-    if any(token in tokens for token in ["-g", "--global", "--user"]):
+    if any(t in _GLOBAL_FLAGS for t in tokens):
         return TIER_BLOCK
 
     is_install = any(token in PACKAGE_INSTALL_SUBCOMMANDS for token in tokens)
@@ -287,13 +296,7 @@ def _inspect_python(payload: str) -> int:
 
 
 def _inspect_node(payload: str) -> int:
-    risky_regex = (
-        r"(require\((?!['\"][\w./\-@]+['\"])|import\(|child_process|"
-        r"fs\.(?:write|unlink|rm|rename|truncate)|process\.|eval|Function\(|"
-        r"Buffer\.from\(.*'base64'\)|atob\(|btoa\(|"
-        r"(?:global|globalThis|process)\s*\[)"
-    )
-    if re.search(risky_regex, payload) or ("`" in payload and "${" in payload):
+    if _RISKY_NODE_RE.search(payload) or ("`" in payload and "${" in payload):
         return TIER_BLOCK
     return TIER_SAFE
 
