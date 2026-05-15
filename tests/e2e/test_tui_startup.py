@@ -112,8 +112,10 @@ async def test_tui_clear_screen_action(mock_provider: MockLLMProvider) -> None:
     ):
         async with app.run_test() as pilot:
             await pilot.pause()
+            app.active_turn = MagicMock()
             app.action_clear_screen()
             assert len(list(app.query_one("#chat-view").children)) == 0
+            assert app.active_turn is None
 
 
 @pytest.mark.e2e

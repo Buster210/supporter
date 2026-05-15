@@ -10,6 +10,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
+from textual.timer import Timer
 from textual.widgets import Label, Static
 
 from .bubble import MessageBubble
@@ -23,11 +24,15 @@ _SUPPORTER_ART = (
     " ▀▀█ █ █ █▀▀ █▀▀ █ █ █▀▄  █  █▀▀ █▀▄ \n"
     " ▀▀▀ ▀▀▀ ▀   ▀   ▀▀▀ ▀ ▀  ▀  ▀▀▀ ▀ ▀ "
 )
+_SUPPORTER_ART_RENDERED: Text | None = None
 
 
 class SupporterHeader(Static):
     def render(self) -> Text:
-        return apply_crystal_gradient(_SUPPORTER_ART)
+        global _SUPPORTER_ART_RENDERED
+        if _SUPPORTER_ART_RENDERED is None:
+            _SUPPORTER_ART_RENDERED = apply_crystal_gradient(_SUPPORTER_ART)
+        return _SUPPORTER_ART_RENDERED
 
 
 class WelcomeBanner(Static):
@@ -42,13 +47,11 @@ class WelcomeBanner(Static):
 
 class ChatContainer(Vertical):
     def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
-        for _ in range(SCROLL_STEP):
-            self.scroll_down()
+        self.scroll_to(y=self.scroll_y + SCROLL_STEP, animate=False)
         event.prevent_default()
 
     def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
-        for _ in range(SCROLL_STEP):
-            self.scroll_up()
+        self.scroll_to(y=self.scroll_y - SCROLL_STEP, animate=False)
         event.prevent_default()
 
     def watch_scroll_y(self, _old_value: float, new_value: float) -> None:
@@ -70,7 +73,11 @@ class ChatContainer(Vertical):
             return
 
         wrapper = self._scroll_wrapper
-        at_bottom = self.scroll_y >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
+        at_bottom = (
+            self.max_scroll_y <= 0
+            or getattr(self, "_was_at_bottom", True)
+            or self.scroll_y >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
+        )
         if not at_bottom:
             if wrapper.has_class("hidden"):
                 wrapper.remove_class("hidden")
@@ -147,8 +154,10 @@ class ThinkingIndicator(Static):
     active_queries = reactive(0)
     is_activating_mode = reactive(False)
 
+    _timer: Timer | None
+
     def on_mount(self) -> None:
-        self._timer = self.set_interval(0.1, self._tick)
+        self._timer = None
         for prop in [
             "status_label",
             "active_queries",
@@ -162,6 +171,17 @@ class ThinkingIndicator(Static):
         self.status_label = app.status_label
         self.active_queries = app.active_queries
         self.is_activating_mode = app.is_activating_mode
+        self._update_timer_state()
+
+    def _update_timer_state(self) -> None:
+        should_run = self.active_queries > 0 or self.is_activating_mode
+        if should_run and self._timer is None:
+            self._timer = self.set_interval(1 / 20, self._tick)
+            self._update_display(None)
+        elif not should_run and self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+            self._update_display(None)
 
     def _tick(self) -> None:
         self._update_display(None)

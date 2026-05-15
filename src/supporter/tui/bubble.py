@@ -20,6 +20,8 @@ from .constants import (
 
 _RichMarkdown: Any = None
 
+_MARKDOWN_TRIGGER_RE = re.compile(r"[*+\-#`>\[]|\d+\.\s")
+
 
 def _md(content: str) -> Any:
     global _RichMarkdown
@@ -130,7 +132,18 @@ class MessageBubble(Vertical):
         return f"({model_info})"
 
     def _should_use_markdown(self, text: str) -> bool:
+        if not _MARKDOWN_TRIGGER_RE.search(text):
+            return False
         return any(re.search(m, text, re.MULTILINE) for m in MARKDOWN_SYNTAX_MARKERS)
+
+    def _element_is_markdown(self, el: dict[str, Any]) -> bool:
+        if el.get("is_markdown") is True:
+            return True
+        if el.get("_recheck_markdown", True):
+            decision = self._should_use_markdown(el.get("content", ""))
+            el["is_markdown"] = decision
+            el["_recheck_markdown"] = False
+        return bool(el.get("is_markdown"))
 
     def on_section_header_toggle_request(
         self, event: SectionHeader.ToggleRequest
@@ -139,7 +152,7 @@ class MessageBubble(Vertical):
 
     def toggle_section(self, section: SectionHeader) -> None:
         with contextlib.suppress(ValueError, Exception):
-            container = self.query_one("#elements-container")
+            container = self._elements_container
             idx = container.children.index(section)
             if idx == -1:
                 return
@@ -190,27 +203,24 @@ class MessageBubble(Vertical):
             self._meta_label.display = False
 
     def _render_expanded(self) -> None:
-        try:
-            container = self.query_one("#elements-container")
-            container.display = True
-        except Exception:
-            return
+        container = self._elements_container
+        container.display = True
         if self._message_view:
             self._message_view.display = False
         self._sync_elements()
 
     def _sync_elements(self) -> None:
-        try:
-            container = self.query_one("#elements-container")
-        except Exception:
-            return
+        container = self._elements_container
         if not container.is_attached:
             return
-        self._ensure_correct_widget_count(container)
-        self._refresh_widget_content(container)
+        current_widgets = list(container.query("*"))
+        if self._ensure_correct_widget_count(container, current_widgets):
+            current_widgets = list(container.query("*"))
+        self._refresh_widget_content(current_widgets)
 
-    def _ensure_correct_widget_count(self, container: Any) -> None:
-        current_widgets = container.query("*")
+    def _ensure_correct_widget_count(
+        self, container: Any, current_widgets: list[Any]
+    ) -> bool:
         expected_count = sum(
             2 if el["type"] in ("thought", "tool_calls") else 1
             for el in self.elements
@@ -218,10 +228,15 @@ class MessageBubble(Vertical):
         )
         if len(current_widgets) < expected_count:
             self._mount_missing_widgets(container, current_widgets)
-        elif len(current_widgets) > expected_count:
+            return True
+        if len(current_widgets) > expected_count:
             self._rebuild_widgets(container)
+            return True
+        return False
 
-    def _mount_missing_widgets(self, container: Any, current_widgets: Any) -> None:
+    def _mount_missing_widgets(
+        self, container: Any, current_widgets: list[Any]
+    ) -> None:
         element_idx = 0
         w_idx = 0
         while w_idx < len(current_widgets) and element_idx < len(self.elements):
@@ -244,8 +259,7 @@ class MessageBubble(Vertical):
             new_widgets.extend(self._create_widgets_for_element(i, el))
         container.mount(*new_widgets)
 
-    def _refresh_widget_content(self, container: Any) -> None:
-        current_widgets = container.query("*")
+    def _refresh_widget_content(self, current_widgets: list[Any]) -> None:
         w_idx = 0
         for i, el in enumerate(self.elements):
             if el["type"] == "subagent_result":
@@ -274,17 +288,27 @@ class MessageBubble(Vertical):
             )
             label = "Thinking" if is_thinking else "Thoughts"
             header.update_label(label, el["collapsed"], self.collapsible)
-            view.update(_md(el["content"]))
+            content = el["content"]
+            if getattr(view, "_supporter_last_content", None) != content:
+                view._supporter_last_content = content
+                view.update(_md(content))
             view.display = not el["collapsed"] if self.collapsible else True
         elif el["type"] == "tool_calls":
             header.update_label("Tools Used", el["collapsed"], self.collapsible)
-            view.update(self._format_tool_calls(el["calls"]))
+            calls = el["calls"]
+            if getattr(view, "_supporter_last_content", None) != calls:
+                view._supporter_last_content = calls
+                view.update(self._format_tool_calls(calls))
             view.display = not el["collapsed"] if self.collapsible else True
 
     def _update_content_widget(self, view: Any, el: dict[str, Any]) -> None:
         view = cast(Static, view)
         content = el["content"]
-        if self._should_use_markdown(content):
+        last = getattr(view, "_supporter_last_content", None)
+        if last == content:
+            return
+        view._supporter_last_content = content
+        if self._element_is_markdown(el):
             view.update(_md(content))
         else:
             view.update(content)
@@ -311,7 +335,7 @@ class MessageBubble(Vertical):
             header.set_class(idx > 0, "section-gap")
             return [header, view]
         content = el["content"].strip()
-        if self._should_use_markdown(content):
+        if self._element_is_markdown(el):
             view = Static(_md(content), classes="main-content")
         else:
             view = Static(content, classes="main-content")
@@ -364,6 +388,10 @@ class MessageBubble(Vertical):
             )
         else:
             self.elements[-1]["content"] += token
+            if self.elements[-1].get(
+                "is_markdown"
+            ) is not True and _MARKDOWN_TRIGGER_RE.search(token):
+                self.elements[-1]["_recheck_markdown"] = True
 
         if not self._render_pending:
             self._render_pending = True

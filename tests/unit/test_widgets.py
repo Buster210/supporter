@@ -73,10 +73,36 @@ class TestMessageBubble:
         styles = styles_path.read_text(encoding="utf-8")
         assert ".delegation-progress" in styles
         assert "margin-top: 1;" in styles
-        assert "margin-bottom: 1;" in styles
+        assert "margin-bottom: 0;" in styles
         assert "content-align-horizontal: center;" in styles
         assert ".message-meta" in styles
         assert "margin: 0 0 0 0;" in styles
+
+    def test_delegation_signal_uses_only_bottom_margin(self) -> None:
+        styles_path = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "supporter"
+            / "tui"
+            / "styles.tcss"
+        )
+        styles = styles_path.read_text(encoding="utf-8")
+        assert ".delegation-signal" in styles
+        assert "margin: 0 0 1 0;" in styles
+
+    def test_welcome_banner_has_small_top_margin(self) -> None:
+        styles_path = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "supporter"
+            / "tui"
+            / "styles.tcss"
+        )
+        styles = styles_path.read_text(encoding="utf-8")
+        start = styles.index("WelcomeBanner {")
+        end = styles.index("WelcomeBanner.hidden {")
+        banner_block = styles[start:end]
+        assert "margin-top: 1;" in banner_block
 
     def test_format_tool_calls_single(self) -> None:
         bubble = MessageBubble(role="agent", content="")
