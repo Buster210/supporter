@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import App, ComposeResult
@@ -11,9 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Input, Label
 
-from ..agent import ChatAgent
 from ..logger import init_logger, logger, shutdown_logger
-from ..pool import DynamicPool
 from ..tools.base import ToolError
 from ..types import ModeChanged
 
@@ -27,11 +24,9 @@ if TYPE_CHECKING:
     from ..agent import ChatAgent
     from .chat import ChatTurn
 
-CSS = (Path(__file__).parent / "styles.tcss").read_text()
-
 
 class SupporterApp(App[None]):
-    CSS = CSS
+    CSS_PATH = "styles.tcss"
 
     status_label = reactive("Thinking")
     active_queries = reactive(0)
@@ -120,6 +115,8 @@ class SupporterApp(App[None]):
             and hasattr(self.agent.provider, "close")
         ):
             await self.agent.provider.close()
+
+        from ..pool import DynamicPool
 
         await DynamicPool.shutdown_all()
         await self._mode_manager.close()

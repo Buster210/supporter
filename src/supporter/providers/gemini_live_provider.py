@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from google import genai
-from google.genai import types
-from google.genai.types import Content
+if TYPE_CHECKING:
+    from google import genai
+    from google.genai import types
+    from google.genai.types import Content
 
 from ..config import config
 from ..logger import logger
@@ -47,7 +50,7 @@ class GeminiLiveProvider:
         self.api_keys = api_keys
         self.model_name = model_name or config.gemini_live_model
         self._current_key_index = 0
-        self.client = genai.Client(api_key=self.api_keys[0])
+        self._client: genai.Client | None = None
         self.tools = list(tools) if tools else []
         self.registry = dict(registry) if registry else {}
         self.system_instruction = (
@@ -70,11 +73,21 @@ class GeminiLiveProvider:
 
         ensure_function_search_tool(self.model_name, self.registry)
 
+    @property
+    def client(self) -> genai.Client:
+        if self._client is None:
+            from google import genai
+
+            self._client = genai.Client(api_key=self.api_keys[self._current_key_index])
+        return self._client
+
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
-        self.client = genai.Client(api_key=self.api_keys[self._current_key_index])
+        self._client = None
 
     def _resolve_tools(self) -> list[Any]:
+        from google.genai import types
+
         return resolve_live_provider_tools(
             model_name=self.model_name,
             tools=self.tools,
@@ -83,6 +96,8 @@ class GeminiLiveProvider:
         )
 
     def _get_session_config(self) -> types.LiveConnectConfig:
+        from google.genai import types
+
         config_kwargs: dict[str, Any] = {
             "response_modalities": [types.Modality.AUDIO],
             "system_instruction": types.Content(
@@ -180,6 +195,8 @@ class GeminiLiveProvider:
             raise RuntimeError("Failed to establish Gemini Live session")
 
     async def _handle_tool_call(self, session: Any, tool_call: Any) -> None:
+        from google.genai import types
+
         if not tool_call.function_calls:
             return
 

@@ -12,26 +12,25 @@ from ..types import ModeChanged
 class ModeManager:
     def __init__(self, app: Any) -> None:
         self._app = app
-        from ..config import config
-        from ..providers.gemini_live_provider import GeminiLiveProvider
-
         self._greeting_provider: Any = None
-        if config.gemini_api_keys:
-            self._greeting_provider = GeminiLiveProvider(
-                config.gemini_api_keys,
-                model_name=config.gemini_live_model,
-                system_instruction=(
-                    "Greeting assistant. Output exactly one friendly sentence. "
-                    "No preamble, no thoughts."
-                ),
-                include_thoughts=False,
-            )
         self._warmup_task: asyncio.Task[Any] | None = None
 
     def start_warmup(self) -> None:
         if self._greeting_provider is None:
-            return
-        if self._warmup_task is None:
+            from ..config import config
+            from ..providers.gemini_live_provider import GeminiLiveProvider
+
+            if config.gemini_api_keys:
+                self._greeting_provider = GeminiLiveProvider(
+                    config.gemini_api_keys,
+                    model_name=config.gemini_live_model,
+                    system_instruction=(
+                        "Greeting assistant. Output exactly one friendly sentence. "
+                        "No preamble, no thoughts."
+                    ),
+                    include_thoughts=False,
+                )
+        if self._greeting_provider is not None and self._warmup_task is None:
             self._warmup_task = asyncio.create_task(self._greeting_provider.warmup())
 
     async def close(self) -> None:

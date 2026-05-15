@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
-from google.genai.types import Content, GenerateContentConfig, Tool
 from textual.message import Message
+
+if TYPE_CHECKING:
+    from google.genai.types import Content, GenerateContentConfig, Tool
 
 
 class TaskStatus(StrEnum):

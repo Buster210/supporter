@@ -4,7 +4,6 @@ import contextlib
 import re
 from typing import Any, cast
 
-from rich.markdown import Markdown as RichMarkdown
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.events import Click
@@ -18,6 +17,17 @@ from .constants import (
     RENDER_COALESCE_INTERVAL,
     THEME,
 )
+
+_RichMarkdown: Any = None
+
+
+def _md(content: str) -> Any:
+    global _RichMarkdown
+    if _RichMarkdown is None:
+        from rich.markdown import Markdown
+
+        _RichMarkdown = Markdown
+    return _RichMarkdown(content)
 
 
 class SectionHeader(Static):
@@ -264,7 +274,7 @@ class MessageBubble(Vertical):
             )
             label = "Thinking" if is_thinking else "Thoughts"
             header.update_label(label, el["collapsed"], self.collapsible)
-            view.update(RichMarkdown(el["content"]))
+            view.update(_md(el["content"]))
             view.display = not el["collapsed"] if self.collapsible else True
         elif el["type"] == "tool_calls":
             header.update_label("Tools Used", el["collapsed"], self.collapsible)
@@ -275,7 +285,7 @@ class MessageBubble(Vertical):
         view = cast(Static, view)
         content = el["content"]
         if self._should_use_markdown(content):
-            view.update(RichMarkdown(content))
+            view.update(_md(content))
         else:
             view.update(content)
 
@@ -288,9 +298,7 @@ class MessageBubble(Vertical):
             header = SectionHeader("", classes="section-header")
             header.update_label(label, el["collapsed"], self.collapsible)
             header.set_class(idx > 0, "section-gap")
-            view = Static(
-                RichMarkdown(el["content"].strip()), classes="section-content"
-            )
+            view = Static(_md(el["content"].strip()), classes="section-content")
             view.display = not el["collapsed"] if self.collapsible else True
             return [header, view]
         if el["type"] == "tool_calls":
@@ -304,7 +312,7 @@ class MessageBubble(Vertical):
             return [header, view]
         content = el["content"].strip()
         if self._should_use_markdown(content):
-            view = Static(RichMarkdown(content), classes="main-content")
+            view = Static(_md(content), classes="main-content")
         else:
             view = Static(content, classes="main-content")
         view.set_class(idx > 0, "section-gap")

@@ -11,12 +11,13 @@ from typing import TYPE_CHECKING, Any, ClassVar
 if TYPE_CHECKING:
     from google.genai.types import Content
 
+    from .providers.gemini_live_provider import GeminiLiveProvider
+
 from .config import (
     HTTP_RATE_LIMIT,
     config,
 )
 from .logger import logger
-from .providers.gemini_live_provider import GeminiLiveProvider
 from .providers.gemini_provider import GeminiProvider
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
@@ -36,6 +37,14 @@ __all__ = [
     "is_rate_limit",
     "should_trigger_fallback",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "GeminiLiveProvider":
+        from .providers.gemini_live_provider import GeminiLiveProvider
+
+        return GeminiLiveProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 _model_cooldowns: dict[str, datetime] = {}
@@ -388,6 +397,7 @@ def get_provider(
             raise ValueError("GEMINI_API_KEYS is missing/empty in environment")
 
         if live:
+            from .providers.gemini_live_provider import GeminiLiveProvider
 
             def live_primary_factory() -> LLMProvider:
                 target_model = model_name or config.gemini_live_model

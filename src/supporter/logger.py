@@ -10,8 +10,6 @@ from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from queue import Queue
 from typing import Any
 
-from .config import config
-
 _LEVEL_MAP: dict[str, int] = {
     "off": logging.CRITICAL + 10,
     "info": logging.INFO,
@@ -106,6 +104,8 @@ logger = _FlightRecorderLogger(logging.getLogger("supporter"))
 
 
 def init_logger() -> None:
+    from .config import config
+
     global _file_handler, _queue_listener
 
     try:

@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pathspec
+if TYPE_CHECKING:
+    import pathspec
 
 from ..config import INTERNAL_BLACKLIST, config
 from ..logger import logger
@@ -38,6 +41,8 @@ def emit_confirmation_line(message: str = "") -> None:
 
 
 def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
+    import pathspec as _pathspec
+
     gitignore_path = project_root / ".gitignore"
     if not gitignore_path.exists():
         return None
@@ -47,10 +52,10 @@ def _get_gitignore_spec(project_root: Path) -> pathspec.PathSpec[Any] | None:
         if _GITIGNORE_CACHE["spec"] is not None and _GITIGNORE_CACHE["mtime"] == mtime:
             from typing import cast
 
-            return cast(pathspec.PathSpec[Any], _GITIGNORE_CACHE["spec"])
+            return cast("pathspec.PathSpec[Any]", _GITIGNORE_CACHE["spec"])
 
         with gitignore_path.open("r") as f:
-            spec = pathspec.PathSpec.from_lines("gitignore", f)
+            spec = _pathspec.PathSpec.from_lines("gitignore", f)
             _GITIGNORE_CACHE["spec"] = spec
             _GITIGNORE_CACHE["mtime"] = mtime
             return spec
