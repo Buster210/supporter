@@ -31,8 +31,10 @@ _KEYWORD_SECRET_PATTERN = re.compile(SECRET_KEYWORD_PATTERN)
 
 
 def _wrap_with_limits(cmd_tokens: list[str]) -> list[str]:
-    mem_kb = MEM_LIMIT_BYTES // 1024
-    limit_script = f'ulimit -t {CPU_LIMIT_SEC} -v {mem_kb} && exec "$@"'
+    parts = [f"ulimit -t {CPU_LIMIT_SEC}"]
+    if sys.platform != "darwin":
+        parts.append(f"ulimit -v {MEM_LIMIT_BYTES // 1024}")
+    limit_script = " && ".join([*parts, 'exec "$@"'])
     return ["/bin/bash", "-c", limit_script, "_", *cmd_tokens]
 
 

@@ -17,7 +17,6 @@ from .config import (
 )
 from .logger import logger
 from .providers.gemini_live_provider import GeminiLiveProvider
-from .providers.gemini_messages import GeminiMessageMixin
 from .providers.gemini_provider import GeminiProvider
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
@@ -96,7 +95,7 @@ def _is_model_in_cooldown(model_name: str) -> bool:
     if model_name not in _model_cooldowns:
         return False
     if datetime.now() > _model_cooldowns[model_name]:
-        del _model_cooldowns[model_name]
+        _model_cooldowns.pop(model_name, None)
         logger.info(f"Model '{model_name}' cooldown expired — re-enabling")
         return False
     return True
@@ -111,7 +110,7 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
     )
 
 
-class DynamicPool(GeminiMessageMixin, LLMProvider):
+class DynamicPool(LLMProvider):
     _instances: ClassVar[weakref.WeakSet[DynamicPool]] = weakref.WeakSet()
 
     @classmethod
@@ -130,7 +129,6 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
         self.pool_size = min(pool_size, len(keys))
         self.next_key_index = 0
         self.active_slots: deque[GeminiProvider] = deque()
-        self.slot_available = asyncio.Event()
         self._current_index = 0
         self.background_tasks: set[asyncio.Task[None]] = set()
         self._replace_lock = asyncio.Semaphore(1)
@@ -141,7 +139,6 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
         self.next_key_index = (self.next_key_index + 1) % len(self.keys)
         provider = GeminiProvider(key, model_name=self.model_name)
         self.active_slots.append(provider)
-        self.slot_available.set()
 
     def _rotate_and_get(self) -> GeminiProvider:
         if len(self.active_slots) < self.pool_size:
@@ -157,8 +154,6 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
             return
 
         self.active_slots.remove(provider)
-        if not self.active_slots:
-            self.slot_available.clear()
 
         logger.info(
             f"Pool '{self.model_name}': provider instance retired after failure — "
@@ -196,7 +191,9 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
             )
             await asyncio.gather(*self.background_tasks, return_exceptions=True)
             self.background_tasks.clear()
-        return
+
+    async def close(self) -> None:
+        await self.shutdown()
 
     async def generate(
         self, prompt: str | list[Content], options: LLMOptions | None = None
@@ -211,8 +208,7 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
         for attempt in range(len(self.keys)):
             provider = self._rotate_and_get()
             try:
-                provider_options = options if options else None
-                result: LLMResult = await provider.generate(prompt, provider_options)
+                result: LLMResult = await provider.generate(prompt, options)
 
                 if not result.model:
                     result.model = provider.get_name()
@@ -254,8 +250,7 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
             provider = self._rotate_and_get()
             yielded_any = False
             try:
-                provider_options = options if options else None
-                async for chunk in provider.generate_stream(prompt, provider_options):
+                async for chunk in provider.generate_stream(prompt, options):
                     yielded_any = True
                     yield chunk
                 return
@@ -290,7 +285,7 @@ class DynamicPool(GeminiMessageMixin, LLMProvider):
         return f"{self.model_name} (Dynamic Pool x{len(self.active_slots)})"
 
 
-class LazyFallbackProvider(GeminiMessageMixin, LLMProvider):
+class LazyFallbackProvider(LLMProvider):
     def __init__(
         self,
         primary_factory: Callable[[], LLMProvider],
@@ -343,9 +338,15 @@ class LazyFallbackProvider(GeminiMessageMixin, LLMProvider):
                 yield chunk
 
     def get_name(self) -> str:
-        if self.fallback:
+        if self.fallback_factory:
             return f"{self.primary.get_name()} -> [Fallback]"
         return self.primary.get_name()
+
+    async def close(self) -> None:
+        for provider in (self._primary, self._fallback):
+            close_fn = getattr(provider, "close", None)
+            if close_fn:
+                await close_fn()
 
 
 def clear_providers() -> None:
@@ -359,10 +360,11 @@ def get_provider(
     shared: bool = True,
     model_name: str | None = None,
     registry: dict[str, Callable[..., Any]] | None = None,
+    system_instruction: str | None = None,
     pool_size: int = 2,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
-    cache_key = f"{target_type}_{live}_{model_name or 'default'}_ps{pool_size}"
+    cache_key = f"{target_type}_{live}_{model_name or 'default'}"
 
     if shared and cache_key in _provider_registry:
         logger.debug(f"Provider cache hit: {cache_key}")
@@ -391,21 +393,27 @@ def get_provider(
                 target_model = model_name or config.gemini_live_model
                 logger.info(f"Constructing Live Primary provider: model={target_model}")
                 return GeminiLiveProvider(
-                    keys, model_name=target_model, registry=registry
+                    keys,
+                    model_name=target_model,
+                    registry=registry,
+                    system_instruction=system_instruction,
                 )
 
-            def live_fallback_factory() -> LLMProvider | None:
-                if not config.gemini_live_fallback_model:
-                    return None
-                logger.info(
-                    f"Constructing Live Fallback provider: "
-                    f"model={config.gemini_live_fallback_model}"
-                )
-                return GeminiLiveProvider(
-                    keys,
-                    model_name=config.gemini_live_fallback_model,
-                    registry=registry,
-                )
+            live_fallback_model = config.gemini_live_fallback_model
+            live_fallback_factory: Callable[[], LLMProvider | None] | None = None
+            if live_fallback_model:
+
+                def live_fallback_factory() -> LLMProvider | None:
+                    logger.info(
+                        f"Constructing Live Fallback provider: "
+                        f"model={live_fallback_model}"
+                    )
+                    return GeminiLiveProvider(
+                        keys,
+                        model_name=live_fallback_model,
+                        registry=registry,
+                        system_instruction=system_instruction,
+                    )
 
             provider = LazyFallbackProvider(live_primary_factory, live_fallback_factory)
         else:
@@ -414,12 +422,12 @@ def get_provider(
                 target_model = model_name or config.gemini_model
                 return DynamicPool(keys, target_model, pool_size=pool_size)
 
-            def fallback_factory() -> LLMProvider | None:
-                if not config.gemini_fallback_model:
-                    return None
-                return DynamicPool(
-                    keys, config.gemini_fallback_model, pool_size=pool_size
-                )
+            rest_fallback_model = config.gemini_fallback_model
+            fallback_factory: Callable[[], LLMProvider | None] | None = None
+            if rest_fallback_model:
+
+                def fallback_factory() -> LLMProvider | None:
+                    return DynamicPool(keys, rest_fallback_model, pool_size=pool_size)
 
             provider = LazyFallbackProvider(primary_factory, fallback_factory)
 

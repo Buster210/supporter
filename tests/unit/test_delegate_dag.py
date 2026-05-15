@@ -41,7 +41,7 @@ def _task(
     return {
         "id": task_id,
         "task": f"run {task_id}",
-        "agent": "scout",
+        "agent": "explorer",
         "tools": {"read_file"},
         "model": "gemini-test",
         "persona": "persona",
@@ -261,7 +261,7 @@ async def test_heartbeat_anomaly_event_marks_state_once() -> None:
         "slow",
         {
             "status": "RUNNING",
-            "agent_label": "scout",
+            "agent_label": "explorer",
             "started_at": 0.0,
             "timeout": 10.0,
             "anomaly_fired": False,

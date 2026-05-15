@@ -21,6 +21,20 @@ from .validation import validate_tasks
 
 _on_delegation_start: Callable[[str], None] | None = None
 
+_GLOBAL_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_global_semaphore() -> asyncio.Semaphore:
+    global _GLOBAL_SEMAPHORE
+    if _GLOBAL_SEMAPHORE is None:
+        _GLOBAL_SEMAPHORE = asyncio.Semaphore(config.delegate_max_hard_cap)
+    return _GLOBAL_SEMAPHORE
+
+
+def reset_global_semaphore() -> None:
+    global _GLOBAL_SEMAPHORE
+    _GLOBAL_SEMAPHORE = None
+
 
 def set_delegation_start_callback(cb: Callable[[str], None] | None) -> None:
     global _on_delegation_start
@@ -45,11 +59,11 @@ async def delegate_tasks(
             EACH task object MUST include:
             - id: A unique string identifier (e.g., "t1", "analyze_file").
             - task: Detailed instructions for the sub-agent.
-            - agent: (Optional) Role from the roster (e.g., "scout", "code_writer").
+            - agent: (Optional) Role from the roster (e.g., "explorer", "code_writer").
             - depends_on: (Optional) List of task IDs to wait for.
             - tolerate_failures: (Optional) If true, run even when deps failed/
               timed-out/skipped; their outputs are injected with a status tag.
-            Example: '[{"id": "t1", "agent": "scout", "task": "map src/app.py"}]'
+            Example: '[{"id": "t1", "agent": "explorer", "task": "map src/app.py"}]'
         max_parallel: Max number of agents to run at once (Default: 3).
         notify_per_task: If true, compact completed/failed task signals are
             fed back to the orchestrator so it can query details and adapt
@@ -66,7 +80,7 @@ async def delegate_tasks(
     try:
         validated_tasks = validate_tasks(tasks)
         parallel_cap = max(1, min(max_parallel, config.delegate_max_hard_cap))
-        semaphore = asyncio.Semaphore(parallel_cap)
+        semaphore = _get_global_semaphore()
         job_id = str(uuid.uuid4())[:DELEGATE_JOB_ID_LEN]
 
         bus = get_bus(job_id, milestone)

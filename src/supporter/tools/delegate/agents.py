@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import functools
 import time
 from typing import Any
@@ -11,9 +12,69 @@ from ..catalog import build_tool_catalog, select_delegate_tools
 from .bus import DelegationBus
 
 
+class _DelegateCache:
+    def __init__(self) -> None:
+        self.agents: dict[tuple[str, str, bool], ChatAgent] = {}
+        self.locks: dict[tuple[str, str, bool], asyncio.Lock] = {}
+        self.role_offsets: dict[str, int] = {}
+        self.offset_counter: int = 0
+
+    def clear(self) -> None:
+        self.agents.clear()
+        self.locks.clear()
+        self.role_offsets.clear()
+        self.offset_counter = 0
+
+
+_cache = _DelegateCache()
+
+
+def clear_delegate_cache() -> None:
+    _cache.clear()
+
+
 @functools.cache
 def delegate_allowed_tool_names() -> set[str]:
     return set(select_delegate_tools(build_tool_catalog(), "all"))
+
+
+def _cache_key(task: dict[str, Any]) -> tuple[str, str, bool] | None:
+    role = task.get("agent")
+    if not role or role == "custom":
+        return None
+    return (role, task["model"], bool(task.get("live")))
+
+
+def _rotated_keys_for_role(role: str) -> list[str]:
+    keys = config.gemini_api_keys
+    if not keys:
+        raise ValueError("GEMINI_API_KEYS is missing/empty in environment")
+    if role not in _cache.role_offsets:
+        _cache.role_offsets[role] = _cache.offset_counter % len(keys)
+        _cache.offset_counter += 1
+    offset = _cache.role_offsets[role]
+    n = len(keys)
+    return [keys[(offset + i) % n] for i in range(n)]
+
+
+def _build_dedicated_provider(
+    task: dict[str, Any],
+    role: str,
+    registry: dict[str, Any],
+) -> LLMProvider:
+    keys = _rotated_keys_for_role(role)
+    if task.get("live"):
+        from ...providers.gemini_live_provider import GeminiLiveProvider
+
+        return GeminiLiveProvider(
+            keys,
+            model_name=task["model"],
+            registry=registry,
+            system_instruction=task["persona"],
+        )
+    from ...pool import DynamicPool
+
+    return DynamicPool(keys, task["model"], pool_size=1)
 
 
 def _create_sub_agent(
@@ -23,9 +84,26 @@ def _create_sub_agent(
     from ...pool import get_provider
 
     registry = select_delegate_tools(build_tool_catalog(), task["tools"])
-    if not provider:
+    cache_key = _cache_key(task)
+    prompt = f"TASK:\n{task['task']}"
+    if task["context"]:
+        prompt += f"\n\nCONTEXT:\n{task['context']}"
+
+    if cache_key and cache_key in _cache.agents:
+        cached = _cache.agents[cache_key]
+        cached.history = []
+        cached.current_interaction_id = None
+        return cached, prompt
+
+    if cache_key:
+        provider = _build_dedicated_provider(task, task["agent"], registry)
+    elif not provider:
         provider = get_provider(
-            shared=False, model_name=task["model"], registry=registry
+            shared=False,
+            live=task.get("live", False),
+            model_name=task["model"],
+            registry=registry,
+            system_instruction=task["persona"],
         )
 
     agent = ChatAgent(
@@ -35,9 +113,10 @@ def _create_sub_agent(
         system_instruction=task["persona"],
     )
 
-    prompt = f"TASK:\n{task['task']}"
-    if task["context"]:
-        prompt += f"\n\nCONTEXT:\n{task['context']}"
+    if cache_key:
+        _cache.agents[cache_key] = agent
+        _cache.locks.setdefault(cache_key, asyncio.Lock())
+
     return agent, prompt
 
 
@@ -84,14 +163,18 @@ async def run_sub_agent(
                 f"Sub-agent '{task_id}' [{agent_label}] attempt {attempt + 1} started"
             )
 
+            agent: ChatAgent | None = None
+            cache_key = _cache_key(task)
             try:
                 agent, prompt = _create_sub_agent(
                     task,
                     provider=provider,
                 )
-                result = await asyncio.wait_for(
-                    agent.execute(prompt), timeout=task["timeout"]
-                )
+                role_lock = _cache.locks.get(cache_key) if cache_key else None
+                async with role_lock or contextlib.nullcontext():
+                    result = await asyncio.wait_for(
+                        agent.execute(prompt), timeout=task["timeout"]
+                    )
                 duration = time.perf_counter() - start_time
                 logger.info(
                     f"Sub-agent '{task_id}' completed in {duration:.2f}s "
@@ -138,5 +221,16 @@ async def run_sub_agent(
                 if attempt < max_retries:
                     continue
                 return last_result
+            finally:
+                if task.get("live") and agent is not None and cache_key is None:
+                    close_fn = getattr(agent.provider, "close", None)
+                    if close_fn:
+                        try:
+                            await close_fn()
+                        except Exception as close_err:
+                            logger.warning(
+                                f"Sub-agent '{task_id}' live session close failed: "
+                                f"{close_err}"
+                            )
 
     return last_result

@@ -7,7 +7,6 @@ from ...config import DELEGATE_ANOMALY_THRESHOLD, DELEGATE_HEARTBEAT_INTERVAL
 from ...logger import logger
 from ...types import (
     HeartbeatTick,
-    LLMProvider,
     MilestoneCancelled,
     MilestoneCompleted,
     TaskAnomaly,
@@ -100,14 +99,11 @@ async def _execute_dag(
     job_id: str,
     parallel_limit: int,
 ) -> list[dict[str, Any]]:
-    from ...pool import get_provider
-
     results: dict[str, dict[str, Any]] = {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
     priorities: dict[str, int] = {
         t["id"]: _compute_priority(t["id"], tasks) for t in tasks
     }
-    milestone_pools: dict[str, LLMProvider] = {}
 
     async def _run_with_gate(task: dict[str, Any]) -> None:
         for dep_id in task["depends_on"]:
@@ -172,15 +168,7 @@ async def _execute_dag(
             )
         )
 
-        model = task["model"]
-        if model not in milestone_pools:
-            milestone_pools[model] = get_provider(
-                shared=False, model_name=model, pool_size=parallel_limit
-            )
-
-        result = await run_sub_agent(
-            enriched, semaphore, bus, job_id, provider=milestone_pools[model]
-        )
+        result = await run_sub_agent(enriched, semaphore, bus, job_id)
         results[task_id] = result
 
         if result["status"] == TaskStatus.COMPLETED:

@@ -7,75 +7,40 @@ from supporter.tools.search import google_search
 
 
 @pytest.mark.asyncio
-async def test_google_search_success_with_sources() -> None:
+async def test_google_search_returns_provider_text_verbatim() -> None:
     mock_provider = AsyncMock()
     mock_result = MagicMock()
-    mock_result.text = "Search results text"
-    mock_chunk = MagicMock()
-    mock_chunk.web.uri = "https://example.com"
-    mock_chunk.web.title = "Example Title"
-    mock_meta = MagicMock()
-    mock_meta.grounding_chunks = [mock_chunk]
-    mock_candidate = MagicMock()
-    mock_candidate.grounding_metadata = mock_meta
-    mock_result.raw.candidates = [mock_candidate]
+    mock_result.text = (
+        "Detailed answer with inline citations [1].\n\n"
+        "SOURCES FOUND:\n- Example Title: https://example.com"
+    )
     mock_provider.generate.return_value = mock_result
+
     with patch("supporter.pool.get_provider", return_value=mock_provider):
         response = await google_search("test query")
-        assert "Search results text" in response
-        assert "SOURCES FOUND:" in response
-        assert "Example Title: https://example.com" in response
-        mock_provider.generate.assert_called_once()
+
+    assert response == mock_result.text
+    mock_provider.generate.assert_called_once_with(prompt="test query")
 
 
 @pytest.mark.asyncio
-async def test_google_search_success_no_sources() -> None:
+async def test_google_search_passes_system_instruction_to_pool() -> None:
     mock_provider = AsyncMock()
     mock_result = MagicMock()
-    mock_result.text = "Just text"
-    mock_result.raw.candidates = []
+    mock_result.text = "answer"
     mock_provider.generate.return_value = mock_result
-    with patch("supporter.pool.get_provider", return_value=mock_provider):
-        response = await google_search("test query")
-        assert response == "Just text"
-        assert "SOURCES FOUND:" not in response
 
+    with patch(
+        "supporter.pool.get_provider", return_value=mock_provider
+    ) as mock_get_provider:
+        await google_search("test query")
 
-@pytest.mark.asyncio
-async def test_google_search_returns_text_when_grounding_metadata_missing() -> None:
-    mock_provider = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.text = "Just text"
-    mock_candidate = MagicMock()
-    mock_candidate.grounding_metadata = None
-    mock_result.raw.candidates = [mock_candidate]
-    mock_provider.generate.return_value = mock_result
-    with patch("supporter.pool.get_provider", return_value=mock_provider):
-        response = await google_search("test query")
-    assert response == "Just text"
-    assert "SOURCES FOUND:" not in response
+    from supporter.tools.search import _SEARCH_SYSTEM_INSTRUCTION
 
-
-@pytest.mark.asyncio
-async def test_google_search_skips_invalid_chunks_and_returns_text() -> None:
-    mock_provider = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.text = "Just text"
-    chunk_without_web = MagicMock()
-    chunk_without_web.web = None
-    chunk_with_missing_url = MagicMock()
-    chunk_with_missing_url.web.uri = ""
-    chunk_with_missing_url.web.title = "Missing URL"
-    mock_meta = MagicMock()
-    mock_meta.grounding_chunks = [chunk_without_web, chunk_with_missing_url]
-    mock_candidate = MagicMock()
-    mock_candidate.grounding_metadata = mock_meta
-    mock_result.raw.candidates = [mock_candidate]
-    mock_provider.generate.return_value = mock_result
-    with patch("supporter.pool.get_provider", return_value=mock_provider):
-        response = await google_search("test query")
-    assert response == "Just text"
-    assert "SOURCES FOUND:" not in response
+    kwargs = mock_get_provider.call_args.kwargs
+    assert kwargs["live"] is True
+    assert kwargs["model_name"]
+    assert kwargs["system_instruction"] == _SEARCH_SYSTEM_INSTRUCTION
 
 
 @pytest.mark.asyncio

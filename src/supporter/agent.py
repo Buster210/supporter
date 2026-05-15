@@ -9,6 +9,23 @@ from .logger import logger
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
 
+def _build_message(role: str, text: str) -> Any:
+    from google.genai.types import Content, Part
+
+    return Content(role=role, parts=[Part(text=text)])
+
+
+def _extract_assistant_message(result: LLMResult) -> Any | None:
+    if not result.candidates or not result.candidates[0].content:
+        return None
+    content = result.candidates[0].content
+    if getattr(content, "role", None) == "model":
+        return content
+    from google.genai.types import Content
+
+    return Content(role="model", parts=content.parts)
+
+
 class ChatAgent:
     def __init__(
         self,
@@ -50,7 +67,7 @@ class ChatAgent:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full prompt: {prompt!r}")
 
-        user_message = self.provider.build_user_message(prompt)
+        user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
         options["user_content"] = user_message
         result = await self.provider.generate(prompt, options)
@@ -76,7 +93,7 @@ class ChatAgent:
 
         self.history.append(user_message)
 
-        assistant_message = self.provider.extract_assistant_message(result)
+        assistant_message = _extract_assistant_message(result)
         if assistant_message is None:
             self._trim_history()
             return
@@ -92,7 +109,7 @@ class ChatAgent:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full streaming prompt: {prompt!r}")
 
-        user_message = self.provider.build_user_message(prompt)
+        user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
         options["user_content"] = user_message
         text_parts: list[str] = []
@@ -103,9 +120,7 @@ class ChatAgent:
 
         if not exclude_from_history:
             self.history.append(user_message)
-            self.history.append(
-                self.provider.build_assistant_message("".join(text_parts))
-            )
+            self.history.append(_build_message("model", "".join(text_parts)))
             self._trim_history()
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 

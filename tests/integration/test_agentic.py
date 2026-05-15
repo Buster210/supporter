@@ -9,26 +9,6 @@ from supporter.agent import ChatAgent
 from supporter.pool import LLMChunk, LLMResult
 
 
-def _build_user_message(prompt: str) -> Content:
-    return Content(role="user", parts=[Part(text=prompt)])
-
-
-def _extract_assistant_message(result: LLMResult) -> Content | None:
-    if not result.candidates or not result.candidates[0].content:
-        return None
-    return Content(role="model", parts=result.candidates[0].content.parts)
-
-
-def _build_assistant_message(text: str) -> Content:
-    return Content(role="model", parts=[Part(text=text)])
-
-
-def _wire_message_methods(mock_provider: MagicMock) -> None:
-    mock_provider.build_user_message = _build_user_message
-    mock_provider.extract_assistant_message = _extract_assistant_message
-    mock_provider.build_assistant_message = _build_assistant_message
-
-
 @pytest.mark.asyncio
 async def test_tool_dispatch_to_registry() -> None:
     mock_history = [
@@ -55,7 +35,6 @@ async def test_tool_dispatch_to_registry() -> None:
     ]
     mock_provider = MagicMock()
     mock_provider.get_name.return_value = "mock"
-    _wire_message_methods(mock_provider)
     mock_provider.generate = AsyncMock(
         return_value=LLMResult(
             text="It is 12:00 PM.",
@@ -81,7 +60,6 @@ async def test_tool_dispatch_to_registry() -> None:
 async def test_chat_agent_streaming() -> None:
     mock_provider = MagicMock()
     mock_provider.get_name.return_value = "mock"
-    _wire_message_methods(mock_provider)
 
     async def mock_stream(*args: Any, **kwargs: Any) -> Any:
         yield LLMChunk(text="Chunk 1", is_last=False)
@@ -101,7 +79,6 @@ async def test_chat_agent_streaming() -> None:
 async def test_chat_agent_execute_appends_user_and_model_history() -> None:
     mock_provider = MagicMock()
     mock_provider.get_name.return_value = "mock"
-    _wire_message_methods(mock_provider)
     mock_provider.generate = AsyncMock(
         return_value=LLMResult(
             text="Hello back",
@@ -128,7 +105,6 @@ async def test_chat_agent_execute_appends_user_and_model_history() -> None:
 async def test_chat_agent_execute_appends_only_user_when_content_missing() -> None:
     mock_provider = MagicMock()
     mock_provider.get_name.return_value = "mock"
-    _wire_message_methods(mock_provider)
     mock_provider.generate = AsyncMock(
         return_value=LLMResult(text="", candidates=[MagicMock(content=None)])
     )

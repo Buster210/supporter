@@ -91,15 +91,6 @@ async def test_conversation_fallback_trigger() -> None:
         def get_name(self) -> str:
             return "FailingProvider"
 
-        def build_user_message(self, prompt: str) -> Any:
-            return {"role": "user", "text": prompt}
-
-        def extract_assistant_message(self, result: LLMResult) -> Any | None:
-            return None
-
-        def build_assistant_message(self, text: str) -> Any:
-            return {"role": "model", "text": text}
-
         async def generate(
             self, prompt: str | list[Any], options: LLMOptions | None = None
         ) -> LLMResult:
@@ -121,15 +112,6 @@ async def test_conversation_fallback_trigger() -> None:
     class WorkingProvider(LLMProvider):
         def get_name(self) -> str:
             return "FallbackProvider"
-
-        def build_user_message(self, prompt: str) -> Any:
-            return {"role": "user", "text": prompt}
-
-        def extract_assistant_message(self, result: LLMResult) -> Any | None:
-            return None
-
-        def build_assistant_message(self, text: str) -> Any:
-            return {"role": "model", "text": text}
 
         async def generate(
             self, prompt: str | list[Any], options: LLMOptions | None = None

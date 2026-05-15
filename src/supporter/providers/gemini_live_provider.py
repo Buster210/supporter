@@ -1,7 +1,6 @@
 import asyncio
 import time
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
 from typing import Any
 
 from google import genai
@@ -19,20 +18,23 @@ from ..types import (
     LLMOptions,
     LLMResult,
 )
-from .gemini_messages import GeminiMessageMixin
 
 
-@dataclass
-class _LiveResultCandidate:
-    grounding_metadata: Any
+def _is_native_audio(model_name: str) -> bool:
+    return "native-audio" in model_name.lower()
 
 
-@dataclass
-class _LiveResultRaw:
-    candidates: list[_LiveResultCandidate]
+def _format_grounding_sources(grounding: Any) -> str:
+    chunks = getattr(grounding, "grounding_chunks", None) or []
+    lines = [
+        f"- {getattr(c.web, 'title', None) or 'Search Result'}: {c.web.uri}"
+        for c in chunks
+        if getattr(c, "web", None) and getattr(c.web, "uri", None)
+    ]
+    return "\n\nSOURCES FOUND:\n" + "\n".join(lines) if lines else ""
 
 
-class GeminiLiveProvider(GeminiMessageMixin):
+class GeminiLiveProvider:
     def __init__(
         self,
         api_keys: list[str],
@@ -56,6 +58,7 @@ class GeminiLiveProvider(GeminiMessageMixin):
             if include_thoughts is not None
             else config.live_thinking_level.lower() != "none"
         )
+        self._native_audio = _is_native_audio(self.model_name)
 
         self._session: Any = None
         self._session_manager: Any = None
@@ -105,6 +108,11 @@ class GeminiLiveProvider(GeminiMessageMixin):
             ),
             "tools": self._resolve_tools(),
         }
+
+        if self._native_audio:
+            config_kwargs["output_audio_transcription"] = (
+                types.AudioTranscriptionConfig()
+            )
 
         if self.include_thoughts:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
@@ -223,7 +231,7 @@ class GeminiLiveProvider(GeminiMessageMixin):
                         and response.server_content.turn_complete
                     ):
                         break
-        except (TimeoutError, Exception):
+        except Exception:
             await self.close()
 
     async def _prepare_turn(self, prompt: str | list[Content]) -> Any:
@@ -289,21 +297,23 @@ class GeminiLiveProvider(GeminiMessageMixin):
                     ):
                         full_response.append(content.output_transcription.text)
 
-                    if content.turn_complete or content.generation_complete:
-                        self._last_turn_complete = bool(content.turn_complete)
+                    if content.turn_complete:
+                        self._last_turn_complete = True
                         break
             except Exception as e:
                 logger.error(f"generate() error [{type(e).__name__}]: {e}")
 
+            text = "".join(full_response)
+            if grounding:
+                text += _format_grounding_sources(grounding)
+
             return LLMResult(
-                text="".join(full_response),
+                text=text,
                 model=self.model_name,
                 duration=time.perf_counter() - start_time,
                 thoughts="".join(thoughts),
                 usage={},
-                raw=_LiveResultRaw(
-                    candidates=[_LiveResultCandidate(grounding_metadata=grounding)]
-                ),
+                raw=grounding,
             )
 
     async def generate_stream(
@@ -311,6 +321,7 @@ class GeminiLiveProvider(GeminiMessageMixin):
     ) -> AsyncIterator[LLMChunk]:
         async with self._turn_lock:
             session = await self._prepare_turn(prompt)
+            grounding: Any = None
 
             try:
                 async for response in session.receive():
@@ -362,6 +373,9 @@ class GeminiLiveProvider(GeminiMessageMixin):
                                     text=part.text, is_last=False, model=self.model_name
                                 )
 
+                    if content.grounding_metadata and not grounding:
+                        grounding = content.grounding_metadata
+
                     if (
                         content.output_transcription
                         and content.output_transcription.text
@@ -372,16 +386,18 @@ class GeminiLiveProvider(GeminiMessageMixin):
                             model=self.model_name,
                         )
 
-                    is_finished = bool(
-                        content.turn_complete
-                        or content.generation_complete
-                        or (
-                            content.output_transcription
-                            and content.output_transcription.finished
+                    if content.turn_complete:
+                        self._last_turn_complete = True
+                        sources = (
+                            _format_grounding_sources(grounding) if grounding else ""
                         )
-                    )
-                    if is_finished:
-                        self._last_turn_complete = bool(content.turn_complete)
+                        if sources:
+                            yield LLMChunk(
+                                text=sources,
+                                is_last=False,
+                                model=self.model_name,
+                                raw=grounding,
+                            )
                         yield LLMChunk(text="", is_last=True, model=self.model_name)
                         break
             except Exception as e:
