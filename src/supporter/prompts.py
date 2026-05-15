@@ -1,5 +1,10 @@
 from typing import Any
 
+MODEL_GEMMA_31B = "gemma-4-31b-it"
+MODEL_GEMMA_26B = "gemma-4-26b-a4b-it"
+MODEL_GEMINI_LIVE = "gemini-3.1-flash-live-preview"
+MODEL_GEMINI_LIVE_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
+
 DELEGATE_DEFAULT_PERSONA = (
     "You are a focused task executor. You have been delegated a specific sub-task. "
     "Execute it precisely and completely. Report your findings and actions clearly. "
@@ -17,7 +22,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "Cite exact line numbers. No false positives."
         ),
         "tools": {"read_file", "execute_bash"},
-        "model": None,
+        "model": MODEL_GEMMA_31B,
         "live": False,
     },
     "test_engineer": {
@@ -27,7 +32,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "Never modify production code."
         ),
         "tools": {"read_file", "execute_bash"},
-        "model": None,
+        "model": MODEL_GEMMA_31B,
         "live": False,
     },
     "code_writer": {
@@ -37,7 +42,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "Validate your changes compile before reporting."
         ),
         "tools": {"read_file", "write_file", "execute_bash"},
-        "model": None,
+        "model": MODEL_GEMMA_26B,
         "live": False,
     },
     "researcher": {
@@ -47,8 +52,8 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "Always cite sources."
         ),
         "tools": {"read_file", "google_search"},
-        "model": None,
-        "live": False,
+        "model": MODEL_GEMINI_LIVE,
+        "live": True,
     },
     "code_reviewer": {
         "persona": (
@@ -57,7 +62,7 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "Provide specific, actionable feedback with line references."
         ),
         "tools": {"read_file"},
-        "model": None,
+        "model": MODEL_GEMMA_31B,
         "live": False,
     },
     "scout": {
@@ -71,8 +76,8 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "be a dense summary designed to minimize token usage for the next agent."
         ),
         "tools": {"read_file", "execute_bash"},
-        "model": None,
-        "live": False,
+        "model": MODEL_GEMINI_LIVE,
+        "live": True,
     },
 }
 

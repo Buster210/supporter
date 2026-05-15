@@ -181,7 +181,10 @@ async def test_provider_options_propagation(mock_genai_client: Any) -> None:
 async def test_provider_generate_interaction_resume_falls_back_to_standard_generation(
     mock_genai_client: Any,
 ) -> None:
-    provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
+    provider = GeminiProvider(
+        api_key="test-key",  # pragma: allowlist secret
+        model_name="gemini-3.1-flash",
+    )
     client_instance = mock_genai_client.return_value
     client_instance.aio.interactions.create.side_effect = RuntimeError("resume failed")
     result = await provider.generate("test", {"interaction_id": "interaction-123"})

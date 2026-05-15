@@ -1,4 +1,5 @@
 import json
+import os
 from collections import deque
 from typing import Any
 
@@ -8,6 +9,11 @@ from .agents import delegate_allowed_tool_names
 
 def _resolve_agent_profile(task: dict[str, Any]) -> dict[str, Any]:
     agent_name = task.get("agent")
+    env_model = (
+        os.getenv(f"{agent_name.upper()}_MODEL", "").strip() or None
+        if agent_name
+        else None
+    )
 
     if (
         agent_name
@@ -18,6 +24,8 @@ def _resolve_agent_profile(task: dict[str, Any]) -> dict[str, Any]:
         profile.update(
             {k: task[k] for k in ["persona", "tools", "model"] if task.get(k)}
         )
+        if not task.get("model") and env_model:
+            profile["model"] = env_model
         if "live" in task:
             profile["live"] = bool(task["live"])
         return profile
@@ -25,7 +33,7 @@ def _resolve_agent_profile(task: dict[str, Any]) -> dict[str, Any]:
     return {
         "persona": task.get("persona") or config.delegate_default_persona,
         "tools": task.get("tools"),
-        "model": task.get("model"),
+        "model": task.get("model") or env_model,
         "live": bool(task.get("live", False)),
     }
 

@@ -7,6 +7,9 @@ from .prompts import (
     DEFAULT_SYSTEM_INSTRUCTION,
     DELEGATE_AGENT_ROSTER,
     DELEGATE_DEFAULT_PERSONA,
+    MODEL_GEMINI_LIVE,
+    MODEL_GEMINI_LIVE_FALLBACK,
+    MODEL_GEMMA_31B,
 )
 from .types import AppConfig
 
@@ -28,7 +31,7 @@ INTERNAL_BLACKLIST = [
     "__pycache__",
 ]
 
-DEFAULT_MODEL = "gemma-4-31b-it"
+DEFAULT_MODEL = MODEL_GEMMA_31B
 
 RATE_LIMIT_ERROR_STRINGS = {"quota", "too many requests", "429"}
 
@@ -94,12 +97,9 @@ def load_config() -> AppConfig:
         provider=os.getenv("LLM_PROVIDER", "gemini"),
         gemini_api_keys=keys,
         gemini_model=os.getenv("GEMINI_MODEL", DEFAULT_MODEL),
-        gemini_live_model=os.getenv(
-            "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"
-        ),
+        gemini_live_model=os.getenv("GEMINI_LIVE_MODEL", MODEL_GEMINI_LIVE),
         gemini_live_fallback_model=os.getenv(
-            "GEMINI_LIVE_FALLBACK_MODEL",
-            "gemini-2.5-flash-native-audio-preview-12-2025",
+            "GEMINI_LIVE_FALLBACK_MODEL", MODEL_GEMINI_LIVE_FALLBACK
         ),
         gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL"),
         log_file=os.getenv("LOG_FILE", "app.log"),

@@ -49,6 +49,9 @@ class GeminiProvider:
             )
         return self._client
 
+    def _is_gemma(self) -> bool:
+        return self.model_name.lower().startswith("gemma")
+
     def _prepare_contents(
         self,
         prompt: str | list[Content],
@@ -66,6 +69,56 @@ class GeminiProvider:
             else prompt
         )
         return history + fresh_content
+
+    def _strip_gemini_only_tools(self, tools: list[Any]) -> list[Any]:
+        return [t for t in tools if getattr(t, "code_execution", None) is None]
+
+    def _build_generation_config(
+        self, options: LLMOptions, transformed_tools: list[Any] | None
+    ) -> Any:
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig
+
+        is_gemma = self._is_gemma()
+        thinking = (
+            types.ThinkingConfig(thinking_level=types.ThinkingLevel.HIGH)
+            if is_gemma
+            else types.ThinkingConfig(include_thoughts=True)
+        )
+        return GenerateContentConfig(
+            system_instruction=options.get("system_instruction")
+            or config.default_system_instruction,
+            temperature=options.get("temperature"),
+            top_p=options.get("top_p"),
+            top_k=options.get("top_k"),
+            max_output_tokens=options.get("max_output_tokens"),
+            tools=transformed_tools,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            )
+            if transformed_tools
+            else None,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
+            if transformed_tools
+            else None,
+            thinking_config=thinking,
+        )
+
+    def _prepare_request(
+        self,
+        prompt: str | list[Content],
+        options: LLMOptions,
+    ) -> tuple[list[Content], Any, list[Any] | None]:
+        transformed_tools = self._transform_tools(options)
+        if self._is_gemma() and transformed_tools:
+            transformed_tools = self._strip_gemini_only_tools(transformed_tools) or None
+        contents = self._prepare_contents(
+            prompt,
+            options.get("history"),
+            user_content=options.get("user_content"),
+        )
+        generation_config = self._build_generation_config(options, transformed_tools)
+        return contents, generation_config, transformed_tools
 
     def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
         if not options:
@@ -114,30 +167,10 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: LLMOptions | None = None,
     ) -> LLMResult:
-        from google.genai import types
-        from google.genai.types import GenerateContentConfig
-
         options = options or {}
         interaction_id = options.get("interaction_id")
-        transformed_tools = self._transform_tools(options)
-
-        generation_config = GenerateContentConfig(
-            system_instruction=options.get("system_instruction")
-            or config.default_system_instruction,
-            temperature=options.get("temperature"),
-            top_p=options.get("top_p"),
-            top_k=options.get("top_k"),
-            max_output_tokens=options.get("max_output_tokens"),
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                disable=False
-            )
-            if transformed_tools
-            else None,
-            tools=transformed_tools,
-            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
-            if transformed_tools
-            else None,
-            thinking_config=types.ThinkingConfig(include_thoughts=True),
+        contents, generation_config, transformed_tools = self._prepare_request(
+            prompt, options
         )
 
         start_time = time.perf_counter()
@@ -154,7 +187,7 @@ class GeminiProvider:
             logger.debug(f"generate() context options: {options!r}")
         result: Any = None
 
-        if interaction_id:
+        if interaction_id and not self._is_gemma():
             try:
                 result = await self.client.aio.interactions.create(
                     model=self.model_name,
@@ -171,14 +204,7 @@ class GeminiProvider:
         if not result:
             result = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=cast(
-                    Any,
-                    self._prepare_contents(
-                        prompt,
-                        options.get("history"),
-                        user_content=options.get("user_content"),
-                    ),
-                ),
+                contents=cast(Any, contents),
                 config=generation_config,
             )
 
@@ -244,24 +270,9 @@ class GeminiProvider:
         prompt: str | list[Content],
         options: LLMOptions | None = None,
     ) -> AsyncIterator[LLMChunk]:
-        from google.genai import types
-        from google.genai.types import GenerateContentConfig
-
         options = options or {}
-        transformed_tools = self._transform_tools(options)
-        generation_config = GenerateContentConfig(
-            system_instruction=options.get("system_instruction")
-            or config.default_system_instruction,
-            tools=transformed_tools,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                disable=False
-            )
-            if transformed_tools
-            else None,
-            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
-            if transformed_tools
-            else None,
-            thinking_config=types.ThinkingConfig(include_thoughts=True),
+        contents, generation_config, transformed_tools = self._prepare_request(
+            prompt, options
         )
 
         history = options.get("history") or []
@@ -272,14 +283,7 @@ class GeminiProvider:
         )
         stream = await self.client.aio.models.generate_content_stream(
             model=self.model_name,
-            contents=cast(
-                Any,
-                self._prepare_contents(
-                    prompt,
-                    options.get("history"),
-                    user_content=options.get("user_content"),
-                ),
-            ),
+            contents=cast(Any, contents),
             config=generation_config,
         )
 
