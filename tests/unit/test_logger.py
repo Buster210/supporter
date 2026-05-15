@@ -1,9 +1,12 @@
 import logging
 import sys
+from collections.abc import Iterator
 from datetime import datetime
 from io import StringIO
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from supporter.logger import (
     SupporterFormatter,
@@ -15,6 +18,17 @@ from supporter.logger import (
     logger,
     main,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_flight_recorder_state() -> Iterator[None]:
+    yield
+    from supporter import logger as logger_mod
+
+    with logger_mod._capture_lock:
+        logger_mod._capture_active = False
+        logger_mod._pre_capture_level = None
+    logger_mod._FLIGHT_RECORDER.clear()
 
 
 def test_supporter_formatter() -> None:
