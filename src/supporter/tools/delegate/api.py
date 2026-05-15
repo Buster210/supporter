@@ -59,11 +59,11 @@ async def delegate_tasks(
             EACH task object MUST include:
             - id: A unique string identifier (e.g., "t1", "analyze_file").
             - task: Detailed instructions for the sub-agent.
-            - agent: (Optional) Role from the roster (e.g., "scout", "code_writer").
+            - agent: (Optional) Role from the roster (e.g., "explorer", "code_writer").
             - depends_on: (Optional) List of task IDs to wait for.
             - tolerate_failures: (Optional) If true, run even when deps failed/
               timed-out/skipped; their outputs are injected with a status tag.
-            Example: '[{"id": "t1", "agent": "scout", "task": "map src/app.py"}]'
+            Example: '[{"id": "t1", "agent": "explorer", "task": "map src/app.py"}]'
         max_parallel: Max number of agents to run at once (Default: 3).
         notify_per_task: If true, compact completed/failed task signals are
             fed back to the orchestrator so it can query details and adapt

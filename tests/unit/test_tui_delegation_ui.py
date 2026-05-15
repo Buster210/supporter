@@ -61,7 +61,7 @@ def test_completed_task_signal_contains_only_ids() -> None:
     assert "Evidence" not in signal
     assert "More" not in signal
     assert "query_delegation" not in signal
-    assert "researcher" not in signal
+    assert "explorer" not in signal
     assert "Find current time in India." not in signal
 
 
@@ -71,7 +71,7 @@ async def test_task_event_injects_explicit_completion_signal() -> None:
     bus.notify_per_task = True
     bus.get_snapshot.return_value = {
         "get_time": {
-            "agent_label": "researcher",
+            "agent_label": "explorer",
             "task_goal": "Find current time in India.",
         }
     }
@@ -103,7 +103,7 @@ def test_delegation_progress_omits_task_details_and_summaries() -> None:
     bus.get_snapshot.return_value = {
         "map": {
             "status": "RUNNING",
-            "agent_label": "scout",
+            "agent_label": "explorer",
             "task_goal": "Map root files",
             "duration": 0.0,
         },
@@ -119,7 +119,7 @@ def test_delegation_progress_omits_task_details_and_summaries() -> None:
     output = format_delegation_progress("job123", bus)
 
     assert "| Task | Agent | Status | Time |" in output
-    assert "| map | scout | working |  |" in output
+    assert "| map | explorer | working |  |" in output
     assert "| review | code_reviewer | completed | 1.25s |" in output
     assert "Assigned task" not in output
     assert "Map root files" not in output

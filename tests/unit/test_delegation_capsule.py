@@ -43,7 +43,7 @@ def _task(task_id: str, depends_on: list[str] | None = None) -> dict[str, Any]:
     return {
         "id": task_id,
         "task": f"Do {task_id}",
-        "agent": "scout",
+        "agent": "explorer",
         "depends_on": depends_on or [],
         "tolerate_failures": False,
         "timeout": 30,
