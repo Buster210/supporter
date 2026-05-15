@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import weakref
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -47,7 +47,7 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-_model_cooldowns: dict[str, datetime] = {}
+_model_cooldowns: OrderedDict[str, datetime] = OrderedDict()
 _provider_registry: dict[str, LLMProvider] = {}
 _provider_lock = threading.Lock()
 
@@ -100,18 +100,22 @@ def should_trigger_fallback(error: Any) -> bool:
     return is_rate_limit(error) or is_model_error(error)
 
 
+def _prune_expired_cooldowns() -> None:
+    now = datetime.now()
+    expired = [name for name, exp in _model_cooldowns.items() if now > exp]
+    for name in expired:
+        del _model_cooldowns[name]
+        logger.info(f"Model '{name}' cooldown expired — re-enabling")
+
+
 def _is_model_in_cooldown(model_name: str) -> bool:
-    if model_name not in _model_cooldowns:
-        return False
-    if datetime.now() > _model_cooldowns[model_name]:
-        _model_cooldowns.pop(model_name, None)
-        logger.info(f"Model '{model_name}' cooldown expired — re-enabling")
-        return False
-    return True
+    _prune_expired_cooldowns()
+    return model_name in _model_cooldowns
 
 
 def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
     expiry = datetime.now() + timedelta(minutes=minutes)
+    _model_cooldowns.pop(model_name, None)
     _model_cooldowns[model_name] = expiry
     logger.info(
         f"Model '{model_name}' placed in cooldown until "
@@ -159,10 +163,10 @@ class DynamicPool(LLMProvider):
         return provider
 
     def _replace_instance(self, provider: GeminiProvider) -> None:
-        if provider not in self.active_slots:
+        try:
+            self.active_slots.remove(provider)
+        except ValueError:
             return
-
-        self.active_slots.remove(provider)
 
         logger.info(
             f"Pool '{self.model_name}': provider instance retired after failure — "
@@ -237,6 +241,8 @@ class DynamicPool(LLMProvider):
                             f"{attempt + 1}: {e}"
                         )
                     self._replace_instance(provider)
+                    if is_rate_limit(e):
+                        continue
                     await self._backoff(attempt)
                     continue
                 raise e
@@ -283,6 +289,8 @@ class DynamicPool(LLMProvider):
                             f"[{self.model_name}] Stream failed before first chunk — "
                             f"retrying (attempt {attempt + 1}/{len(self.keys)})"
                         )
+                        if is_rate_limit(e):
+                            continue
                         await self._backoff(attempt)
                         continue
                 raise e
