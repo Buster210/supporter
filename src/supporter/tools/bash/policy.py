@@ -6,7 +6,7 @@ import shutil
 from functools import lru_cache
 from pathlib import Path
 
-from ...config import config
+from .. import resolved_project_root
 from . import sandbox
 from .defs import (
     AUTO_APPROVED_BINARIES,
@@ -199,7 +199,7 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
         check_execution_location(binary_path)
         inner_command = shlex.join(inner_tokens)
         check_complex_syntax(inner_command)
-        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
+        project_root = resolved_project_root()
         apply_path_security(inner_command, inner_tokens, project_root, project_root)
         tier = apply_policy_checks(inner_command, inner_tokens, binary_name, TIER_SAFE)
         if tier == TIER_BLOCK:

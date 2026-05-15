@@ -92,16 +92,11 @@ def test_network_upload_and_exfiltration_flags_are_blocked(
 async def test_path_traversal_requires_confirmation_before_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from supporter.config import config as real_config
+
     project_root = tmp_path / "project"
     project_root.mkdir()
-    monkeypatch.setattr(
-        "supporter.tools.bash.executor.config.allowed_directories",
-        [str(project_root)],
-    )
-    monkeypatch.setattr(
-        "supporter.tools.bash.policy.config.allowed_directories",
-        [str(project_root)],
-    )
+    monkeypatch.setattr(real_config, "allowed_directories", [str(project_root)])
 
     with (
         patch(
@@ -120,20 +115,15 @@ async def test_path_traversal_requires_confirmation_before_execution(
 async def test_symlink_escape_requires_confirmation_before_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from supporter.config import config as real_config
+
     project_root = tmp_path / "project"
     outside = tmp_path / "outside"
     project_root.mkdir()
     outside.mkdir()
     (outside / "public.txt").write_text("text")
     (project_root / "escape").symlink_to(outside)
-    monkeypatch.setattr(
-        "supporter.tools.bash.executor.config.allowed_directories",
-        [str(project_root)],
-    )
-    monkeypatch.setattr(
-        "supporter.tools.bash.policy.config.allowed_directories",
-        [str(project_root)],
-    )
+    monkeypatch.setattr(real_config, "allowed_directories", [str(project_root)])
 
     with (
         patch(
@@ -174,16 +164,11 @@ def test_write_oriented_python_payload_requires_confirmation() -> None:
 async def test_confirmation_required_payload_does_not_auto_execute(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from supporter.config import config as real_config
+
     project_root = tmp_path / "project"
     project_root.mkdir()
-    monkeypatch.setattr(
-        "supporter.tools.bash.executor.config.allowed_directories",
-        [str(project_root)],
-    )
-    monkeypatch.setattr(
-        "supporter.tools.bash.policy.config.allowed_directories",
-        [str(project_root)],
-    )
+    monkeypatch.setattr(real_config, "allowed_directories", [str(project_root)])
     with (
         patch(
             "supporter.tools.bash.policy.verify_binary",

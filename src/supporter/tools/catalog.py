@@ -25,11 +25,13 @@ class ToolSpec:
     delegate_allowed: bool = False
 
 
-def build_tool_catalog(
-    *,
-    include_bash: bool = True,
-    extra_tools: Mapping[str, ToolSpec | Callable[..., Any]] | None = None,
-) -> dict[str, ToolSpec]:
+_BUILTIN_CATALOG_CACHE: dict[bool, dict[str, ToolSpec]] = {}
+
+
+def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
+    if include_bash in _BUILTIN_CATALOG_CACHE:
+        return _BUILTIN_CATALOG_CACHE[include_bash]
+
     from .bash.executor import execute_bash
     from .delegate.api import cancel_delegation, check_delegation, delegate_tasks
     from .delegate.capsule_query import query_delegation
@@ -53,6 +55,17 @@ def build_tool_catalog(
             delegate_allowed=True,
         ),
     }
+    # ToolSpec is frozen=True dataclass — safe to share cached refs without copying
+    _BUILTIN_CATALOG_CACHE[include_bash] = catalog
+    return catalog
+
+
+def build_tool_catalog(
+    *,
+    include_bash: bool = True,
+    extra_tools: Mapping[str, ToolSpec | Callable[..., Any]] | None = None,
+) -> dict[str, ToolSpec]:
+    catalog = dict(_builtin_catalog(include_bash))
     if extra_tools:
         for name, tool in extra_tools.items():
             catalog[name] = (

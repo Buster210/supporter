@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from ..config import INTERNAL_BLACKLIST, config
 from ..logger import logger
+from . import resolved_project_root
 from .base import ToolError
 
 _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
@@ -72,11 +73,11 @@ def _is_blacklisted(relative_path: str) -> bool:
 
 
 def validate_path(path: str) -> Path:
-    if not config.allowed_directories:
-        raise PermissionError("No allowed directories set. Check your configuration.")
-
+    try:
+        project_root = resolved_project_root()
+    except PermissionError as e:
+        raise ToolError(str(e)) from e
     target_path = Path(path).expanduser()
-    project_root = Path(config.allowed_directories[0]).expanduser().resolve()
 
     target_path = (
         (project_root / target_path).resolve()

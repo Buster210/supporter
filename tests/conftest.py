@@ -21,15 +21,31 @@ def setup_env() -> Generator[None, None, None]:
         yield
 
 
+@pytest.fixture(autouse=True)
+def clear_project_root_cache() -> Generator[None, None, None]:
+    from supporter.tools import _resolve_path
+
+    _resolve_path.cache_clear()
+    yield
+    _resolve_path.cache_clear()
+
+
 @pytest.fixture
 def mock_file_ops_config() -> Generator[MagicMock, None, None]:
-    with patch("supporter.tools.file_ops.config") as mock_config:
-        mock_config.allowed_directories = []
-        mock_config.require_write_confirmation = False
-        mock_config.log_file = ""
-        mock_config.blacklist = []
-        mock_config.gitignore_spec = None
-        yield mock_config
+    from supporter.config import config as real_config
+
+    saved = {
+        "allowed_directories": real_config.allowed_directories,
+        "require_write_confirmation": real_config.require_write_confirmation,
+        "log_file": real_config.log_file,
+        "blacklist": getattr(real_config, "blacklist", []),
+    }
+    real_config.allowed_directories = []
+    real_config.require_write_confirmation = False
+    real_config.log_file = ""
+    yield real_config  # type: ignore[misc]
+    for k, v in saved.items():
+        setattr(real_config, k, v)
 
 
 @pytest.fixture

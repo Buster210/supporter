@@ -8,9 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from ...config import config
 from ...logger import logger
 from ...types import TaskStatus
+from .. import resolved_project_root
 
 CAPSULE_SCHEMA_VERSION = 1
 ACTIVE_CAPSULE_STATUSES = {"pending", "running"}
@@ -29,7 +29,7 @@ def utc_now() -> str:
 
 
 def delegations_dir() -> Path:
-    return Path(config.allowed_directories[0]) / ".supporter" / "delegations"
+    return resolved_project_root() / ".supporter" / "delegations"
 
 
 def capsule_relative_path(job_id: str) -> str:

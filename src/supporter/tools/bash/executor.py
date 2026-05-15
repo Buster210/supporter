@@ -7,8 +7,8 @@ import sys
 import time
 from pathlib import Path
 
-from ...config import config
 from ...logger import logger
+from .. import resolved_project_root
 from ..base import ToolError
 from . import policy, sandbox
 from .defs import (
@@ -36,12 +36,6 @@ def _wrap_with_limits(cmd_tokens: list[str]) -> list[str]:
         parts.append(f"ulimit -v {MEM_LIMIT_BYTES // 1024}")
     limit_script = " && ".join([*parts, 'exec "$@"'])
     return ["/bin/bash", "-c", limit_script, "_", *cmd_tokens]
-
-
-def _resolved_project_root() -> Path:
-    if not config.allowed_directories:
-        raise PermissionError("No allowed directories set. Check your configuration.")
-    return Path(config.allowed_directories[0]).expanduser().resolve()
 
 
 def _redact_secrets(text: str) -> str:
@@ -96,7 +90,7 @@ async def execute_bash(command: str, working_directory: str | None = None) -> st
                 "by security policy."
             )
 
-        root = _resolved_project_root()
+        root = resolved_project_root()
         cwd = root
         if working_directory:
             from ..file_ops import validate_path
