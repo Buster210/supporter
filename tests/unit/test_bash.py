@@ -108,14 +108,19 @@ async def test_execute_bash_substitution_prohibited() -> None:
 
 @pytest.mark.asyncio
 async def test_execute_bash_pipe_auto_allow() -> None:
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (b"out", b"")
+    mock_proc.returncode = 0
+    mock_proc.pid = 12345
     with (
         patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
         patch("supporter.tools.bash.policy.verify_binary") as mock_verify,
-        patch("supporter.tools.bash.executor.subprocess.run") as mock_run,
+        patch("supporter.tools.bash.executor.subprocess.Popen") as mock_popen,
     ):
         mock_verify.side_effect = [Path("/bin/ls"), Path("/usr/bin/grep")]
-        mock_run.return_value = MagicMock(stdout=b"out", stderr=b"", returncode=0)
+        mock_popen.return_value.__enter__ = lambda s: mock_proc
+        mock_popen.return_value = mock_proc
         result = await execute_bash("ls | grep test")
         assert "out" in result
 
@@ -576,17 +581,27 @@ async def test_execute_bash_resilience() -> None:
         patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
     ):
+        timeout_proc = MagicMock()
+        timeout_proc.pid = 12345
+        timeout_proc.communicate.side_effect = subprocess.TimeoutExpired(
+            cmd="ls", timeout=5
+        )
+        timeout_proc.kill.return_value = None
         with patch(
-            "subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="ls", timeout=5),
+            "supporter.tools.bash.executor.subprocess.Popen",
+            return_value=timeout_proc,
         ):
             result = await execute_bash("ls")
             assert "timed out" in result
-        mock_res = MagicMock(
-            returncode=0, stdout=b"key is AIza" + b"x" * 35, stderr=b""
-        )
+        redact_proc = MagicMock()
+        redact_proc.returncode = 0
+        redact_proc.pid = 12346
+        redact_proc.communicate.return_value = (b"key is AIza" + b"x" * 35, b"")
         with (
-            patch("subprocess.run", return_value=mock_res),
+            patch(
+                "supporter.tools.bash.executor.subprocess.Popen",
+                return_value=redact_proc,
+            ),
             patch(
                 "supporter.tools.bash.policy.verify_binary",
                 return_value=Path("/usr/bin/ls"),
@@ -659,9 +674,9 @@ def test_execute_subprocess_complex_failure(
 
 
 @patch("supporter.tools.bash.policy.verify_binary")
-@patch("subprocess.run")
+@patch("supporter.tools.bash.executor.subprocess.Popen")
 def test_execute_subprocess_generic_exception(
-    mock_run: MagicMock, mock_verify: MagicMock
+    mock_popen: MagicMock, mock_verify: MagicMock
 ) -> None:
     import asyncio
 
@@ -670,7 +685,7 @@ def test_execute_subprocess_generic_exception(
         patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
     ):
         mock_verify.return_value = Path("/bin/ls")
-        mock_run.side_effect = Exception("General failure")
+        mock_popen.side_effect = Exception("General failure")
         mock_notify = MagicMock()
         set_bash_notification_callback(mock_notify)
         result = asyncio.run(execute_bash("ls"))
@@ -1039,7 +1054,7 @@ def test_execute_subprocess_security_block_triggers_notification(
         patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
         patch(
-            "supporter.tools.bash.executor.subprocess.run",
+            "supporter.tools.bash.executor.subprocess.Popen",
             side_effect=Exception("Security Block: blocked"),
         ),
     ):
@@ -1094,19 +1109,21 @@ def test_apply_path_security_empty_check_value_branch(project_root: Any) -> None
     assert _tier >= 1
 
 
-def test_execute_subprocess_uses_limit_wrapper_without_preexec(tmp_path: Any) -> None:
-    def fake_run(*args: Any, **kwargs: Any) -> Any:
-        assert "preexec_fn" not in kwargs
-        assert kwargs["start_new_session"] is True
-        assert args[0][0] == "/bin/bash"
-        assert args[0][4] == "/usr/bin/sandbox-exec"
-        assert args[0][-1] == "/usr/bin/ls"
-        return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
+def test_execute_subprocess_uses_set_limits_via_preexec(tmp_path: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_popen(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        mock = MagicMock()
+        mock.communicate.return_value = (b"ok", b"")
+        mock.returncode = 0
+        mock.pid = 99
+        return mock
 
     with (
         patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
-        patch("supporter.tools.bash.executor.subprocess.run", side_effect=fake_run),
+        patch("supporter.tools.bash.executor.subprocess.Popen", side_effect=fake_popen),
     ):
         output = executor._execute_subprocess(
             Path("/usr/bin/ls"),
@@ -1117,20 +1134,26 @@ def test_execute_subprocess_uses_limit_wrapper_without_preexec(tmp_path: Any) ->
             0.0,
         )
     assert "ok" in output
+    assert captured.get("start_new_session") is True
+    assert captured.get("preexec_fn") is executor._set_limits
 
 
-def test_execute_subprocess_windows_skips_limit_wrapper(tmp_path: Any) -> None:
-    def fake_run(*args: Any, **kwargs: Any) -> Any:
-        assert "preexec_fn" not in kwargs
-        assert kwargs["start_new_session"] is False
-        assert args[0][0] == "/usr/bin/sandbox-exec"
-        return MagicMock(returncode=0, stdout=b"ok", stderr=b"")
+def test_execute_subprocess_windows_skips_preexec(tmp_path: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_popen(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        mock = MagicMock()
+        mock.communicate.return_value = (b"ok", b"")
+        mock.returncode = 0
+        mock.pid = 99
+        return mock
 
     with (
         patch("supporter.tools.bash.sandbox._SB_BIN", "/usr/bin/sandbox-exec"),
         patch("supporter.tools.bash.sandbox._SB_TYPE", "macos"),
         patch("supporter.tools.bash.executor.sys.platform", "win32"),
-        patch("supporter.tools.bash.executor.subprocess.run", side_effect=fake_run),
+        patch("supporter.tools.bash.executor.subprocess.Popen", side_effect=fake_popen),
     ):
         output = executor._execute_subprocess(
             Path("/usr/bin/ls"),
@@ -1140,4 +1163,6 @@ def test_execute_subprocess_windows_skips_limit_wrapper(tmp_path: Any) -> None:
             set(),
             0.0,
         )
-    assert output == "ok"
+    assert "ok" in output
+    assert captured.get("start_new_session") is False
+    assert captured.get("preexec_fn") is None

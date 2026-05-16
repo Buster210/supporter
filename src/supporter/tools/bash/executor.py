@@ -1,7 +1,10 @@
 import asyncio
+import contextlib
 import os
 import re
+import resource
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -30,12 +33,11 @@ _LITERAL_SECRET_PATTERNS = tuple(re.compile(p) for p in SECRET_LITERAL_PATTERNS)
 _KEYWORD_SECRET_PATTERN = re.compile(SECRET_KEYWORD_PATTERN)
 
 
-def _wrap_with_limits(cmd_tokens: list[str]) -> list[str]:
-    parts = [f"ulimit -t {CPU_LIMIT_SEC}"]
-    if sys.platform != "darwin":
-        parts.append(f"ulimit -v {MEM_LIMIT_BYTES // 1024}")
-    limit_script = " && ".join([*parts, 'exec "$@"'])
-    return ["/bin/bash", "-c", limit_script, "_", *cmd_tokens]
+def _set_limits() -> None:
+    with contextlib.suppress(OSError, ValueError):
+        resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_SEC, CPU_LIMIT_SEC))
+    with contextlib.suppress(OSError, ValueError):
+        resource.setrlimit(resource.RLIMIT_AS, (MEM_LIMIT_BYTES, MEM_LIMIT_BYTES))
 
 
 def _redact_secrets(text: str) -> str:
@@ -179,28 +181,42 @@ def _execute_subprocess(
     args = [str(binary), *tokens[1:]]
     cmd_tokens = sandbox.wrap_in_sandbox(args, cwd, root)
 
-    if sys.platform != "win32":
-        cmd_tokens = _wrap_with_limits(cmd_tokens)
+    env = {
+        "PATH": ":".join(TRUSTED_EXECUTABLE_PATH_PREFIXES),
+        "TERM": "dumb",
+        "LANG": "en_US.UTF-8",
+    }
 
     try:
-        res = subprocess.run(  # nosec B603 # noqa: S603
+        proc = subprocess.Popen(  # nosec B603 # noqa: S603
             cmd_tokens,
-            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=cwd,
-            env={
-                "PATH": ":".join(TRUSTED_EXECUTABLE_PATH_PREFIXES),
-                "TERM": "dumb",
-                "LANG": "en_US.UTF-8",
-            },
+            env=env,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=EXECUTION_TIMEOUT_SEC,
             close_fds=True,
             start_new_session=sys.platform != "win32",
+            preexec_fn=_set_limits if sys.platform != "win32" else None,
         )
+        try:
+            raw_out, raw_err = proc.communicate(timeout=EXECUTION_TIMEOUT_SEC)
+            returncode = proc.returncode  # noqa: F841
+        except subprocess.TimeoutExpired:
+            if sys.platform != "win32":
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            try:
+                raw_out, raw_err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raw_out, raw_err = proc.communicate()
+            return f"Error: Command timed out ({EXECUTION_TIMEOUT_SEC}s limit)"
 
-        out = res.stdout[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
-        err = res.stderr[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
+        out = raw_out[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
+        err = raw_err[:OUTPUT_BUFFER_LIMIT].decode("utf-8", errors="replace")
 
         combined = sandbox.ANSI_ESCAPE.sub("", out + err)
         output = _redact_secrets(combined)
@@ -220,8 +236,6 @@ def _execute_subprocess(
 
         return output
 
-    except subprocess.TimeoutExpired:
-        return "Error: Command timed out (30s limit)"
     except Exception as e:
         if "Security Block" in str(e) and sandbox.bash_notification_callback:
             sandbox.bash_notification_callback(f"BASH TOOL FAILED: {e!s}")
