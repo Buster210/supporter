@@ -6,7 +6,7 @@ import shutil
 from functools import lru_cache
 from pathlib import Path
 
-from ...config import config
+from .. import resolved_project_root
 from . import sandbox
 from .defs import (
     AUTO_APPROVED_BINARIES,
@@ -36,6 +36,15 @@ from .defs import (
 
 _RESOLVED_SENSITIVE_SYSTEM_PATHS: tuple[str, ...] = tuple(
     str(Path(d).expanduser().resolve()) for d in SENSITIVE_SYSTEM_PATHS
+)
+
+_GLOBAL_FLAGS: frozenset[str] = frozenset({"-g", "--global", "--user"})
+
+_RISKY_NODE_RE = re.compile(
+    r"(require\((?!['\"][\w./\-@]+['\"])|import\(|child_process|"
+    r"fs\.(?:write|unlink|rm|rename|truncate)|process\.|eval|Function\(|"
+    r"Buffer\.from\(.*'base64'\)|atob\(|btoa\(|"
+    r"(?:global|globalThis|process)\s*\[)"
 )
 
 
@@ -94,7 +103,7 @@ def _check_package_manager(binary_name: str, tokens: list[str]) -> int:
     ):
         return TIER_BLOCK
 
-    if any(token in tokens for token in ["-g", "--global", "--user"]):
+    if any(t in _GLOBAL_FLAGS for t in tokens):
         return TIER_BLOCK
 
     is_install = any(token in PACKAGE_INSTALL_SUBCOMMANDS for token in tokens)
@@ -199,7 +208,7 @@ def _gate_inner_shell_payload(inner_tokens: list[str], depth: int) -> int:
         check_execution_location(binary_path)
         inner_command = shlex.join(inner_tokens)
         check_complex_syntax(inner_command)
-        project_root = Path(config.allowed_directories[0]).expanduser().resolve()
+        project_root = resolved_project_root()
         apply_path_security(inner_command, inner_tokens, project_root, project_root)
         tier = apply_policy_checks(inner_command, inner_tokens, binary_name, TIER_SAFE)
         if tier == TIER_BLOCK:
@@ -287,13 +296,7 @@ def _inspect_python(payload: str) -> int:
 
 
 def _inspect_node(payload: str) -> int:
-    risky_regex = (
-        r"(require\((?!['\"][\w./\-@]+['\"])|import\(|child_process|"
-        r"fs\.(?:write|unlink|rm|rename|truncate)|process\.|eval|Function\(|"
-        r"Buffer\.from\(.*'base64'\)|atob\(|btoa\(|"
-        r"(?:global|globalThis|process)\s*\[)"
-    )
-    if re.search(risky_regex, payload) or ("`" in payload and "${" in payload):
+    if _RISKY_NODE_RE.search(payload) or ("`" in payload and "${" in payload):
         return TIER_BLOCK
     return TIER_SAFE
 

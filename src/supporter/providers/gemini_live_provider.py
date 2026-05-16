@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from google import genai
-from google.genai import types
-from google.genai.types import Content
+if TYPE_CHECKING:
+    from google import genai
+    from google.genai import types
+    from google.genai.types import Content
 
 from ..config import config
 from ..logger import logger
@@ -34,6 +37,47 @@ def _format_grounding_sources(grounding: Any) -> str:
     return "\n\nSOURCES FOUND:\n" + "\n".join(lines) if lines else ""
 
 
+def _summarize_live_response(response: Any) -> str | None:
+    parts: list[str] = []
+
+    sc = response.server_content
+    if sc is not None:
+        if sc.turn_complete:
+            parts.append("turn_complete")
+        if sc.generation_complete:
+            parts.append("gen_complete")
+        if sc.interrupted:
+            parts.append("interrupted")
+
+    if response.tool_call is not None:
+        fcs = response.tool_call.function_calls or ()
+        names = ",".join(fc.name for fc in fcs if fc.name) or "<no_fc>"
+        parts.append(f"tool_call[{names}]")
+
+    if response.tool_call_cancellation is not None:
+        ids = response.tool_call_cancellation.ids or ()
+        parts.append(f"tool_call_cancellation[n={len(ids)}]")
+
+    sru = response.session_resumption_update
+    if sru is not None:
+        handle = sru.new_handle or ""
+        parts.append(
+            f"session_resumption[handle={handle[:8]},resumable={sru.resumable}]"
+        )
+
+    if response.go_away is not None:
+        parts.append(f"go_away[time_left={response.go_away.time_left}]")
+
+    if response.setup_complete is not None:
+        parts.append("setup_complete")
+
+    um = response.usage_metadata
+    if um is not None:
+        parts.append(f"usage[total={um.total_token_count}]")
+
+    return ",".join(parts) if parts else None
+
+
 class GeminiLiveProvider:
     def __init__(
         self,
@@ -47,7 +91,7 @@ class GeminiLiveProvider:
         self.api_keys = api_keys
         self.model_name = model_name or config.gemini_live_model
         self._current_key_index = 0
-        self.client = genai.Client(api_key=self.api_keys[0])
+        self._client: genai.Client | None = None
         self.tools = list(tools) if tools else []
         self.registry = dict(registry) if registry else {}
         self.system_instruction = (
@@ -59,6 +103,7 @@ class GeminiLiveProvider:
             else config.live_thinking_level.lower() != "none"
         )
         self._native_audio = _is_native_audio(self.model_name)
+        self._ends_turn_early = "gemini-3" in self.model_name.lower()
 
         self._session: Any = None
         self._session_manager: Any = None
@@ -70,11 +115,21 @@ class GeminiLiveProvider:
 
         ensure_function_search_tool(self.model_name, self.registry)
 
+    @property
+    def client(self) -> genai.Client:
+        if self._client is None:
+            from google import genai
+
+            self._client = genai.Client(api_key=self.api_keys[self._current_key_index])
+        return self._client
+
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
-        self.client = genai.Client(api_key=self.api_keys[self._current_key_index])
+        self._client = None
 
     def _resolve_tools(self) -> list[Any]:
+        from google.genai import types
+
         return resolve_live_provider_tools(
             model_name=self.model_name,
             tools=self.tools,
@@ -83,6 +138,8 @@ class GeminiLiveProvider:
         )
 
     def _get_session_config(self) -> types.LiveConnectConfig:
+        from google.genai import types
+
         config_kwargs: dict[str, Any] = {
             "response_modalities": [types.Modality.AUDIO],
             "system_instruction": types.Content(
@@ -180,23 +237,20 @@ class GeminiLiveProvider:
             raise RuntimeError("Failed to establish Gemini Live session")
 
     async def _handle_tool_call(self, session: Any, tool_call: Any) -> None:
+        from google.genai import types
+
         if not tool_call.function_calls:
             return
 
-        function_responses = []
-        for call in tool_call.function_calls:
+        async def _invoke(call: Any) -> Any:
             name, args, call_id = call.name, call.args or {}, call.id
             logger.info(f"Live tool call: '{name}' id={call_id} args={args!r}")
             if name not in self.registry:
-                function_responses.append(
-                    types.FunctionResponse(
-                        name=name,
-                        id=call_id,
-                        response={"error": f"Tool {name} not found"},
-                    )
+                return types.FunctionResponse(
+                    name=name,
+                    id=call_id,
+                    response={"error": f"Tool {name} not found"},
                 )
-                continue
-
             try:
                 func = self.registry[name]
                 result = (
@@ -208,17 +262,16 @@ class GeminiLiveProvider:
                     result = {"result": result}
                 logger.info(f"Live tool '{name}' succeeded")
                 logger.debug(f"Live tool '{name}' result payload: {result!r}")
-                function_responses.append(
-                    types.FunctionResponse(name=name, id=call_id, response=result)
-                )
+                return types.FunctionResponse(name=name, id=call_id, response=result)
             except Exception as e:
                 logger.error(f"Live tool '{name}' failed [{type(e).__name__}]: {e}")
-                function_responses.append(
-                    types.FunctionResponse(
-                        name=name, id=call_id, response={"error": str(e)}
-                    )
+                return types.FunctionResponse(
+                    name=name, id=call_id, response={"error": str(e)}
                 )
 
+        function_responses = await asyncio.gather(
+            *(_invoke(call) for call in tool_call.function_calls)
+        )
         if function_responses:
             await session.send_tool_response(function_responses=function_responses)
 
@@ -230,15 +283,26 @@ class GeminiLiveProvider:
                         response.server_content
                         and response.server_content.turn_complete
                     ):
-                        break
-        except Exception:
+                        self._last_turn_complete = True
+                        return
+        except TimeoutError:
+            logger.warning(
+                "Live session drain timed out; reconnecting to recover state"
+            )
+            await self.close()
+        except Exception as exc:
+            logger.warning(
+                f"Live session drain failed [{type(exc).__name__}: {exc}]; "
+                "closing session"
+            )
             await self.close()
 
     async def _prepare_turn(self, prompt: str | list[Content]) -> Any:
         session = await self._ensure_session()
         if not self._last_turn_complete:
             await self._drain_session(session)
-            session = await self._ensure_session()
+            if self._session is None:
+                session = await self._ensure_session()
 
         self._last_turn_complete = False
         await session.send_realtime_input(
@@ -256,7 +320,9 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
-                    logger.debug(f"Live stream receive: {response!r}")
+                    summary = _summarize_live_response(response)
+                    if summary is not None:
+                        logger.debug(f"Live receive: {summary}")
                     if response.tool_call:
                         await self._handle_tool_call(session, response.tool_call)
                         continue
@@ -297,8 +363,10 @@ class GeminiLiveProvider:
                     ):
                         full_response.append(content.output_transcription.text)
 
-                    if content.turn_complete:
-                        self._last_turn_complete = True
+                    if content.turn_complete or (
+                        self._ends_turn_early and content.generation_complete
+                    ):
+                        self._last_turn_complete = bool(content.turn_complete)
                         break
             except Exception as e:
                 logger.error(f"generate() error [{type(e).__name__}]: {e}")
@@ -325,7 +393,9 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
-                    logger.debug(f"Live stream receive: {response!r}")
+                    summary = _summarize_live_response(response)
+                    if summary is not None:
+                        logger.debug(f"Live receive: {summary}")
                     if response.tool_call:
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(
@@ -386,8 +456,10 @@ class GeminiLiveProvider:
                             model=self.model_name,
                         )
 
-                    if content.turn_complete:
-                        self._last_turn_complete = True
+                    if content.turn_complete or (
+                        self._ends_turn_early and content.generation_complete
+                    ):
+                        self._last_turn_complete = bool(content.turn_complete)
                         sources = (
                             _format_grounding_sources(grounding) if grounding else ""
                         )

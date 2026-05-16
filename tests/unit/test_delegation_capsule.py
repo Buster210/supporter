@@ -37,6 +37,8 @@ from supporter.types import MilestoneCompleted, TaskStatus
 def isolate_capsules(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
     dc._CAPSULE_LOCKS.clear()
+    dc._CAPSULE_CACHE.clear()
+    dc._CAPSULE_DIRTY_COUNT.clear()
 
 
 def _task(task_id: str, depends_on: list[str] | None = None) -> dict[str, Any]:
@@ -558,3 +560,134 @@ async def test_display_capsule_truncates_output_and_dependency_context() -> None
 
 def test_jsonish_non_string_branch() -> None:
     assert capsule_query.jsonish({"a": 1}) == '{"a": 1}'
+
+
+@pytest.mark.asyncio
+async def test_update_capsule_buffers_below_threshold(monkeypatch: Any) -> None:
+    await create_capsule("buf00001", "Buf", [_task("a")], 1)
+    calls = {"n": 0}
+    original = dc._save_capsule_sync
+
+    def counting(capsule: dict[str, Any]) -> None:
+        calls["n"] += 1
+        original(capsule)
+
+    monkeypatch.setattr(dc, "_save_capsule_sync", counting)
+    calls["n"] = 0
+    await mark_task_started("buf00001", "a")
+    await mark_task_started("buf00001", "a")
+    assert calls["n"] == 0
+    assert dc._CAPSULE_DIRTY_COUNT["buf00001"] == 2
+
+
+@pytest.mark.asyncio
+async def test_update_capsule_flushes_at_threshold(monkeypatch: Any) -> None:
+    await create_capsule("th000001", "Th", [_task("a")], 1)
+    calls = {"n": 0}
+    original = dc._save_capsule_sync
+
+    def counting(capsule: dict[str, Any]) -> None:
+        calls["n"] += 1
+        original(capsule)
+
+    monkeypatch.setattr(dc, "_save_capsule_sync", counting)
+    calls["n"] = 0
+    for _ in range(dc.CAPSULE_FLUSH_EVERY):
+        await mark_task_started("th000001", "a")
+    assert calls["n"] == 1
+    assert dc._CAPSULE_DIRTY_COUNT["th000001"] == 0
+
+
+@pytest.mark.asyncio
+async def test_update_capsule_flushes_on_status_transition(monkeypatch: Any) -> None:
+    await create_capsule("st000001", "St", [_task("a")], 1)
+    await mark_task_started("st000001", "a")
+    calls = {"n": 0}
+    original = dc._save_capsule_sync
+
+    def counting(capsule: dict[str, Any]) -> None:
+        calls["n"] += 1
+        original(capsule)
+
+    monkeypatch.setattr(dc, "_save_capsule_sync", counting)
+    calls["n"] = 0
+    await mark_capsule_completed("st000001")
+    assert calls["n"] >= 1
+    assert "st000001" not in dc._CAPSULE_CACHE
+
+
+@pytest.mark.asyncio
+async def test_update_capsule_save_failure_evicts_cache(monkeypatch: Any) -> None:
+    await create_capsule("fail0001", "Fail", [_task("a")], 1)
+    assert "fail0001" in dc._CAPSULE_CACHE
+
+    def boom(_capsule: dict[str, Any]) -> None:
+        raise OSError("disk full")
+
+    for _ in range(dc.CAPSULE_FLUSH_EVERY - 1):
+        await mark_task_started("fail0001", "a")
+    monkeypatch.setattr(dc, "_save_capsule_sync", boom)
+    with pytest.raises(OSError, match="disk full"):
+        await mark_task_started("fail0001", "a")
+    assert "fail0001" not in dc._CAPSULE_CACHE
+    assert "fail0001" not in dc._CAPSULE_DIRTY_COUNT
+
+
+@pytest.mark.asyncio
+async def test_cache_evicts_oldest_when_over_max(monkeypatch: Any) -> None:
+    monkeypatch.setattr(dc, "CAPSULE_CACHE_MAX", 3)
+    for i in range(5):
+        await create_capsule(f"evict{i:03d}", "E", [_task("a")], 1)
+    assert len(dc._CAPSULE_CACHE) == 3
+    assert "evict000" not in dc._CAPSULE_CACHE
+    assert "evict001" not in dc._CAPSULE_CACHE
+    assert "evict004" in dc._CAPSULE_CACHE
+
+
+@pytest.mark.asyncio
+async def test_cache_eviction_flushes_dirty_entry(monkeypatch: Any) -> None:
+    monkeypatch.setattr(dc, "CAPSULE_CACHE_MAX", 2)
+    await create_capsule("dirty001", "D", [_task("a")], 1)
+    await mark_task_started("dirty001", "a")
+    assert dc._CAPSULE_DIRTY_COUNT.get("dirty001", 0) > 0
+    saved_jobs: list[str] = []
+    original = dc._save_capsule_sync
+
+    def tracking(capsule: dict[str, Any]) -> None:
+        saved_jobs.append(str(capsule["job_id"]))
+        original(capsule)
+
+    monkeypatch.setattr(dc, "_save_capsule_sync", tracking)
+    await create_capsule("filler01", "F", [_task("a")], 1)
+    await create_capsule("filler02", "F", [_task("a")], 1)
+    assert "dirty001" not in dc._CAPSULE_CACHE
+    assert "dirty001" in saved_jobs
+    disk = load_capsule("dirty001")
+    assert disk["tasks"]["a"]["status"] == TaskStatus.STARTED.value
+
+
+@pytest.mark.asyncio
+async def test_load_all_capsules_sorts_by_updated_at_despite_mtime(
+    tmp_path: Any,
+) -> None:
+    import os
+
+    older = datetime.now(UTC) - timedelta(hours=2)
+    newer = datetime.now(UTC) - timedelta(minutes=5)
+    await create_capsule("old00001", "O", [_task("a")], 1)
+    await create_capsule("new00001", "N", [_task("a")], 1)
+    old_path = capsule_path("old00001")
+    new_path = capsule_path("new00001")
+    old_data = load_capsule("old00001")
+    new_data = load_capsule("new00001")
+    old_data["updated_at"] = older.isoformat().replace("+00:00", "Z")
+    new_data["updated_at"] = newer.isoformat().replace("+00:00", "Z")
+    await save_capsule(old_data)
+    await save_capsule(new_data)
+    fresh_mtime = (datetime.now(UTC) - timedelta(seconds=1)).timestamp()
+    stale_mtime = (datetime.now(UTC) - timedelta(hours=3)).timestamp()
+    os.utime(old_path, (fresh_mtime, fresh_mtime))
+    os.utime(new_path, (stale_mtime, stale_mtime))
+    result = capsule_query.load_all_capsules(limit=1)
+    assert len(result) == 1
+    assert result[0]["job_id"] == "new00001"

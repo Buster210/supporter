@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from typing import Any
 
-from ...types import TaskStatus
 from .capsule import (
     capsule_relative_path,
     default_evidence,
@@ -12,8 +10,8 @@ from .capsule import (
     first_compact_paragraph,
     load_capsule,
     preview,
-    status_value,
 )
+from .capsule_query import task_totals
 
 OUTPUT_PREVIEW_CHARS = 1200
 
@@ -23,7 +21,8 @@ def list_delegations(status: str | None = None, limit: int = 10) -> str:
 
     normalized_status = status.strip() if isinstance(status, str) and status else None
     limit = max(1, min(int(limit), 100))
-    capsules = load_all_capsules()
+    load_limit = None if normalized_status else limit
+    capsules = load_all_capsules(limit=load_limit)
     if normalized_status:
         capsules = [c for c in capsules if effective_status(c) == normalized_status]
     capsules.sort(key=lambda c: str(c.get("updated_at", "")), reverse=True)
@@ -34,7 +33,7 @@ def list_delegations(status: str | None = None, limit: int = 10) -> str:
     rows = ["| Job | Status | Tasks | Updated | Milestone |", "|---|---|---:|---|---|"]
     for capsule in capsules:
         tasks = capsule.get("tasks", {})
-        totals = _view_task_totals(tasks if isinstance(tasks, dict) else {})
+        totals = task_totals(tasks if isinstance(tasks, dict) else {})
         done = totals["completed"]
         total = len(tasks) if isinstance(tasks, dict) else 0
         rows.append(
@@ -130,7 +129,7 @@ def format_capsule_load_error(job_id: str, exc: BaseException) -> str:
 def format_capsule_summary(capsule: dict[str, Any]) -> str:
     job_id = str(capsule.get("job_id", ""))
     tasks = capsule.get("tasks", {})
-    totals = _view_task_totals(tasks if isinstance(tasks, dict) else {})
+    totals = task_totals(tasks if isinstance(tasks, dict) else {})
     synthesis = capsule.get("synthesis", {})
     if not isinstance(synthesis, dict):
         synthesis = {}
@@ -197,45 +196,32 @@ def format_section(title: str, value: Any) -> str:
 
 
 def display_capsule(capsule: dict[str, Any]) -> dict[str, Any]:
-    display = deepcopy(capsule)
-    tasks = display.get("tasks", {})
+    display = dict(capsule)
+    tasks = capsule.get("tasks", {})
     if isinstance(tasks, dict):
-        for task in tasks.values():
+        display_tasks: dict[str, Any] = {}
+        for task_id, task in tasks.items():
             if not isinstance(task, dict):
+                display_tasks[task_id] = task
                 continue
-            if task.get("output"):
-                task["output"] = preview(str(task["output"]), OUTPUT_PREVIEW_CHARS)
-            if task.get("dependency_context"):
-                task["dependency_context"] = preview(
-                    str(task["dependency_context"]), OUTPUT_PREVIEW_CHARS
+            needs_copy = bool(task.get("output")) or bool(
+                task.get("dependency_context")
+            )
+            if not needs_copy:
+                display_tasks[task_id] = task
+                continue
+            shallow = dict(task)
+            if shallow.get("output"):
+                shallow["output"] = preview(
+                    str(shallow["output"]), OUTPUT_PREVIEW_CHARS
                 )
+            if shallow.get("dependency_context"):
+                shallow["dependency_context"] = preview(
+                    str(shallow["dependency_context"]), OUTPUT_PREVIEW_CHARS
+                )
+            display_tasks[task_id] = shallow
+        display["tasks"] = display_tasks
     return display
-
-
-def _view_task_totals(tasks: dict[str, Any]) -> dict[str, int]:
-    completed = failed = skipped = timed_out = tokens = 0
-    for task in tasks.values():
-        if not isinstance(task, dict):
-            continue
-        task_status = status_value(task.get("status", ""))
-        if task_status == TaskStatus.COMPLETED.value:
-            completed += 1
-        elif task_status == TaskStatus.ERROR.value:
-            failed += 1
-        elif task_status == TaskStatus.SKIPPED.value:
-            skipped += 1
-        elif task_status == TaskStatus.TIMEOUT.value:
-            timed_out += 1
-        task_tokens = task.get("tokens", {})
-        if isinstance(task_tokens, dict):
-            tokens += int(task_tokens.get("total_tokens") or 0)
-    return {
-        "completed": completed,
-        "failed": failed,
-        "skipped": skipped,
-        "timed_out": timed_out,
-        "tokens": tokens,
-    }
 
 
 def _escape_table(text: str) -> str:

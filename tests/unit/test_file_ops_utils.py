@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from supporter.tools.base import ToolError
 from supporter.tools.file_ops import (
     _get_gitignore_spec,
     _is_blacklisted,
@@ -130,7 +131,7 @@ class TestFileOpsUtils:
 class TestPathValidation:
     def test_validate_path_no_allowed(self, mock_file_ops_config: Any) -> None:
         mock_file_ops_config.allowed_directories = []
-        with pytest.raises(PermissionError, match="No allowed directories"):
+        with pytest.raises(ToolError, match="No allowed directories"):
             validate_path("test.txt")
 
     def test_validate_path_outside_root(

@@ -394,6 +394,20 @@ async def test_render_delegation_signal_mounts_centered_label() -> None:
     assert "`" not in rendered
 
 
+@pytest.mark.asyncio
+async def test_process_system_message_uses_agent_role_without_active_turn() -> None:
+    app = MagicMock()
+    app.active_turn = None
+    app._process_message_cycle = AsyncMock()
+
+    bound = SupporterApp._process_system_message.__get__(app, SupporterApp)
+    await bound("system-only")
+
+    app._process_message_cycle.assert_awaited_once_with(
+        "system-only", mount_user=True, role="agent"
+    )
+
+
 def test_drop_delegation_progress_removes_stale_entry() -> None:
     app = MagicMock()
     app._delegation_bubbles = {"job123": object()}

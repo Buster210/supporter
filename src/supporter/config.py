@@ -15,8 +15,6 @@ from .types import AppConfig
 
 __all__ = ["AppConfig", "config"]
 
-load_dotenv()
-
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
 HTTP_SERVICE_UNAVAILABLE = 503
@@ -88,6 +86,7 @@ def _get_project_root() -> str:
 
 
 def load_config() -> AppConfig:
+    load_dotenv()
     raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
     keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
     project_root = _get_project_root()

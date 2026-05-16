@@ -3,14 +3,13 @@ import logging
 import os
 import platform
 import sys
+import threading
 import traceback
 from collections import deque
 from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from queue import Queue
 from typing import Any
-
-from .config import config
 
 _LEVEL_MAP: dict[str, int] = {
     "off": logging.CRITICAL + 10,
@@ -19,7 +18,7 @@ _LEVEL_MAP: dict[str, int] = {
 }
 
 
-_FLIGHT_RECORDER: deque[tuple[str, str, str]] = deque(maxlen=100)
+_FLIGHT_RECORDER: deque[tuple[str, str, str]] = deque(maxlen=20)
 
 
 def _record(level_name: str, message: str) -> None:
@@ -50,6 +49,33 @@ def _dump_flight_recorder(file_handler: RotatingFileHandler | None) -> None:
         sys.stderr.write(f"Failed to dump supporter flight recorder: {exc}\n")
 
 
+_capture_active: bool = False
+_pre_capture_level: int | None = None
+_capture_lock = threading.Lock()
+
+
+def _enter_capture(inner: logging.Logger) -> bool:
+    global _capture_active, _pre_capture_level
+    with _capture_lock:
+        if _capture_active:
+            return False
+        _pre_capture_level = inner.level
+        inner.setLevel(logging.DEBUG)
+        _capture_active = True
+        return True
+
+
+def _exit_capture(inner: logging.Logger) -> None:
+    global _capture_active, _pre_capture_level
+    with _capture_lock:
+        if not _capture_active:
+            return
+        if _pre_capture_level is not None:
+            inner.setLevel(_pre_capture_level)
+        _pre_capture_level = None
+        _capture_active = False
+
+
 class SupporterFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.fromtimestamp(record.created).strftime(
@@ -74,15 +100,17 @@ class _FlightRecorderLogger:
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
         _record("DEBUG", msg)
         self._inner.debug(msg, *args, **kwargs)
+        _exit_capture(self._inner)
 
     def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
         _record("INFO", msg)
         self._inner.info(msg, *args, **kwargs)
+        _exit_capture(self._inner)
 
     def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
         _record("WARN", msg)
         self._inner.warning(msg, *args, **kwargs)
-        _dump_flight_recorder(_file_handler)
+        _exit_capture(self._inner)
 
     def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
         exc_info = kwargs.get("exc_info")
@@ -90,13 +118,15 @@ class _FlightRecorderLogger:
             msg += f"\n{traceback.format_exc()}"
         _record("ERROR", msg)
         self._inner.error(msg, *args, **kwargs)
-        _dump_flight_recorder(_file_handler)
+        if _enter_capture(self._inner):
+            _dump_flight_recorder(_file_handler)
 
     def exception(self, msg: str, *args: Any, **kwargs: Any) -> None:
         msg += f"\n{traceback.format_exc()}"
         _record("EXCPT", msg)
         self._inner.exception(msg, *args, **kwargs)
-        _dump_flight_recorder(_file_handler)
+        if _enter_capture(self._inner):
+            _dump_flight_recorder(_file_handler)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -106,6 +136,8 @@ logger = _FlightRecorderLogger(logging.getLogger("supporter"))
 
 
 def init_logger() -> None:
+    from .config import config
+
     global _file_handler, _queue_listener
 
     try:

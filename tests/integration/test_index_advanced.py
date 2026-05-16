@@ -331,6 +331,76 @@ async def test_retry_on_429() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_on_429_skips_backoff() -> None:
+    class StatusError(Exception):
+        status: int
+
+    async def rate_limited_generate(*args: Any, **kwargs: Any) -> LLMResult:
+        error = StatusError("Quota exceeded")
+        error.status = 429
+        raise error
+
+    first_provider = MagicMock()
+    first_provider.get_name.return_value = "key1"
+    first_provider.generate = AsyncMock(side_effect=rate_limited_generate)
+
+    second_provider = MagicMock()
+    second_provider.get_name.return_value = "key2"
+    second_provider.generate = AsyncMock(return_value=LLMResult(text="Success"))
+
+    with patch(
+        "supporter.pool.GeminiProvider",
+        side_effect=[first_provider, second_provider],
+    ):
+        lb = DynamicPool(["key1", "key2"], model_name="test-model")
+        backoff = AsyncMock()
+        with patch.object(lb, "_backoff", backoff):
+            result = await lb.generate("test")
+
+    assert result.text == "Success"
+    backoff.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stream_retry_on_429_skips_backoff_before_first_chunk() -> None:
+    class StatusError(Exception):
+        status: int
+
+    first_provider = MagicMock()
+
+    async def rate_limited_stream(
+        *args: Any, **kwargs: Any
+    ) -> AsyncGenerator[Any, Any]:
+        error = StatusError("Quota exceeded")
+        error.status = 429
+        if False:
+            yield
+        raise error
+
+    first_provider.generate_stream = MagicMock(side_effect=rate_limited_stream)
+    second_provider = MagicMock()
+
+    async def success_stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Any, Any]:
+        yield LLMChunk(text="success", is_last=True)
+
+    second_provider.generate_stream = MagicMock(side_effect=success_stream)
+
+    with patch(
+        "supporter.pool.GeminiProvider",
+        side_effect=[first_provider, second_provider],
+    ):
+        lb = DynamicPool(["key1", "key2"], model_name="test-stream")
+        backoff = AsyncMock()
+        with patch.object(lb, "_backoff", backoff):
+            chunks = []
+            async for chunk in lb.generate_stream("test"):
+                chunks.append(chunk)
+
+    assert [chunk.text for chunk in chunks] == ["success"]
+    backoff.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_fast_fail_on_503_no_retry() -> None:
     call_count = 0
 

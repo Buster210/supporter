@@ -46,14 +46,13 @@ def project_root(tmp_path: Any) -> Any:
 
 
 @pytest.fixture
-def mock_config() -> Generator[MagicMock, None, None]:
-    with (
-        patch("supporter.tools.bash.executor.config") as mock_t,
-        patch("supporter.tools.bash.policy.config") as mock_p,
-    ):
-        mock_t.allowed_directories = ["/fake_tmp/project"]
-        mock_p.allowed_directories = ["/fake_tmp/project"]
-        yield mock_t
+def mock_config() -> Generator[Any, None, None]:
+    from supporter.config import config as real_config
+
+    saved = real_config.allowed_directories
+    real_config.allowed_directories = ["/fake_tmp/project"]
+    yield real_config
+    real_config.allowed_directories = saved
 
 
 @pytest.fixture(autouse=True)
@@ -130,12 +129,11 @@ async def test_execute_bash_full_path_prohibited() -> None:
 def test_execute_bash_success(project_root: Any) -> None:
     import asyncio
 
-    with (
-        patch("supporter.tools.bash.executor.config") as mock_config_t,
-        patch("supporter.tools.bash.policy.config") as mock_config_p,
-    ):
-        mock_config_t.allowed_directories = [str(project_root)]
-        mock_config_p.allowed_directories = [str(project_root)]
+    from supporter.config import config as real_config
+
+    saved = real_config.allowed_directories
+    real_config.allowed_directories = [str(project_root)]
+    try:
         with patch("supporter.tools.bash.policy.verify_binary") as mock_verify:
             mock_verify.return_value = Path("/usr/bin/ls")
             with patch(
@@ -159,6 +157,8 @@ def test_execute_bash_success(project_root: Any) -> None:
                 ):
                     result = asyncio.run(execute_bash("ls"))
                     assert result == "file1\nfile2"
+    finally:
+        real_config.allowed_directories = saved
 
 
 def test_execute_bash_env_strip() -> None:

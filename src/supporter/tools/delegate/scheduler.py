@@ -1,6 +1,5 @@
 import asyncio
 import time
-from collections import deque
 from typing import Any
 
 from ...config import DELEGATE_ANOMALY_THRESHOLD, DELEGATE_HEARTBEAT_INTERVAL
@@ -73,25 +72,6 @@ def _should_skip(
     return None
 
 
-def _compute_priority(task_id: str, tasks: list[dict[str, Any]]) -> int:
-    dependents: dict[str, list[str]] = {t["id"]: [] for t in tasks}
-    for t in tasks:
-        for dep in t["depends_on"]:
-            dependents[dep].append(t["id"])
-
-    visited: set[str] = set()
-    queue = deque([task_id])
-    count = 0
-    while queue:
-        current = queue.popleft()
-        for dep in dependents.get(current, []):
-            if dep not in visited:
-                visited.add(dep)
-                count += 1
-                queue.append(dep)
-    return count
-
-
 async def _execute_dag(
     tasks: list[dict[str, Any]],
     semaphore: asyncio.Semaphore,
@@ -101,17 +81,10 @@ async def _execute_dag(
 ) -> list[dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
-    priorities: dict[str, int] = {
-        t["id"]: _compute_priority(t["id"], tasks) for t in tasks
-    }
 
     async def _run_with_gate(task: dict[str, Any]) -> None:
         for dep_id in task["depends_on"]:
             await task_done[dep_id].wait()
-
-        priority = priorities[task["id"]]
-        if priority < max(priorities.values(), default=0):
-            await asyncio.sleep(0)
 
         task_id = task["id"]
         agent_label = task.get("agent") or "custom"

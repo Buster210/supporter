@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import App, ComposeResult
@@ -11,9 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Input, Label
 
-from ..agent import ChatAgent
 from ..logger import init_logger, logger, shutdown_logger
-from ..pool import DynamicPool
 from ..tools.base import ToolError
 from ..types import ModeChanged
 
@@ -27,11 +24,9 @@ if TYPE_CHECKING:
     from ..agent import ChatAgent
     from .chat import ChatTurn
 
-CSS = (Path(__file__).parent / "styles.tcss").read_text()
-
 
 class SupporterApp(App[None]):
-    CSS = CSS
+    CSS_PATH = "styles.tcss"
 
     status_label = reactive("Thinking")
     active_queries = reactive(0)
@@ -121,6 +116,8 @@ class SupporterApp(App[None]):
         ):
             await self.agent.provider.close()
 
+        from ..pool import DynamicPool
+
         await DynamicPool.shutdown_all()
         await self._mode_manager.close()
         shutdown_logger()
@@ -142,11 +139,11 @@ class SupporterApp(App[None]):
             yield WelcomeBanner(id="welcome-banner", classes="hidden")
             with ChatContainer(id="chat-view"):
                 pass
-            yield QueuedMessagesDisplay(id="queue-display")
             yield ThinkingIndicator(id="thinking-indicator")
 
             with Horizontal(id="scroll-btn-wrapper", classes="hidden"):
                 yield Button("↓ Go to bottom", id="scroll-bottom-btn")
+            yield QueuedMessagesDisplay(id="queue-display")
             with Vertical(id="input-area"), Horizontal(id="prompt-row"):
                 yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
@@ -174,6 +171,7 @@ class SupporterApp(App[None]):
         chat_view.query("*").remove()
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
+        self.active_turn = None
 
     def start_thinking(self) -> None:
         self.active_queries += 1
@@ -223,12 +221,12 @@ class SupporterApp(App[None]):
             self._process_message_cycle(user_text, mount_user=False, target=new_turn)
         )
 
-    async def _mount_user_turn(self, text: str) -> ChatTurn:
+    async def _mount_user_turn(self, text: str, role: str = "user") -> ChatTurn:
         from .bubble import MessageBubble
         from .chat import ChatTurn
 
         chat_view = self.query_one("#chat-view", Vertical)
-        new_turn = ChatTurn(MessageBubble(role="user", content=text))
+        new_turn = ChatTurn(MessageBubble(role=role, content=text))
         if self.active_turn:
             self.active_turn.auto_collapse()
         self.active_turn = new_turn
@@ -251,11 +249,12 @@ class SupporterApp(App[None]):
         mount_user: bool = True,
         target: Vertical | None = None,
         exclude_from_history: bool = False,
+        role: str = "user",
     ) -> None:
         self._is_processing = True
         chat_view = self.query_one("#chat-view", Vertical)
         if mount_user:
-            await self._mount_user_turn(text)
+            await self._mount_user_turn(text, role=role)
             self.query_one("#user-input").focus()
 
         target_container = target or (
@@ -419,7 +418,7 @@ class SupporterApp(App[None]):
         if self.active_turn:
             await self._process_message_cycle(text, mount_user=False)
         else:
-            await self._process_message_cycle(text, mount_user=True)
+            await self._process_message_cycle(text, mount_user=True, role="agent")
 
     def _start_delegation_listener(self, job_id: str) -> None:
         self.run_worker(self._delegation_listener.listen(job_id), exclusive=False)
