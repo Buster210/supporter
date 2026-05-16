@@ -37,6 +37,47 @@ def _format_grounding_sources(grounding: Any) -> str:
     return "\n\nSOURCES FOUND:\n" + "\n".join(lines) if lines else ""
 
 
+def _summarize_live_response(response: Any) -> str | None:
+    parts: list[str] = []
+
+    sc = response.server_content
+    if sc is not None:
+        if sc.turn_complete:
+            parts.append("turn_complete")
+        if sc.generation_complete:
+            parts.append("gen_complete")
+        if sc.interrupted:
+            parts.append("interrupted")
+
+    if response.tool_call is not None:
+        fcs = response.tool_call.function_calls or ()
+        names = ",".join(fc.name for fc in fcs if fc.name) or "<no_fc>"
+        parts.append(f"tool_call[{names}]")
+
+    if response.tool_call_cancellation is not None:
+        ids = response.tool_call_cancellation.ids or ()
+        parts.append(f"tool_call_cancellation[n={len(ids)}]")
+
+    sru = response.session_resumption_update
+    if sru is not None:
+        handle = sru.new_handle or ""
+        parts.append(
+            f"session_resumption[handle={handle[:8]},resumable={sru.resumable}]"
+        )
+
+    if response.go_away is not None:
+        parts.append(f"go_away[time_left={response.go_away.time_left}]")
+
+    if response.setup_complete is not None:
+        parts.append("setup_complete")
+
+    um = response.usage_metadata
+    if um is not None:
+        parts.append(f"usage[total={um.total_token_count}]")
+
+    return ",".join(parts) if parts else None
+
+
 class GeminiLiveProvider:
     def __init__(
         self,
@@ -279,7 +320,9 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
-                    logger.debug(f"Live stream receive: {response!r}")
+                    summary = _summarize_live_response(response)
+                    if summary is not None:
+                        logger.debug(f"Live receive: {summary}")
                     if response.tool_call:
                         await self._handle_tool_call(session, response.tool_call)
                         continue
@@ -350,7 +393,9 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
-                    logger.debug(f"Live stream receive: {response!r}")
+                    summary = _summarize_live_response(response)
+                    if summary is not None:
+                        logger.debug(f"Live receive: {summary}")
                     if response.tool_call:
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(

@@ -234,11 +234,9 @@ class GeminiProvider:
             text_parts = result.candidates[0].content.parts
             if text_parts:
                 thoughts = "".join(
-                    [
-                        p.text
-                        for p in text_parts
-                        if p.text and getattr(p, "thought", False)
-                    ]
+                    p.text
+                    for p in text_parts
+                    if p.text and getattr(p, "thought", False)
                 )
 
         duration = end_time - start_time
