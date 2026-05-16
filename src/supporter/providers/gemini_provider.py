@@ -285,43 +285,48 @@ class GeminiProvider:
             config=generation_config,
         )
 
-        async for chunk in stream:
-            if not chunk.candidates or not chunk.candidates[0].content:
-                continue
+        try:
+            async for chunk in stream:
+                if not chunk.candidates or not chunk.candidates[0].content:
+                    continue
 
-            parts = chunk.candidates[0].content.parts
-            if not parts:
-                continue
+                parts = chunk.candidates[0].content.parts
+                if not parts:
+                    continue
 
-            for part in parts:
-                is_thought = getattr(part, "thought", False)
-                if is_thought:
-                    yield LLMChunk(
-                        text=part.text or "",
-                        is_thought=True,
-                        is_last=False,
-                        model=self.model_name,
-                        raw=chunk,
-                    )
-                elif part.function_call:
-                    yield LLMChunk(
-                        text="",
-                        is_thought=False,
-                        is_last=False,
-                        is_tool_call=True,
-                        tool_name=part.function_call.name,
-                        tool_args=part.function_call.args or {},
-                        model=self.model_name,
-                        raw=chunk,
-                    )
-                elif part.text:
-                    yield LLMChunk(
-                        text=part.text,
-                        is_thought=False,
-                        is_last=False,
-                        model=self.model_name,
-                        raw=chunk,
-                    )
+                for part in parts:
+                    is_thought = getattr(part, "thought", False)
+                    if is_thought:
+                        yield LLMChunk(
+                            text=part.text or "",
+                            is_thought=True,
+                            is_last=False,
+                            model=self.model_name,
+                            raw=chunk,
+                        )
+                    elif part.function_call:
+                        yield LLMChunk(
+                            text="",
+                            is_thought=False,
+                            is_last=False,
+                            is_tool_call=True,
+                            tool_name=part.function_call.name,
+                            tool_args=part.function_call.args or {},
+                            model=self.model_name,
+                            raw=chunk,
+                        )
+                    elif part.text:
+                        yield LLMChunk(
+                            text=part.text,
+                            is_thought=False,
+                            is_last=False,
+                            model=self.model_name,
+                            raw=chunk,
+                        )
+        except Exception as e:
+            logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
+
+        yield LLMChunk(text="", is_last=True, model=self.model_name)
 
     def get_name(self) -> str:
         return self.model_name

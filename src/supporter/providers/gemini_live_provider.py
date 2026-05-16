@@ -370,6 +370,7 @@ class GeminiLiveProvider:
                         break
             except Exception as e:
                 logger.error(f"generate() error [{type(e).__name__}]: {e}")
+                self._last_turn_complete = True
 
             text = "".join(full_response)
             if grounding:
@@ -474,6 +475,7 @@ class GeminiLiveProvider:
                         break
             except Exception as e:
                 logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
+                self._last_turn_complete = True
                 yield LLMChunk(text="", is_last=True, model=self.model_name)
 
     async def close(self) -> None:
