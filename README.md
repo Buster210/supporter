@@ -97,3 +97,7 @@ uv run mypy .            # Type check
 - **Isolation**: Sub-agents have zero conversation history and minimal tool access.
 - **Validation**: All file writes and T2/T3 bash commands require manual UI confirmation.
 - **Constraints**: No piped/chained shell commands; strict path traversal protection.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.

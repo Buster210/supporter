@@ -2,6 +2,8 @@
 name = "supporter"
 version = "0.2.0"
 description = "A TUI-based AI chat client (Python migration)"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.14"
 dependencies = [
     "google-genai>=1.73.1",
