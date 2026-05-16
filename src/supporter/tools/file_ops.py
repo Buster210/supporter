@@ -34,7 +34,7 @@ def emit_confirmation_line(message: str = "") -> None:
         from textual._context import active_app
 
         app = active_app.get()
-    except (LookupError, RuntimeError):
+    except LookupError, RuntimeError:
         print(message)
         return
 

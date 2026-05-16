@@ -2,7 +2,7 @@
 
 ## 1. Project DNA
 - **Mission**: Elite technical strategist and principal software architect TUI chat client powered by Google Gemini, orchestrating complex development tasks via a multi-agent delegation system and sandboxed tool execution.
-- **Stack**: Python 3.13+, `uv`, `google-genai`, `textual`, `rich`.
+- **Stack**: Python 3.14+, `uv`, `google-genai`, `textual`, `rich`.
 - **Ref**: [README.md](file:///Users/riteshkumarpal/Downloads/lab/supporter/README.md) | **Entry**: `uv run supporter`
 
 ## 2. Arch & Flow

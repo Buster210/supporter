@@ -50,7 +50,7 @@ class MockLiveSession:
         self.send_realtime_input = MagicMock(side_effect=lambda *args, **kwargs: None)
         self.send_tool_response = MagicMock(side_effect=lambda *args, **kwargs: None)
 
-    async def __aenter__(self) -> "MockLiveSession":
+    async def __aenter__(self) -> MockLiveSession:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:

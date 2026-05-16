@@ -3,7 +3,7 @@ from typing import Any
 
 from ...types import DelegationEvent, MilestoneCompleted
 
-_REGISTRY: dict[str, "DelegationBus"] = {}
+_REGISTRY: dict[str, DelegationBus] = {}
 
 
 class DelegationBus:

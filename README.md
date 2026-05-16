@@ -32,7 +32,7 @@ An elite technical strategist and principal software architect TUI chat client p
 
 ## Installation
 
-This project requires Python 3.13+ and `uv`.
+This project requires Python 3.14+ and `uv`.
 
 ```bash
 # Clone the repository

@@ -109,7 +109,7 @@ def jsonish(value: Any) -> str:
 def duration(value: Any) -> float:
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0.0
 
 
