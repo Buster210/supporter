@@ -77,6 +77,16 @@ DELEGATE_JOB_ID_LEN = 8
 DELEGATE_RETRY_BACKOFF = [1.0, 3.0]
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"${name} must be an integer, got: {raw!r}") from exc
+
+
 def _get_project_root() -> str:
     current = Path(__file__).resolve().parent
     for parent in [current, *list(current.parents)]:
@@ -120,9 +130,7 @@ def load_config() -> AppConfig:
         drain_timeout=DRAIN_TIMEOUT,
         context_trigger_tokens=CONTEXT_TRIGGER_TOKENS,
         context_target_tokens=CONTEXT_TARGET_TOKENS,
-        http_retry_attempts=int(
-            os.getenv("HTTP_RETRY_ATTEMPTS", str(HTTP_RETRY_ATTEMPTS))
-        ),
+        http_retry_attempts=_int_env("HTTP_RETRY_ATTEMPTS", HTTP_RETRY_ATTEMPTS),
         delegate_max_hard_cap=DELEGATE_MAX_HARD_CAP,
         delegate_default_parallel=DELEGATE_DEFAULT_PARALLEL,
         delegate_default_timeout=DELEGATE_DEFAULT_TIMEOUT,
@@ -131,12 +139,10 @@ def load_config() -> AppConfig:
         delegate_max_output_chars=DELEGATE_MAX_OUTPUT_CHARS,
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
-        delegate_max_retries=int(
-            os.getenv("DELEGATE_MAX_RETRIES", str(DELEGATE_MAX_RETRIES))
-        ),
-        log_max_bytes=int(os.getenv("LOG_MAX_BYTES", "5000000")),
-        log_backup_count=int(os.getenv("LOG_BACKUP_COUNT", "3")),
-        history_max_turns=int(os.getenv("HISTORY_MAX_TURNS", "200")),
+        delegate_max_retries=_int_env("DELEGATE_MAX_RETRIES", DELEGATE_MAX_RETRIES),
+        log_max_bytes=_int_env("LOG_MAX_BYTES", 5_000_000),
+        log_backup_count=_int_env("LOG_BACKUP_COUNT", 3),
+        history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),
     )
 
 

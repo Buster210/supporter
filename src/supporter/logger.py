@@ -8,6 +8,7 @@ import traceback
 from collections import deque
 from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from pathlib import Path
 from queue import Queue
 from typing import Any
 
@@ -141,8 +142,10 @@ def init_logger() -> None:
     global _file_handler, _queue_listener
 
     try:
+        log_path = Path(config.log_file).expanduser().resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         fh = RotatingFileHandler(
-            config.log_file,
+            log_path,
             mode="a",
             maxBytes=config.log_max_bytes,
             backupCount=config.log_backup_count,

@@ -52,10 +52,12 @@ async def test_provider_streaming(mock_genai_client: Any) -> None:
         chunks = []
         async for chunk in provider.generate_stream("Say 'Test Success'"):
             chunks.append(chunk)
-        assert len(chunks) == 2
+        assert len(chunks) == 3
         assert chunks[0].text == "Chunk 1"
         assert chunks[1].text == "Chunk 2"
         assert chunks[1].is_last is False
+        assert chunks[2].is_last is True
+        assert chunks[2].text == ""
         assert "".join(c.text for c in chunks) == "Chunk 1Chunk 2"
 
 
@@ -73,10 +75,12 @@ async def test_provider_streaming_thought_chunks(mock_genai_client: Any) -> None
     chunks = []
     async for chunk in provider.generate_stream("test"):
         chunks.append(chunk)
-    assert len(chunks) == 1
+    assert len(chunks) == 2
     assert chunks[0].text == "Internal reasoning"
     assert chunks[0].is_thought is True
     assert chunks[0].is_tool_call is False
+    assert chunks[1].is_last is True
+    assert chunks[1].text == ""
 
 
 @pytest.mark.asyncio
@@ -99,11 +103,13 @@ async def test_provider_streaming_function_call_chunks(mock_genai_client: Any) -
     chunks = []
     async for chunk in provider.generate_stream("test"):
         chunks.append(chunk)
-    assert len(chunks) == 1
+    assert len(chunks) == 2
     assert chunks[0].text == ""
     assert chunks[0].is_tool_call is True
     assert chunks[0].tool_name == "lookup_weather"
     assert chunks[0].tool_args == {"city": "Delhi"}
+    assert chunks[1].is_last is True
+    assert chunks[1].text == ""
 
 
 @pytest.mark.asyncio
@@ -123,8 +129,10 @@ async def test_provider_streaming_handles_empty_candidates(
     chunks = []
     async for chunk in provider.generate_stream("test"):
         chunks.append(chunk)
-    assert len(chunks) == 1
+    assert len(chunks) == 2
     assert chunks[0].text == "Chunk after skip"
+    assert chunks[1].is_last is True
+    assert chunks[1].text == ""
 
 
 @pytest.mark.asyncio
@@ -141,8 +149,10 @@ async def test_provider_streaming_handles_missing_parts(mock_genai_client: Any) 
     chunks = []
     async for chunk in provider.generate_stream("test"):
         chunks.append(chunk)
-    assert len(chunks) == 1
+    assert len(chunks) == 2
     assert chunks[0].text == "Recovered chunk"
+    assert chunks[1].is_last is True
+    assert chunks[1].text == ""
 
 
 @pytest.mark.asyncio
