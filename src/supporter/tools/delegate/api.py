@@ -21,19 +21,7 @@ from .validation import validate_tasks
 
 _on_delegation_start: Callable[[str], None] | None = None
 
-_GLOBAL_SEMAPHORE: asyncio.Semaphore | None = None
-
-
-def _get_global_semaphore() -> asyncio.Semaphore:
-    global _GLOBAL_SEMAPHORE
-    if _GLOBAL_SEMAPHORE is None:
-        _GLOBAL_SEMAPHORE = asyncio.Semaphore(config.delegate_max_hard_cap)
-    return _GLOBAL_SEMAPHORE
-
-
-def reset_global_semaphore() -> None:
-    global _GLOBAL_SEMAPHORE
-    _GLOBAL_SEMAPHORE = None
+_GLOBAL_SEMAPHORE: asyncio.Semaphore = asyncio.Semaphore(config.delegate_max_hard_cap)
 
 
 def set_delegation_start_callback(cb: Callable[[str], None] | None) -> None:
@@ -80,7 +68,7 @@ async def delegate_tasks(
     try:
         validated_tasks = validate_tasks(tasks)
         parallel_cap = max(1, min(max_parallel, config.delegate_max_hard_cap))
-        semaphore = _get_global_semaphore()
+        semaphore = _GLOBAL_SEMAPHORE
         job_id = str(uuid.uuid4())[:DELEGATE_JOB_ID_LEN]
 
         bus = get_bus(job_id, milestone)

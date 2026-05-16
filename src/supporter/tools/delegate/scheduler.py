@@ -356,6 +356,7 @@ async def run_milestone(
     finally:
         if heartbeat_task is not None:
             heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
         bus.close()
         remove_bus(job_id)
         JOB_TASKS.pop(job_id, None)
