@@ -4,12 +4,16 @@ An elite technical strategist and principal software architect TUI chat client p
 
 ## Features
 
-- **Multi-Agent Orchestration**: Orchestrator-driven delegation to specialized roles (Architect, Security Auditor, Code Writer, Explorer).
+- **Multi-Agent Orchestration**: Orchestrator-driven delegation to specialized roles (Architect, Security Auditor, Code Writer, Test Engineer, Code Reviewer).
 - **Sandboxed Execution**: Mandatory `sandbox-exec` for all shell operations with tiered security policies (T1/T2/T3).
 - **High-Fidelity TUI**: Reactive dashboard built with Textual and Rich, featuring real-time streaming and async progress notifications.
 - **Reliability Layer**:
-    - **Load Balancing**: Health-aware round-robin rotation across multiple Gemini API keys.
-    - **Dynamic Fallback**: Seamless transition to fallback models on 5xx or quota errors.
+    - **Health-Aware Rotation**: Automatic rotation across multiple Gemini API keys with health tracking and cooldowns.
+    - **Dynamic Fallback**: Seamless transition to fallback models on 5xx, quota, or exhaustion errors.
+- **Performance & Runtime**:
+    - **Startup**: Deferred heavy imports and CSS parsing for instant launch.
+    - **Execution**: In-memory caching with batched flushes, regex/policy caching, and zero-wait key rotation.
+    - **Streaming**: Optimized Live provider with parallel tool calls, generator-based thought streaming, and error-capture logging.
 - **Surgical Tooling**:
     - `execute_bash`: Sandboxed shell with UI-confirmed risky operations.
     - `read_file` / `write_file`: Path-validated file operations restricted to project root.
@@ -48,7 +52,7 @@ uv sync
    GEMINI_API_KEYS=your_key_1,your_key_2
    GEMINI_MODEL=gemma-4-31b-it
    GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
-   GEMINI_FALLBACK_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
+   GEMINI_LIVE_FALLBACK_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
    LOG_LEVEL=info
    ```
 
@@ -63,9 +67,10 @@ uv sync
 **Flow**: User → **TUI** (Textual) → **Orchestrator** (Agent Logic) → **Tools** (Bash/Delegate/Search) → **LLM** → Output
 
 - `src/supporter/agent.py`: Core orchestrator and delegation logic.
-- `src/supporter/providers/`: Gemini Live and REST implementations.
+- `src/supporter/providers/`: Gemini Live and REST implementations with health tracking.
 - `src/supporter/tools/bash/`: Security-hardened shell execution logic.
-- `src/supporter/tui/`: Reactive UI and dashboard management.
+- `src/supporter/tools/delegate/`: Capsule-based task state and async orchestration.
+- `src/supporter/tui/`: Reactive UI, bubble-based thought streaming, and dashboard.
 
 ## Development & Verification
 
