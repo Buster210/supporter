@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...types import TaskStatus
 from .capsule import (
     capsule_relative_path,
     default_evidence,
@@ -11,8 +10,8 @@ from .capsule import (
     first_compact_paragraph,
     load_capsule,
     preview,
-    status_value,
 )
+from .capsule_query import task_totals
 
 OUTPUT_PREVIEW_CHARS = 1200
 
@@ -34,7 +33,7 @@ def list_delegations(status: str | None = None, limit: int = 10) -> str:
     rows = ["| Job | Status | Tasks | Updated | Milestone |", "|---|---|---:|---|---|"]
     for capsule in capsules:
         tasks = capsule.get("tasks", {})
-        totals = _view_task_totals(tasks if isinstance(tasks, dict) else {})
+        totals = task_totals(tasks if isinstance(tasks, dict) else {})
         done = totals["completed"]
         total = len(tasks) if isinstance(tasks, dict) else 0
         rows.append(
@@ -130,7 +129,7 @@ def format_capsule_load_error(job_id: str, exc: BaseException) -> str:
 def format_capsule_summary(capsule: dict[str, Any]) -> str:
     job_id = str(capsule.get("job_id", ""))
     tasks = capsule.get("tasks", {})
-    totals = _view_task_totals(tasks if isinstance(tasks, dict) else {})
+    totals = task_totals(tasks if isinstance(tasks, dict) else {})
     synthesis = capsule.get("synthesis", {})
     if not isinstance(synthesis, dict):
         synthesis = {}
@@ -223,32 +222,6 @@ def display_capsule(capsule: dict[str, Any]) -> dict[str, Any]:
             display_tasks[task_id] = shallow
         display["tasks"] = display_tasks
     return display
-
-
-def _view_task_totals(tasks: dict[str, Any]) -> dict[str, int]:
-    completed = failed = skipped = timed_out = tokens = 0
-    for task in tasks.values():
-        if not isinstance(task, dict):
-            continue
-        task_status = status_value(task.get("status", ""))
-        if task_status == TaskStatus.COMPLETED.value:
-            completed += 1
-        elif task_status == TaskStatus.ERROR.value:
-            failed += 1
-        elif task_status == TaskStatus.SKIPPED.value:
-            skipped += 1
-        elif task_status == TaskStatus.TIMEOUT.value:
-            timed_out += 1
-        task_tokens = task.get("tokens", {})
-        if isinstance(task_tokens, dict):
-            tokens += int(task_tokens.get("total_tokens") or 0)
-    return {
-        "completed": completed,
-        "failed": failed,
-        "skipped": skipped,
-        "timed_out": timed_out,
-        "tokens": tokens,
-    }
 
 
 def _escape_table(text: str) -> str:

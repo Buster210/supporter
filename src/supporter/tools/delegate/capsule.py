@@ -13,6 +13,8 @@ from ...logger import logger
 from ...types import TaskStatus
 from .. import resolved_project_root
 
+_JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
 CAPSULE_SCHEMA_VERSION = 1
 ACTIVE_CAPSULE_STATUSES = {"pending", "running"}
 _PREVIEW_LIMIT = 300
@@ -527,7 +529,7 @@ def _get_task(capsule: dict[str, Any], task_id: str) -> dict[str, Any]:
 
 
 def _parse_delegation_result(output: str) -> dict[str, Any] | None:
-    match = re.search(r"```json\s*(\{.*?\})\s*```", output, re.DOTALL)
+    match = _JSON_FENCE_RE.search(output)
     if match:
         try:
             data: Any = json.loads(match.group(1))
