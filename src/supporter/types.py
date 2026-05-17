@@ -74,6 +74,9 @@ class AppConfig:
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
     history_max_turns: int = 200
+    browser_profile_path: str | None = None
+    browser_profile_name: str = "Profile 2"
+    browser_headless: bool = False
 
 
 @dataclass

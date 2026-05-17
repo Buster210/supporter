@@ -17,6 +17,7 @@ def test_catalog_exposes_current_tool_surface() -> None:
     assert set(catalog) == {
         "read_file",
         "write_file",
+        "browse",
         "delegate_tasks",
         "check_delegation",
         "cancel_delegation",
@@ -34,6 +35,7 @@ def test_orchestrator_selects_root_tools_without_search_function() -> None:
     assert set(registry) == {
         "read_file",
         "write_file",
+        "browse",
         "delegate_tasks",
         "check_delegation",
         "cancel_delegation",

@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -98,7 +99,14 @@ def _get_project_root() -> str:
 def load_config() -> AppConfig:
     load_dotenv()
     raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
-    keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+    stripped = raw_keys.strip()
+    if stripped.startswith("["):
+        try:
+            keys = [k for k in json.loads(stripped) if isinstance(k, str) and k.strip()]
+        except json.JSONDecodeError as e:
+            raise ValueError(f"GEMINI_API_KEYS is not valid JSON array: {e}") from e
+    else:
+        keys = [k.strip() for k in stripped.split(",") if k.strip()]
     project_root = _get_project_root()
 
     return AppConfig(
@@ -143,6 +151,9 @@ def load_config() -> AppConfig:
         log_max_bytes=_int_env("LOG_MAX_BYTES", 5_000_000),
         log_backup_count=_int_env("LOG_BACKUP_COUNT", 3),
         history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),
+        browser_profile_path=os.getenv("BROWSER_PROFILE_PATH"),
+        browser_profile_name=os.getenv("BROWSER_PROFILE_NAME", "Profile 2"),
+        browser_headless=os.getenv("BROWSER_HEADLESS", "false").lower() == "true",
     )
 
 

@@ -77,6 +77,32 @@ class TestLoadConfig:
         config = load_config()
         assert config.gemini_api_keys == ["primary-key"]
 
+    def test_load_config_with_json_array_keys(self, clean_env: Any) -> None:
+        os.environ["GEMINI_API_KEYS"] = (
+            '["key1", "key2", "key3"]'  # pragma: allowlist secret
+        )
+        config = load_config()
+        assert config.gemini_api_keys == ["key1", "key2", "key3"]
+
+    def test_load_config_with_json_array_single_key(self, clean_env: Any) -> None:
+        os.environ["GEMINI_API_KEYS"] = '["only-key"]'  # pragma: allowlist secret
+        config = load_config()
+        assert config.gemini_api_keys == ["only-key"]
+
+    def test_load_config_with_invalid_json_array_raises(self, clean_env: Any) -> None:
+        os.environ["GEMINI_API_KEYS"] = '["unterminated'  # pragma: allowlist secret
+        with pytest.raises(ValueError, match="GEMINI_API_KEYS is not valid JSON array"):
+            load_config()
+
+    def test_load_config_with_json_array_non_string_items_dropped(
+        self, clean_env: Any
+    ) -> None:
+        os.environ["GEMINI_API_KEYS"] = (
+            '["key1", 123, null, "key2"]'  # pragma: allowlist secret
+        )
+        config = load_config()
+        assert config.gemini_api_keys == ["key1", "key2"]
+
     def test_load_config_default_model(self, clean_env: Any) -> None:
         os.environ["GEMINI_API_KEY"] = "test-key"  # pragma: allowlist secret
         config = load_config()

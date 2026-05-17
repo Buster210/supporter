@@ -14,3 +14,6 @@ htmlcov/
 supporter.egg-info
 .mypy_cache
 .supporter
+
+# test artifact: tests/unit/test_bash.py touches this in CWD
+mutation_test
