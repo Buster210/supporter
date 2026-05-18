@@ -32,7 +32,7 @@ async def throwaway_browser(tmp_path: Path) -> AsyncIterator[None]:
     saved_path = real_config.browser_profile_path
     saved_headless = real_config.browser_headless
     profile_dir = tmp_path / "profile"
-    profile_dir.mkdir()  # empty -> _ensure_profile makes a fresh login-free profile
+    profile_dir.mkdir()  # empty dir -> fresh login-free user_data_dir
     real_config.browser_profile_path = str(profile_dir)
     real_config.browser_headless = True
     guardrails.register_browse_callback(confirmation=_always_allow)

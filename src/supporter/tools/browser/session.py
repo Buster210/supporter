@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,29 +24,32 @@ _ACTION_COUNT: int = 0
 _LAST_ACTION_TS: float = 0.0
 _KEEP_OPEN: bool | None = None
 
-_STEALTH_ARGS: list[str] = [
-    "--no-sandbox",
-    "--disable-blink-features=AutomationControlled",
-    "--disable-features=TranslateUI,BlinkGenPropertyTrees",
-    "--disable-extensions",
-    "--disable-component-extensions-with-background-pages",
-    "--disable-background-timer-throttling",
-    "--disable-renderer-backgrounding",
-    "--disable-fre",
-    "--disable-ipc-flooding-protection",
-    "--disable-hang-monitor",
-    "--disable-prompt-on-repost",
-    "--disable-sync",
-    "--disable-default-apps",
-    "--disable-demo-mode",
-    "--enable-features=NetworkService,NetworkServiceInProcess",
-    "--force-color-profile=srgb",
-    "--metrics-recording-only",
-    "--no-first-run",
-    "--password-store=basic",
-    "--use-mock-keychain",
-    "--export-tagged-pdf",
-]
+_STEALTH_ARGS: list[str] = []
+
+_IGNORE_DEFAULT_ARGS: list[str] = ["--use-mock-keychain"]
+
+_CLONE_ROOT = Path.home() / ".patchright-chrome"
+
+_CLONE_SKIP: frozenset[str] = frozenset(
+    {
+        "Cache",
+        "Code Cache",
+        "GPUCache",
+        "ShaderCache",
+        "GraphiteDawnCache",
+        "DawnCache",
+        "GrShaderCache",
+        "Service Worker",
+        "component_crx_cache",
+        "extensions_crx_cache",
+        "Sessions",
+        "blob_storage",
+        "File System",
+        "Crashpad",
+        "Crash Reports",
+        "lockfile",
+    }
+)
 
 
 async def _prompt_lifecycle() -> None:
@@ -74,48 +79,101 @@ def is_active() -> bool:
     return _PAGE is not None
 
 
-def _managed_profile_dir() -> Path:
+def _profile_dir() -> Path:
     if config.browser_profile_path:
         return Path(config.browser_profile_path).expanduser().resolve()
-    from .. import resolved_project_root
-
-    return resolved_project_root() / ".supporter" / "chrome-profile"
-
-
-def _source_profile_dir() -> Path:
-    if config.browser_profile_path:
-        return Path(config.browser_profile_path).expanduser().resolve()
-    return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+    home = Path.home()
+    if sys.platform == "win32":
+        return home / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "Google" / "Chrome"
+    return home / ".config" / "google-chrome"
 
 
-def _ensure_profile() -> None:
-    managed = _managed_profile_dir()
-    sentinel = managed / ".supporter_profile_ready"
-    if sentinel.exists():
+def _profile_name() -> str:
+    return config.browser_profile_name
+
+
+def _clone_ignore(_dir: str, names: list[str]) -> set[str]:
+    skip: set[str] = set()
+    for n in names:
+        if n in _CLONE_SKIP or n.startswith("Singleton"):
+            skip.add(n)
+    return skip
+
+
+def _backup_cookie_db(src: Path, dst: Path) -> None:
+    if not src.exists():
         return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    s = sqlite3.connect(f"file:{src}?mode=ro&immutable=1", uri=True)
+    d = sqlite3.connect(str(dst))
+    try:
+        with d:
+            s.backup(d)
+    finally:
+        s.close()
+        d.close()
 
-    source = _source_profile_dir()
-    if not source.exists():
-        raise RuntimeError(
-            f"Chrome profile not found at {source}. "
-            "Set BROWSER_PROFILE_PATH to a valid Chrome profile directory."
+
+def _build_clone(source_user_data: Path, profile: str) -> Path:
+    src_profile = source_user_data / profile
+    dst_profile = _CLONE_ROOT / profile
+
+    if not src_profile.exists():
+        logger.warning(
+            f"Chrome profile not found at {src_profile}; launching without a "
+            "cloned login. Check chrome://version -> 'Profile Path'."
         )
+        return source_user_data
 
-    managed.parent.mkdir(parents=True, exist_ok=True)
-    if managed.exists():
-        shutil.rmtree(managed)
+    if not dst_profile.exists():
+        logger.info(f"Cloning profile to {_CLONE_ROOT} (one-time copy)...")
+        shutil.copytree(
+            src_profile, dst_profile, ignore=_clone_ignore, dirs_exist_ok=True
+        )
+        for name in ("Local State", "First Run"):
+            f = source_user_data / name
+            if f.exists():
+                shutil.copy2(f, _CLONE_ROOT / name)
 
-    managed.mkdir(parents=True, exist_ok=True)
+    for rel in (Path("Network") / "Cookies", Path("Cookies")):
+        _backup_cookie_db(src_profile / rel, dst_profile / rel)
 
-    defaults = source / "Default"
-    if defaults.exists():
-        shutil.copytree(defaults, managed / "Default", symlinks=False)
-    local_state = source / "Local State"
-    if local_state.exists():
-        shutil.copy2(local_state, managed / "Local State")
+    return _CLONE_ROOT
 
-    sentinel.touch()
-    logger.info(f"Chrome profile copied to {managed}")
+
+_LOCK_ERROR_MARKERS: tuple[str, ...] = (
+    "ProcessSingleton",
+    "SingletonLock",
+    "profile appears to be in use",
+    "user data directory is already in use",
+)
+
+
+def _is_profile_lock_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return any(marker in msg for marker in _LOCK_ERROR_MARKERS)
+
+
+async def _launch_context(
+    pws: Any, user_data_dir: Path, profile_name: str | None
+) -> Any:
+    args = list(_STEALTH_ARGS)
+    if profile_name:
+        args.append("--profile-directory=" + profile_name)
+    if sys.platform.startswith("linux"):
+        args.append("--password-store=gnome-libsecret")
+
+    return await pws.chromium.launch_persistent_context(
+        user_data_dir=str(user_data_dir),
+        channel="chrome",
+        headless=config.browser_headless,
+        no_viewport=True,
+        chromium_sandbox=True,
+        args=args,
+        ignore_default_args=_IGNORE_DEFAULT_ARGS,
+    )
 
 
 async def get_session() -> tuple[Any, Any, Any]:
@@ -143,22 +201,31 @@ async def get_session() -> tuple[Any, Any, Any]:
     _LAUNCHING = True
 
     try:
-        _ensure_profile()
-
         from patchright.async_api import async_playwright
 
         _PWS = await async_playwright().start()
 
-        managed = _managed_profile_dir()
-        _CONTEXT = await _PWS.chromium.launch_persistent_context(
-            user_data_dir=str(managed),
-            channel="chrome",
-            headless=config.browser_headless,
-            no_viewport=True,
-            args=_STEALTH_ARGS,
-        )
+        user_data_dir = _profile_dir()
+        profile = _profile_name()
+
+        if config.browser_profile_path:
+            launch_dir = user_data_dir
+        else:
+            launch_dir = await asyncio.to_thread(_build_clone, user_data_dir, profile)
+
+        try:
+            _CONTEXT = await _launch_context(_PWS, launch_dir, profile)
+        except Exception as e:
+            if _is_profile_lock_error(e):
+                raise RuntimeError(
+                    "Chrome is already using this profile. Fully quit Chrome and "
+                    "try again, or set BROWSER_PROFILE_PATH to a separate profile "
+                    "directory to run alongside it."
+                ) from e
+            raise
 
         _PAGE = await _CONTEXT.new_page()
+        await _PAGE.bring_to_front()
 
         await _prompt_lifecycle()
 
