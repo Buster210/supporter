@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...config import config
 from ...logger import logger
-from . import guardrails, humanize
+from . import guardrails, humanize, task_memory
 
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext, Page, Playwright
@@ -293,6 +293,7 @@ async def close_session() -> None:
     _KEEP_OPEN = None
     _FRAME_SELECTOR = None
     humanize.reset_cursor()
+    task_memory.discard()
 
 
 async def pace() -> None:

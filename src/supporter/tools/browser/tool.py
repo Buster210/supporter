@@ -8,7 +8,7 @@ from typing import Any
 from ...logger import logger
 from ..base import ToolError
 from ..file_ops import validate_path
-from . import guardrails, humanize, session, snapshot
+from . import guardrails, humanize, session, snapshot, task_memory
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,110 @@ async def browse(
         html=html,
         path=path,
     )
-    return await _HANDLERS[action](req)
+    result = await _HANDLERS[action](req)
+    await _record_step(req, result)
+    return result
+
+
+_TARGET_ACTIONS = frozenset({"click", "type", "hover", "select", "press", "scroll"})
+
+_RECORD_PARAMS: dict[str, tuple[str, ...]] = {
+    "navigate": ("url",),
+    "type": ("text",),
+    "select": ("value", "text"),
+    "press": ("key",),
+    "scroll": ("dx", "dy"),
+    "wait": ("selector", "delay_ms"),
+    "extract": ("html",),
+}
+
+
+async def _record_step(req: BrowseRequest, result: str) -> None:
+    if not task_memory.is_recording():
+        return
+    try:
+        page = session.active_page()
+        if page is None:
+            return
+        host = await _page_host(page)
+        role = name = ""
+        if req.action in _TARGET_ACTIONS and (req.ref or req.selector):
+            locator, err = await _resolve_target(page, req)
+            if err is None and locator is not None:
+                role, name = await _resolve_role_and_name(locator, req.ref)
+        params = {f: getattr(req, f) for f in _RECORD_PARAMS.get(req.action, ())}
+        step = task_memory.build_step(
+            req.action,
+            role=role,
+            name=name,
+            selector=req.selector,
+            url_before=host,
+            params=params,
+            result=result,
+        )
+        task_memory.record(step)
+    except Exception:
+        logger.debug("Failed to record task step", exc_info=True)
+
+
+async def start_task(goal: str) -> str:
+    """Begin remembering a browser task so its steps can be reused later.
+
+    Call this before you start a multi-step flow (e.g. "log in to X", "search
+    GitHub for Y"). Browse normally afterward; each eligible step is recorded.
+    Call finish_task when done to save it (on success) or discard it.
+
+    Args:
+        goal: A short, stable description of the task. The same wording lets
+            query_playbook find this playbook on a future run.
+
+    Returns:
+        A confirmation message.
+    """
+    logger.info(f"Tool: start_task — goal={goal!r}")
+    return task_memory.start(goal)
+
+
+async def finish_task(success: bool = True) -> str:
+    """End the current task and save its steps when the run was clean.
+
+    Saves a reusable playbook only if success is True and no errored or unsafe
+    step occurred; otherwise nothing is stored. Always clears the buffer.
+
+    Args:
+        success: Whether the task completed successfully. False discards it.
+
+    Returns:
+        A message stating whether a playbook was saved.
+    """
+    logger.info(f"Tool: finish_task — success={success}")
+    page = session.active_page()
+    host = await _page_host(page) if page is not None else ""
+    return await task_memory.finish(success, host)
+
+
+async def query_playbook(goal: str) -> str:
+    """Look up a saved playbook for this site + task to guide your next steps.
+
+    Call before reasoning out a flow from scratch: if a playbook exists you can
+    follow its steps instead of re-discovering them. The steps are advisory —
+    read them and decide; nothing is executed automatically.
+
+    Args:
+        goal: The task description used when the playbook was recorded.
+
+    Returns:
+        A numbered step list, or a note that no playbook was found.
+    """
+    logger.info(f"Tool: query_playbook — goal={goal!r}")
+    page = session.active_page()
+    host = await _page_host(page) if page is not None else ""
+    if not host:
+        return "No active page; navigate first, then query a playbook."
+    playbook = task_memory.load_playbook(host, goal)
+    if playbook is None:
+        return f"No playbook found for {goal!r} on {host}."
+    return task_memory.format_playbook(playbook)
 
 
 async def _page_or_error() -> Any:
