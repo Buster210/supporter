@@ -20,6 +20,13 @@ SENSITIVE_DOMAINS: Final = frozenset(
     }
 )
 
+FAST_HOSTS: Final[frozenset[str]] = frozenset(
+    {
+        "google.com",
+        "gemini.google.com",
+    }
+)
+
 SENSITIVE_ACTION_PATTERNS: Final = (
     "submit",
     "post",
@@ -53,6 +60,27 @@ SENSITIVE_FIELD_NAMES: Final = (
 
 SENSITIVE_FIELD_ROLES: Final = frozenset({"textbox", "password"})
 
+_PASSIVE_ACTIONS: Final = frozenset(
+    {
+        "navigate",
+        "back",
+        "forward",
+        "snapshot",
+        "screenshot",
+        "scroll",
+        "hover",
+        "wait",
+        "extract",
+        "tabs",
+        "tab",
+        "newtab",
+    }
+)
+
+_PATTERN_GATED_ACTIONS: Final = frozenset({"click", "press", "select"})
+
+_ALWAYS_CONFIRM_ACTIONS: Final = frozenset({"eval", "upload", "download"})
+
 
 def _word_boundary_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
     alts = "|".join(re.escape(w) for w in words)
@@ -84,13 +112,22 @@ def _host_from_url(url: str) -> str:
         return ""
 
 
+def host_is_fast(host: str) -> bool:
+    if not host:
+        return False
+    return host.removeprefix("www.") in FAST_HOSTS
+
+
 def needs_confirmation(
     action: str,
     role: str,
     name: str,
     host: str,
 ) -> bool:
-    if action in ("navigate", "back", "snapshot", "screenshot"):
+    if action in _ALWAYS_CONFIRM_ACTIONS:
+        return True
+
+    if action in _PASSIVE_ACTIONS:
         return False
 
     if host in SENSITIVE_DOMAINS:
@@ -104,7 +141,10 @@ def needs_confirmation(
         if role_lower in SENSITIVE_FIELD_ROLES and _FIELD_NAME_PATTERN.search(name):
             return True
 
-    return bool(action == "click" and _ACTION_PATTERN.search(f"{name} {role_lower}"))
+    if action in _PATTERN_GATED_ACTIONS:
+        return bool(_ACTION_PATTERN.search(f"{name} {role_lower}"))
+
+    return False
 
 
 def random_gap() -> float:

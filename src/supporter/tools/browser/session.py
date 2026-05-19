@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...config import config
 from ...logger import logger
-from . import guardrails
+from . import guardrails, humanize
 
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext, Page, Playwright
@@ -23,6 +23,7 @@ _LAUNCH_LOOP: object | None = None
 _ACTION_COUNT: int = 0
 _LAST_ACTION_TS: float = 0.0
 _KEEP_OPEN: bool | None = None
+_FRAME_SELECTOR: str | None = None
 
 _STEALTH_ARGS: list[str] = []
 
@@ -77,6 +78,31 @@ def keep_open() -> bool:
 
 def is_active() -> bool:
     return _PAGE is not None
+
+
+def active_page() -> Any:
+    return _PAGE
+
+
+def list_pages() -> list[Any]:
+    if _CONTEXT is None:
+        return []
+    return list(_CONTEXT.pages)
+
+
+def set_active(page: Any) -> None:
+    global _PAGE, _FRAME_SELECTOR
+    _PAGE = page
+    _FRAME_SELECTOR = None
+
+
+def active_frame_selector() -> str | None:
+    return _FRAME_SELECTOR
+
+
+def set_frame(selector: str | None) -> None:
+    global _FRAME_SELECTOR
+    _FRAME_SELECTOR = selector
 
 
 def _profile_dir() -> Path:
@@ -244,7 +270,7 @@ async def get_session() -> tuple[Any, Any, Any]:
 
 async def close_session() -> None:
     global _PWS, _CONTEXT, _PAGE, _LAUNCH_LOOP, _ACTION_COUNT, _LAST_ACTION_TS
-    global _KEEP_OPEN
+    global _KEEP_OPEN, _FRAME_SELECTOR
 
     try:
         if _CONTEXT is not None:
@@ -265,6 +291,8 @@ async def close_session() -> None:
     _ACTION_COUNT = 0
     _LAST_ACTION_TS = 0.0
     _KEEP_OPEN = None
+    _FRAME_SELECTOR = None
+    humanize.reset_cursor()
 
 
 async def pace() -> None:

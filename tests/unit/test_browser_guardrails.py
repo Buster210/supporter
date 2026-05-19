@@ -100,3 +100,40 @@ def test_random_gap_within_bounds() -> None:
 def test_host_from_url_strips_www_and_lowercases() -> None:
     assert guardrails._host_from_url("https://WWW.Example.COM/path") == "example.com"
     assert guardrails._host_from_url("not a url") == ""
+
+
+def test_configured_fast_hosts_run_fast() -> None:
+    # The shipped allowlist: hosts confirmed to do no fingerprinting.
+    assert guardrails.host_is_fast("google.com") is True
+    assert guardrails.host_is_fast("www.google.com") is True  # www stripped
+    assert guardrails.host_is_fast("gemini.google.com") is True
+    # An unlisted host stays humanized.
+    assert guardrails.host_is_fast("twitter.com") is False
+
+
+def test_sensitive_subdomain_not_fast_under_exact_match() -> None:
+    # The whole point of exact match: "google.com" being fast must NOT make the
+    # sensitive login subdomain fast — it stays humanized.
+    assert "google.com" in guardrails.FAST_HOSTS
+    assert guardrails.host_is_fast("accounts.google.com") is False
+
+
+def test_host_is_fast_exact_match_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(guardrails, "FAST_HOSTS", frozenset({"example.com"}))
+    assert guardrails.host_is_fast("example.com") is True
+    assert guardrails.host_is_fast("www.example.com") is True  # www stripped
+    # Subdomains are NOT matched — exact only.
+    assert guardrails.host_is_fast("app.example.com") is False
+    assert guardrails.host_is_fast("accounts.example.com") is False
+
+
+def test_host_is_fast_rejects_non_members_and_lookalikes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(guardrails, "FAST_HOSTS", frozenset({"example.com"}))
+    assert guardrails.host_is_fast("other.com") is False
+    assert guardrails.host_is_fast("notexample.com") is False
+    assert guardrails.host_is_fast("example.com.evil.com") is False
+    assert guardrails.host_is_fast("") is False
