@@ -13,6 +13,7 @@ ORCHESTRATOR_TOOL_NAMES = (
     "start_task",
     "finish_task",
     "query_playbook",
+    "replay_playbook",
     "delegate_tasks",
     "check_delegation",
     "cancel_delegation",
@@ -37,7 +38,13 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         return _BUILTIN_CATALOG_CACHE[include_bash]
 
     from .bash.executor import execute_bash
-    from .browser.tool import browse, finish_task, query_playbook, start_task
+    from .browser.tool import (
+        browse,
+        finish_task,
+        query_playbook,
+        replay_playbook,
+        start_task,
+    )
     from .delegate.api import cancel_delegation, check_delegation, delegate_tasks
     from .delegate.capsule_query import query_delegation
     from .file_ops import read_file, write_file
@@ -51,6 +58,9 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         "finish_task": ToolSpec("finish_task", finish_task, delegate_allowed=False),
         "query_playbook": ToolSpec(
             "query_playbook", query_playbook, delegate_allowed=False
+        ),
+        "replay_playbook": ToolSpec(
+            "replay_playbook", replay_playbook, delegate_allowed=False
         ),
         "delegate_tasks": ToolSpec("delegate_tasks", delegate_tasks),
         "check_delegation": ToolSpec("check_delegation", check_delegation),

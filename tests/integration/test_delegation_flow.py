@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from supporter.config import config
+from supporter.tools.delegate.agents import _cache
 from supporter.tools.delegate.api import (
     cancel_delegation,
     check_delegation,
@@ -77,6 +78,7 @@ class BlockingProvider:
 @pytest.fixture(autouse=True)
 def isolate_delegation_flow(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
+    _cache.clear()
 
 
 def _job_id(plan: str) -> str:

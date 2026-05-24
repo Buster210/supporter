@@ -29,10 +29,6 @@ class _DelegateCache:
 _cache = _DelegateCache()
 
 
-def clear_delegate_cache() -> None:
-    _cache.clear()
-
-
 @functools.cache
 def delegate_allowed_tool_names() -> set[str]:
     return set(select_delegate_tools(build_tool_catalog(), "all"))

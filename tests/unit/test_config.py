@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supporter.config import AppConfig, _get_project_root, load_config
+from supporter.config import AppConfig, _get_project_root, _int_env, load_config
 from supporter.prompts import DEFAULT_SYSTEM_INSTRUCTION
 
 
@@ -209,3 +209,10 @@ class TestDefaultSystemInstruction:
             in DEFAULT_SYSTEM_INSTRUCTION
         )
         assert "instead of '1 subagent'" in DEFAULT_SYSTEM_INSTRUCTION
+
+
+class TestIntEnv:
+    def test_non_integer_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("_TEST_INT_ENV_BAD", "not-a-number")
+        with pytest.raises(ValueError, match="must be an integer"):
+            _int_env("_TEST_INT_ENV_BAD", 42)

@@ -164,6 +164,9 @@ async def test_queue_combines_multiple_messages() -> None:
         patch.object(app, "run_worker") as mock_run_worker,
         patch.object(app, "_process_message_cycle") as mock_cycle,
     ):
+        mock_run_worker.side_effect = lambda coro: (
+            coro.close() if hasattr(coro, "close") else None
+        )
         await app._flush_queued_messages()
     mock_run_worker.assert_called_once()
     mock_cycle.assert_called_once()

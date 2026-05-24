@@ -9,6 +9,7 @@ import pytest
 
 import supporter.tools.delegate.capsule as capsule_store
 from supporter.config import config
+from supporter.tools.delegate.agents import _cache
 from supporter.tools.delegate.bus import DelegationBus, get_bus, remove_bus
 from supporter.tools.delegate.capsule import create_capsule
 from supporter.tools.delegate.scheduler import _execute_dag, run_heartbeat
@@ -28,6 +29,7 @@ from supporter.types import (
 def isolate_delegation_state(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
     monkeypatch.setattr("supporter.pool.get_provider", lambda **_kwargs: object())
+    _cache.clear()
     capsule_store._CAPSULE_LOCKS.clear()
 
 

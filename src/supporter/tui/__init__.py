@@ -89,11 +89,14 @@ class SupporterApp(App[None]):
 
         set_delegation_start_callback(self._start_delegation_listener)
 
+        from ..tools.browser.session import prewarm_clone
+
         logger.info("Supporter TUI dashboard active")
         self._mode_manager.start_warmup()
         try:
             self.run_worker(self._setup_agent(use_live=True), exclusive=True)
             self.run_worker(self._mode_manager.trigger_live_greeting())
+            self.run_worker(prewarm_clone())
             self.query_one("#user-input").focus()
         except Exception as e:
             msg = f"Startup failure [{type(e).__name__}]: {e}"

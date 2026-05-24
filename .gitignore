@@ -1,5 +1,5 @@
 .env
-app.log*
+*.log*
 .DS_Store
 __pycache__/
 *.py[cod]
@@ -14,6 +14,9 @@ htmlcov/
 supporter.egg-info
 .mypy_cache
 .supporter
+
+# coverage annotation artifacts (--cov-report=annotate)
+*.py,cover
 
 # test artifact: tests/unit/test_bash.py touches this in CWD
 mutation_test

@@ -115,6 +115,10 @@ class GeminiLiveProvider:
 
         ensure_function_search_tool(self.model_name, self.registry)
 
+        from ..tools.browser.guardrails import register_browse_callback
+
+        register_browse_callback(image_sink=self._inject_image)
+
     @property
     def client(self) -> genai.Client:
         if self._client is None:
@@ -274,6 +278,16 @@ class GeminiLiveProvider:
         )
         if function_responses:
             await session.send_tool_response(function_responses=function_responses)
+
+    async def _inject_image(self, data: bytes, mime_type: str) -> None:
+        if self._session is None:
+            logger.debug("Image inject skipped: no live session")
+            return
+        from google.genai import types
+
+        await self._session.send_realtime_input(
+            media=types.Blob(data=data, mime_type=mime_type)
+        )
 
     async def _drain_session(self, session: Any) -> None:
         try:

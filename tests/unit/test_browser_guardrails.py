@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from supporter.tools.browser import guardrails
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterator
 
 
 @pytest.mark.parametrize("action", ["navigate", "back", "snapshot", "screenshot"])
@@ -98,8 +103,8 @@ def test_random_gap_within_bounds() -> None:
 
 
 def test_host_from_url_strips_www_and_lowercases() -> None:
-    assert guardrails._host_from_url("https://WWW.Example.COM/path") == "example.com"
-    assert guardrails._host_from_url("not a url") == ""
+    assert guardrails.host_from_url("https://WWW.Example.COM/path") == "example.com"
+    assert guardrails.host_from_url("not a url") == ""
 
 
 def test_configured_fast_hosts_run_fast() -> None:
@@ -137,3 +142,81 @@ def test_host_is_fast_rejects_non_members_and_lookalikes(
     assert guardrails.host_is_fast("notexample.com") is False
     assert guardrails.host_is_fast("example.com.evil.com") is False
     assert guardrails.host_is_fast("") is False
+
+
+# --- register_browse_callback: independent-slot update + async dispatch ----
+
+
+@pytest.fixture(autouse=True)
+def _restore_callbacks() -> Iterator[None]:
+    saved_confirm = guardrails.browse_confirmation_callback
+    saved_sink = guardrails.browse_image_sink
+    try:
+        yield
+    finally:
+        guardrails.browse_confirmation_callback = saved_confirm
+        guardrails.browse_image_sink = saved_sink
+
+
+async def _yes(_summary: str, _prompt: str) -> bool:
+    return True
+
+
+async def _sink(_data: bytes, _caption: str) -> None:
+    return None
+
+
+def test_register_sets_both_slots() -> None:
+    guardrails.register_browse_callback(confirmation=_yes, image_sink=_sink)
+    assert guardrails.browse_confirmation_callback is _yes
+    assert guardrails.browse_image_sink is _sink
+
+
+def test_register_confirmation_only_keeps_image_sink() -> None:
+    guardrails.register_browse_callback(image_sink=_sink)
+    guardrails.register_browse_callback(confirmation=_yes)
+    # The second call omits image_sink (_UNSET) so it must not clobber it.
+    assert guardrails.browse_confirmation_callback is _yes
+    assert guardrails.browse_image_sink is _sink
+
+
+def test_register_image_sink_only_keeps_confirmation() -> None:
+    guardrails.register_browse_callback(confirmation=_yes)
+    guardrails.register_browse_callback(image_sink=_sink)
+    assert guardrails.browse_confirmation_callback is _yes
+    assert guardrails.browse_image_sink is _sink
+
+
+def test_register_no_args_is_noop() -> None:
+    guardrails.register_browse_callback(confirmation=_yes, image_sink=_sink)
+    guardrails.register_browse_callback()
+    assert guardrails.browse_confirmation_callback is _yes
+    assert guardrails.browse_image_sink is _sink
+
+
+def test_register_explicit_none_clears_slot() -> None:
+    guardrails.register_browse_callback(confirmation=_yes)
+    guardrails.register_browse_callback(confirmation=None)
+    assert guardrails.browse_confirmation_callback is None
+
+
+async def test_registered_confirmation_is_awaitable_and_returns_bool() -> None:
+    guardrails.register_browse_callback(confirmation=_yes)
+    cb: Callable[[str, str], Awaitable[bool]] | None = (
+        guardrails.browse_confirmation_callback
+    )
+    assert cb is not None
+    assert await cb("summary", "prompt?") is True
+
+
+async def test_registered_image_sink_is_awaitable() -> None:
+    captured: list[tuple[bytes, str]] = []
+
+    async def recorder(data: bytes, caption: str) -> None:
+        captured.append((data, caption))
+
+    guardrails.register_browse_callback(image_sink=recorder)
+    sink = guardrails.browse_image_sink
+    assert sink is not None
+    await sink(b"png", "a shot")
+    assert captured == [(b"png", "a shot")]

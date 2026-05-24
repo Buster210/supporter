@@ -1,11 +1,24 @@
 from __future__ import annotations
 
-import asyncio
 import math
 import random
-from unittest.mock import patch
+from typing import TYPE_CHECKING
+
+import pytest
 
 from supporter.tools.browser import humanize
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@pytest.fixture(autouse=True)
+def _reset_cursor() -> Iterator[None]:
+    humanize.reset_cursor()
+    try:
+        yield
+    finally:
+        humanize.reset_cursor()
 
 
 def test_bezier_endpoints_are_exact() -> None:
@@ -70,16 +83,13 @@ def test_lognormal_delay_centers_near_median() -> None:
 
 
 def test_origin_uses_tracked_position_when_set() -> None:
+    # The autouse _reset_cursor fixture restores the global afterward.
     humanize._LAST_POS = (123.0, 456.0)
-    try:
-        assert humanize._origin_for(None) == (123.0, 456.0)
-        assert humanize._origin_for({"width": 800, "height": 600}) == (123.0, 456.0)
-    finally:
-        humanize.reset_cursor()
+    assert humanize._origin_for(None) == (123.0, 456.0)
+    assert humanize._origin_for({"width": 800, "height": 600}) == (123.0, 456.0)
 
 
 def test_origin_falls_back_inside_viewport_when_unset() -> None:
-    humanize.reset_cursor()
     random.seed(3)
     x, y = humanize._origin_for({"width": 800, "height": 600})
     assert 0.0 <= x <= 800.0
@@ -87,7 +97,6 @@ def test_origin_falls_back_inside_viewport_when_unset() -> None:
 
 
 def test_origin_fallback_box_when_no_viewport() -> None:
-    humanize.reset_cursor()
     random.seed(3)
     x, y = humanize._origin_for(None)
     assert humanize._ORIGIN_FALLBACK_X[0] <= x <= humanize._ORIGIN_FALLBACK_X[1]
@@ -101,16 +110,22 @@ def test_reset_cursor_clears_position() -> None:
     assert humanize._LAST_POS is None
 
 
-def test_reading_pause_sleeps_within_bounds() -> None:
+async def test_reading_pause_sleeps_within_documented_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The old test spun up a fresh event loop 500x (asyncio.run in a range loop)
+    # just to sample the randomness. Awaiting directly with a recording sleep
+    # exercises the same contract — the single sleep lands in [0.4, 5.0] — over a
+    # handful of samples and no per-iteration loop construction.
     random.seed(11)
     slept: list[float] = []
 
-    async def fake_sleep(seconds: float) -> None:
+    async def record(seconds: float) -> None:
         slept.append(seconds)
 
-    with patch("asyncio.sleep", fake_sleep):
-        for _ in range(500):
-            asyncio.run(humanize.reading_pause())
+    monkeypatch.setattr(humanize.asyncio, "sleep", record)  # type: ignore[attr-defined]
+    for _ in range(50):
+        await humanize.reading_pause()
 
-    assert slept
+    assert len(slept) == 50
     assert all(0.4 <= s <= 5.0 for s in slept)

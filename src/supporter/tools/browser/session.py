@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...config import config
 from ...logger import logger
-from . import guardrails, humanize, task_memory
+from . import guardrails, humanize, task
 
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext, Page, Playwright
@@ -20,9 +20,11 @@ _CONTEXT: BrowserContext | None = None
 _PAGE: Page | None = None
 _LAUNCHING: bool = False
 _LAUNCH_LOOP: object | None = None
+_CLONE_LOCK: asyncio.Lock | None = None
 _ACTION_COUNT: int = 0
 _LAST_ACTION_TS: float = 0.0
 _KEEP_OPEN: bool | None = None
+_LIFECYCLE_TASK: asyncio.Task[None] | None = None
 _FRAME_SELECTOR: str | None = None
 
 _STEALTH_ARGS: list[str] = []
@@ -39,6 +41,8 @@ _CLONE_SKIP: frozenset[str] = frozenset(
         "ShaderCache",
         "GraphiteDawnCache",
         "DawnCache",
+        "DawnWebGPUCache",
+        "DawnGraphiteCache",
         "GrShaderCache",
         "Service Worker",
         "component_crx_cache",
@@ -51,6 +55,23 @@ _CLONE_SKIP: frozenset[str] = frozenset(
         "lockfile",
     }
 )
+
+_SESSION_SQLITE: tuple[Path, ...] = (
+    Path("Network") / "Cookies",
+    Path("Cookies"),
+    Path("Login Data"),
+    Path("Login Data For Account"),
+    Path("Web Data"),
+)
+
+_SESSION_DIRS: tuple[str, ...] = (
+    "Local Storage",
+    "Session Storage",
+    "IndexedDB",
+    "WebStorage",
+)
+
+_ROOT_SESSION_FILES: tuple[str, ...] = ("Local State",)
 
 
 async def _prompt_lifecycle() -> None:
@@ -72,8 +93,66 @@ async def _prompt_lifecycle() -> None:
     _KEEP_OPEN = keep
 
 
+def _start_lifecycle_prompt() -> None:
+    global _LIFECYCLE_TASK
+
+    if _KEEP_OPEN is not None or _LIFECYCLE_TASK is not None:
+        return
+
+    async def run() -> None:
+        try:
+            await _prompt_lifecycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Browser lifecycle prompt failed: {e}")
+
+    task = asyncio.ensure_future(run())
+    _LIFECYCLE_TASK = task
+    task.add_done_callback(_clear_lifecycle_task)
+
+
+def _clear_lifecycle_task(_task: object) -> None:
+    global _LIFECYCLE_TASK
+    _LIFECYCLE_TASK = None
+
+
+async def _await_lifecycle_answer() -> None:
+    global _KEEP_OPEN
+    if _KEEP_OPEN is not None:
+        return
+    if _LIFECYCLE_TASK is not None:
+        try:
+            await _LIFECYCLE_TASK
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Browser lifecycle prompt failed: {e}")
+    if _KEEP_OPEN is None:
+        _KEEP_OPEN = True
+
+
+async def resolve_close_at_task_end() -> str:
+    if not is_active():
+        return ""
+    await _await_lifecycle_answer()
+    if pinned_open():
+        return "Browser left open (persistent session)."
+    cb = guardrails.browse_confirmation_callback
+    if cb is None:
+        return ""
+    if not await cb("Close browser now?", "Task done — close browser now?"):
+        return "Browser left open; will ask again when the next task finishes."
+    await close_session()
+    return "Browser closed."
+
+
 def keep_open() -> bool:
     return _KEEP_OPEN is not False
+
+
+def pinned_open() -> bool:
+    return _KEEP_OPEN is True
 
 
 def is_active() -> bool:
@@ -128,7 +207,41 @@ def _clone_ignore(_dir: str, names: list[str]) -> set[str]:
     return skip
 
 
-def _backup_cookie_db(src: Path, dst: Path) -> None:
+def _clone_ignore_once(dir_: str, names: list[str]) -> set[str]:
+    skip = _clone_ignore(dir_, names)
+    skip.update(n for n in names if n in _SESSION_DIRS)
+    return skip
+
+
+def _newer(src: Path, dst: Path) -> bool:
+    return not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime
+
+
+def _mirror_dir(src: Path, dst: Path) -> None:
+    if not src.exists():
+        return
+
+    skip = _clone_ignore(str(src), [p.name for p in src.iterdir()])
+    wanted: set[Path] = set()
+    for s in src.rglob("*"):
+        rel = s.relative_to(src)
+        if rel.parts[0] in skip:
+            continue
+        d = dst / rel
+        wanted.add(rel)
+        if s.is_dir():
+            d.mkdir(parents=True, exist_ok=True)
+        elif _newer(s, d):
+            d.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(s, d)
+
+    if dst.exists():
+        for d in sorted(dst.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if d.relative_to(dst) not in wanted:
+                d.unlink() if d.is_file() else d.rmdir()
+
+
+def _backup_sqlite(src: Path, dst: Path) -> None:
     if not src.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -156,17 +269,47 @@ def _build_clone(source_user_data: Path, profile: str) -> Path:
     if not dst_profile.exists():
         logger.info(f"Cloning profile to {_CLONE_ROOT} (one-time copy)...")
         shutil.copytree(
-            src_profile, dst_profile, ignore=_clone_ignore, dirs_exist_ok=True
+            src_profile, dst_profile, ignore=_clone_ignore_once, dirs_exist_ok=True
         )
         for name in ("Local State", "First Run"):
             f = source_user_data / name
             if f.exists():
                 shutil.copy2(f, _CLONE_ROOT / name)
 
-    for rel in (Path("Network") / "Cookies", Path("Cookies")):
-        _backup_cookie_db(src_profile / rel, dst_profile / rel)
+    for rel in _SESSION_SQLITE:
+        _backup_sqlite(src_profile / rel, dst_profile / rel)
+    for name in _SESSION_DIRS:
+        _mirror_dir(src_profile / name, dst_profile / name)
+    for name in _ROOT_SESSION_FILES:
+        f = source_user_data / name
+        if f.exists() and _newer(f, _CLONE_ROOT / name):
+            shutil.copy2(f, _CLONE_ROOT / name)
 
     return _CLONE_ROOT
+
+
+def _clone_lock() -> asyncio.Lock:
+    global _CLONE_LOCK
+    if _CLONE_LOCK is None:
+        _CLONE_LOCK = asyncio.Lock()
+    return _CLONE_LOCK
+
+
+async def _clone_profile() -> Path:
+    user_data_dir = _profile_dir()
+    profile = _profile_name()
+    async with _clone_lock():
+        return await asyncio.to_thread(_build_clone, user_data_dir, profile)
+
+
+async def prewarm_clone() -> None:
+    if config.browser_profile_path or _PAGE is not None:
+        return
+    try:
+        await _clone_profile()
+        logger.info("Browser profile clone prewarmed")
+    except Exception as e:
+        logger.warning(f"Browser clone prewarm failed (will retry on launch): {e}")
 
 
 _LOCK_ERROR_MARKERS: tuple[str, ...] = (
@@ -180,6 +323,19 @@ _LOCK_ERROR_MARKERS: tuple[str, ...] = (
 def _is_profile_lock_error(exc: Exception) -> bool:
     msg = str(exc)
     return any(marker in msg for marker in _LOCK_ERROR_MARKERS)
+
+
+async def _launch_or_lock_error(pws: Any, launch_dir: Path, profile: str) -> Any:
+    try:
+        return await _launch_context(pws, launch_dir, profile)
+    except Exception as e:
+        if _is_profile_lock_error(e):
+            raise RuntimeError(
+                "Chrome is already using this profile. Fully quit Chrome and "
+                "try again, or set BROWSER_PROFILE_PATH to a separate profile "
+                "directory to run alongside it."
+            ) from e
+        raise
 
 
 async def _launch_context(
@@ -227,39 +383,38 @@ async def get_session() -> tuple[Any, Any, Any]:
     _LAUNCHING = True
 
     try:
+        _start_lifecycle_prompt()
+
         from patchright.async_api import async_playwright
 
         _PWS = await async_playwright().start()
 
-        user_data_dir = _profile_dir()
         profile = _profile_name()
 
         if config.browser_profile_path:
-            launch_dir = user_data_dir
+            _CONTEXT = await _launch_or_lock_error(_PWS, _profile_dir(), profile)
         else:
-            launch_dir = await asyncio.to_thread(_build_clone, user_data_dir, profile)
-
-        try:
-            _CONTEXT = await _launch_context(_PWS, launch_dir, profile)
-        except Exception as e:
-            if _is_profile_lock_error(e):
-                raise RuntimeError(
-                    "Chrome is already using this profile. Fully quit Chrome and "
-                    "try again, or set BROWSER_PROFILE_PATH to a separate profile "
-                    "directory to run alongside it."
-                ) from e
-            raise
+            clone_dir = await _clone_profile()
+            _CONTEXT = await _launch_or_lock_error(_PWS, clone_dir, profile)
 
         _PAGE = await _CONTEXT.new_page()
         await _PAGE.bring_to_front()
-
-        await _prompt_lifecycle()
 
         _LAST_ACTION_TS = time.monotonic()
         logger.info("Browser session launched")
 
         return _PWS, _CONTEXT, _PAGE
     except Exception:
+        if _CONTEXT is not None:
+            try:
+                await _CONTEXT.close()
+            except Exception as e:
+                logger.warning(f"Error closing context after launch failure: {e}")
+        if _PWS is not None:
+            try:
+                await _PWS.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping playwright after launch failure: {e}")
         _PWS = None
         _CONTEXT = None
         _PAGE = None
@@ -270,7 +425,11 @@ async def get_session() -> tuple[Any, Any, Any]:
 
 async def close_session() -> None:
     global _PWS, _CONTEXT, _PAGE, _LAUNCH_LOOP, _ACTION_COUNT, _LAST_ACTION_TS
-    global _KEEP_OPEN, _FRAME_SELECTOR
+    global _KEEP_OPEN, _FRAME_SELECTOR, _CLONE_LOCK, _LIFECYCLE_TASK
+
+    if _LIFECYCLE_TASK is not None:
+        _LIFECYCLE_TASK.cancel()
+        _LIFECYCLE_TASK = None
 
     try:
         if _CONTEXT is not None:
@@ -292,8 +451,9 @@ async def close_session() -> None:
     _LAST_ACTION_TS = 0.0
     _KEEP_OPEN = None
     _FRAME_SELECTOR = None
+    _CLONE_LOCK = None
     humanize.reset_cursor()
-    task_memory.discard()
+    task.discard()
 
 
 async def pace() -> None:
@@ -316,4 +476,9 @@ async def pace() -> None:
             )
             if not go:
                 raise RuntimeError("Action cap reached and user denied continuation")
+        else:
+            logger.warning(
+                f"Browser action cap ({guardrails.ACTION_CAP}) reached with no "
+                "confirmation callback; continuing autonomously."
+            )
         _ACTION_COUNT = 0

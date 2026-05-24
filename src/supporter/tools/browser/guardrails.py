@@ -5,6 +5,8 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Final
 
+_UNSET: Final = object()
+
 ACTION_CAP: Final = 30
 GAP_MIN: Final = 0.8
 GAP_MAX: Final = 2.5
@@ -91,17 +93,22 @@ _ACTION_PATTERN: Final = _word_boundary_pattern(SENSITIVE_ACTION_PATTERNS)
 _FIELD_NAME_PATTERN: Final = _word_boundary_pattern(SENSITIVE_FIELD_NAMES)
 
 browse_confirmation_callback: Callable[[str, str], Awaitable[bool]] | None = None
+browse_image_sink: Callable[[bytes, str], Awaitable[None]] | None = None
 
 
 def register_browse_callback(
     *,
-    confirmation: Callable[[str, str], Awaitable[bool]] | None,
+    confirmation: Callable[[str, str], Awaitable[bool]] | None | object = _UNSET,
+    image_sink: Callable[[bytes, str], Awaitable[None]] | None | object = _UNSET,
 ) -> None:
-    global browse_confirmation_callback
-    browse_confirmation_callback = confirmation
+    global browse_confirmation_callback, browse_image_sink
+    if confirmation is not _UNSET:
+        browse_confirmation_callback = confirmation  # type: ignore[assignment]
+    if image_sink is not _UNSET:
+        browse_image_sink = image_sink  # type: ignore[assignment]
 
 
-def _host_from_url(url: str) -> str:
+def host_from_url(url: str) -> str:
     try:
         from urllib.parse import urlparse
 
