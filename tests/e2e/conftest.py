@@ -85,11 +85,9 @@ async def _always_allow(_title: str, _detail: str) -> bool:
 @pytest.fixture
 async def throwaway_browser(tmp_path: Path) -> AsyncIterator[None]:
     saved_path = real_config.browser_profile_path
-    saved_headless = real_config.browser_headless
     profile_dir = tmp_path / "profile"
     profile_dir.mkdir()
     real_config.browser_profile_path = str(profile_dir)
-    real_config.browser_headless = True
     guardrails.register_browse_callback(confirmation=_always_allow)
     try:
         yield
@@ -97,4 +95,3 @@ async def throwaway_browser(tmp_path: Path) -> AsyncIterator[None]:
         await session.close_session()
         guardrails.register_browse_callback(confirmation=None)
         real_config.browser_profile_path = saved_path
-        real_config.browser_headless = saved_headless

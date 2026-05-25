@@ -153,7 +153,6 @@ def load_config() -> AppConfig:
         history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),
         browser_profile_path=os.getenv("BROWSER_PROFILE_PATH"),
         browser_profile_name=os.getenv("BROWSER_PROFILE_NAME", "Profile 2"),
-        browser_headless=os.getenv("BROWSER_HEADLESS", "false").lower() == "true",
     )
 
 

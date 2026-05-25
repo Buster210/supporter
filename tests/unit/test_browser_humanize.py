@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import random
-from typing import TYPE_CHECKING
+from contextlib import AbstractContextManager
+from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -10,6 +13,8 @@ from supporter.tools.browser import humanize
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from patchright.async_api import Mouse, Page
 
 
 @pytest.fixture(autouse=True)
@@ -123,9 +128,317 @@ async def test_reading_pause_sleeps_within_documented_window(
     async def record(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(humanize.asyncio, "sleep", record)  # type: ignore[attr-defined]
+    monkeypatch.setattr(asyncio, "sleep", record)
     for _ in range(50):
         await humanize.reading_pause()
 
     assert len(slept) == 50
-    assert all(0.4 <= s <= 5.0 for s in slept)
+    # page=None must keep the exact pass-1 clamp of [0.4, 5.0].
+    assert all(0.4 <= s <= humanize._READ_HI_BASE for s in slept)
+
+
+class _FakeTextPage:
+    def __init__(self, chars: int) -> None:
+        self._chars = chars
+
+    async def evaluate(self, _script: str) -> int:
+        return self._chars
+
+
+def _median_sleep_for(page: _FakeTextPage, n: int = 2001) -> float:
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    random.seed(11)
+    with patch("supporter.tools.browser.humanize.asyncio.sleep", fake_sleep):
+        for _ in range(n):
+            asyncio.run(humanize.reading_pause(cast("Page", page)))
+    slept.sort()
+    return slept[len(slept) // 2]
+
+
+def test_reading_pause_scales_median_with_content() -> None:
+    short = _median_sleep_for(_FakeTextPage(100))  # below scale threshold
+    dense = _median_sleep_for(_FakeTextPage(40_000))  # well above
+    assert dense > short
+    assert short <= humanize._READ_MEDIAN_BASE + 0.2  # ~unchanged at small size
+
+
+def test_reading_pause_median_is_capped() -> None:
+    huge = _median_sleep_for(_FakeTextPage(10_000_000))
+    assert huge <= humanize._READ_MEDIAN_CAP + 1e-9
+
+
+async def test_reading_pause_subthreshold_page_keeps_pass1_clamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A page below the scale threshold must behave exactly like pass-1: the
+    # upper clamp stays 5.0, not the wider scaled-tail bound.
+    slept: list[float] = []
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", record)
+    random.seed(11)
+    page = _FakeTextPage(50)  # below _READ_SCALE_CHARS
+    for _ in range(500):
+        await humanize.reading_pause(cast("Page", page))
+    assert all(0.4 <= s <= humanize._READ_HI_BASE for s in slept)
+
+
+def test_jitter_ms_within_bounds_and_int() -> None:
+    random.seed(5)
+    for _ in range(500):
+        v = humanize.jitter_ms(0.3, 0.3, 0.15, 0.6)
+        assert isinstance(v, int)
+        assert 150 <= v <= 600
+
+
+# --- fakes for input recording ------------------------------------------
+
+
+class _FakeMouse:
+    def __init__(self) -> None:
+        self.moves: list[tuple[float, float]] = []
+        self.wheels: list[tuple[int, int]] = []
+        self.clicks: list[tuple[float, float]] = []
+
+    async def move(self, x: float, y: float) -> None:
+        self.moves.append((x, y))
+
+    async def wheel(self, dx: int, dy: int) -> None:
+        self.wheels.append((dx, dy))
+
+    async def click(self, x: float, y: float, button: str = "left") -> None:
+        self.clicks.append((x, y))
+
+
+class _FakeKeyboard:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []  # (op, key)
+
+    async def press(self, key: str) -> None:
+        self.events.append(("press", key))
+
+    async def down(self, key: str) -> None:
+        self.events.append(("down", key))
+
+    async def up(self, key: str) -> None:
+        self.events.append(("up", key))
+
+
+class _FakeLocator:
+    async def click(self) -> None:
+        pass
+
+
+class _FakePage:
+    def __init__(self, *, geometry: dict[str, int] | None = None) -> None:
+        self.mouse = _FakeMouse()
+        self.keyboard = _FakeKeyboard()
+        self.viewport_size = {"width": 1280, "height": 800}
+        self._geometry = geometry or {"y": 0, "ih": 800, "sh": 800}
+
+    def locator(self, _selector: str) -> _FakeLocator:
+        return _FakeLocator()
+
+    async def evaluate(self, _script: str) -> dict[str, int]:
+        return self._geometry
+
+
+def _no_sleep() -> AbstractContextManager[object]:
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    return patch("supporter.tools.browser.humanize.asyncio.sleep", fake_sleep)
+
+
+def _reconstruct(events: list[tuple[str, str]]) -> str:
+    out: list[str] = []
+    for op, key in events:
+        if op == "down":
+            continue  # paired with an up; count the up
+        char = key
+        if op == "up":
+            out.append(char)
+        elif op == "press":
+            if char == "Backspace":
+                if out:
+                    out.pop()
+            elif char == "Enter":
+                out.append("\n")
+            else:
+                out.append(char)
+    return "".join(out)
+
+
+# --- _move_cursor: tremor + mid-move pause keep the endpoint exact -------
+
+
+def test_move_cursor_lands_exactly_on_target() -> None:
+    humanize.reset_cursor()
+    random.seed(2)
+    mouse = _FakeMouse()
+    with _no_sleep():
+        asyncio.run(humanize._move_cursor(cast("Mouse", mouse), (640.0, 400.0), None))
+    assert mouse.moves[-1] == (640.0, 400.0)
+    assert humanize._LAST_POS == (640.0, 400.0)
+    humanize.reset_cursor()
+
+
+def test_tremor_sigma_shrinks_with_speed() -> None:
+    slow = humanize._tremor_sigma(1.0, 0.0, 0.1)  # 10 px/s
+    fast = humanize._tremor_sigma(100.0, 0.0, 0.1)  # 1000 px/s
+    assert slow > fast
+    assert fast >= humanize._TREMOR_AMPLITUDE * humanize._TREMOR_MIN_SCALE - 1e-9
+
+
+# --- idle_flourish ------------------------------------------------------
+
+
+def test_idle_flourish_never_acts_at_rate_zero() -> None:
+    page = _FakePage()
+    with _no_sleep():
+        asyncio.run(humanize.idle_flourish(cast("Page", page), rate=0.0))
+    assert page.mouse.moves == []
+    assert page.mouse.wheels == []
+
+
+def _force_branch(behavior: object) -> AbstractContextManager[object]:
+    return patch(
+        "supporter.tools.browser.humanize.random.choice", return_value=behavior
+    )
+
+
+def test_idle_flourish_cursor_drift_branch() -> None:
+    humanize._LAST_POS = (300.0, 300.0)
+    page = _FakePage()
+    with (
+        _no_sleep(),
+        patch("random.random", return_value=0.0),
+        _force_branch(humanize._idle_cursor_drift),
+    ):
+        asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
+    assert page.mouse.moves  # drifted the cursor
+    humanize.reset_cursor()
+
+
+def test_idle_flourish_scrolls_down_when_room_below() -> None:
+    humanize.reset_cursor()
+    page = _FakePage(geometry={"y": 0, "ih": 800, "sh": 4000})
+    # gate passes at 0.0; 0.99 also skips human_scroll's overshoot roll.
+    with (
+        _no_sleep(),
+        patch("random.random", return_value=0.99),
+        _force_branch(humanize._idle_position_scroll),
+    ):
+        asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
+    total_dy = sum(dy for _dx, dy in page.mouse.wheels)
+    assert total_dy > 0  # scrolled down
+    assert humanize._SCROLL_DRIFT_MIN <= total_dy <= humanize._SCROLL_DRIFT_MAX
+
+
+def test_idle_flourish_scrolls_up_near_bottom() -> None:
+    humanize.reset_cursor()
+    page = _FakePage(geometry={"y": 3200, "ih": 800, "sh": 4000})
+    with (
+        _no_sleep(),
+        patch("random.random", return_value=0.99),
+        _force_branch(humanize._idle_position_scroll),
+    ):
+        asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
+    total_dy = sum(dy for _dx, dy in page.mouse.wheels)
+    assert total_dy < 0  # near bottom → drifts up
+
+
+def test_idle_flourish_noop_when_unscrollable() -> None:
+    humanize.reset_cursor()
+    page = _FakePage(geometry={"y": 0, "ih": 800, "sh": 800})
+    with (
+        _no_sleep(),
+        patch("random.random", return_value=0.99),
+        _force_branch(humanize._idle_position_scroll),
+    ):
+        asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
+    assert page.mouse.wheels == []  # no room either way, never a snap-back
+
+
+# --- human_scroll overshoot+settle nets to the target -------------------
+
+
+def test_human_scroll_nets_to_target_without_overshoot() -> None:
+    page = _FakePage()
+    with _no_sleep(), patch("random.random", return_value=1.0):  # no overshoot
+        asyncio.run(humanize.human_scroll(cast("Page", page), 0, 500))
+    assert sum(dy for _dx, dy in page.mouse.wheels) == 500
+
+
+def test_human_scroll_overshoot_settles_back_to_target() -> None:
+    page = _FakePage()
+    random.seed(4)
+    with _no_sleep(), patch("random.random", return_value=0.0):  # force overshoot
+        asyncio.run(humanize.human_scroll(cast("Page", page), 0, 500))
+    # Net displacement still equals the requested delta after settle.
+    assert sum(dy for _dx, dy in page.mouse.wheels) == 500
+    # And it actually overshot past 500 at some point.
+    running = 0
+    peak = 0
+    for _dx, dy in page.mouse.wheels:
+        running += dy
+        peak = max(peak, running)
+    assert peak > 500
+
+
+# --- human_type: typo engine + key-hold dwell + sensitive guard ---------
+
+
+def test_human_type_normal_field_reconstructs_input() -> None:
+    random.seed(8)
+    page = _FakePage()
+    with (
+        _no_sleep(),
+        patch("supporter.tools.browser.humanize.random.random", return_value=0.0),
+    ):  # force a typo on every char
+        asyncio.run(
+            humanize.human_type(
+                cast("Page", page), "e1", "hello world", sensitive=False
+            )
+        )
+    assert _reconstruct(page.keyboard.events) == "hello world"
+    # A real mistake means at least one Backspace was emitted.
+    assert any(k == "Backspace" for op, k in page.keyboard.events if op == "press")
+
+
+def test_human_type_sensitive_field_types_clean() -> None:
+    random.seed(8)
+    page = _FakePage()
+    # Even forcing the typo roll, a sensitive field must never inject a wrong key.
+    with (
+        _no_sleep(),
+        patch("supporter.tools.browser.humanize.random.random", return_value=0.0),
+    ):
+        asyncio.run(
+            humanize.human_type(cast("Page", page), "e1", "secret", sensitive=True)
+        )
+    assert _reconstruct(page.keyboard.events) == "secret"
+    assert not any(k == "Backspace" for op, k in page.keyboard.events if op == "press")
+
+
+def test_human_type_uses_key_hold_dwell() -> None:
+    random.seed(8)
+    page = _FakePage()
+    # Force NO typos so every char is a clean down/up pair.
+    with (
+        _no_sleep(),
+        patch("supporter.tools.browser.humanize.random.random", return_value=1.0),
+    ):
+        asyncio.run(
+            humanize.human_type(cast("Page", page), "e1", "abc", sensitive=False)
+        )
+    downs = [k for op, k in page.keyboard.events if op == "down"]
+    ups = [k for op, k in page.keyboard.events if op == "up"]
+    assert downs == ["a", "b", "c"]
+    assert ups == ["a", "b", "c"]

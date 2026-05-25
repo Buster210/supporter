@@ -199,53 +199,36 @@ async def test_pace_waits_when_elapsed_less_than_gap(
 async def test_pace_skips_sleep_when_elapsed_exceeds_gap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = time.monotonic()
-    session._LAST_ACTION_TS = now - 60.0
-    session._ACTION_COUNT = 0
+    clock, slept = _install_pace_harness(monkeypatch)
     monkeypatch.setattr(guardrails, "random_gap", lambda: 0.001)
-
-    slept: list[float] = []
-
-    async def fake_sleep(secs: float) -> None:
-        slept.append(secs)
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    session._LAST_ACTION_TS = clock.t - 60.0
 
     await session.pace()
 
-    assert len(slept) == 0
+    assert slept == []
+    _reset_pace_globals()
 
 
 async def test_pace_increments_action_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = time.monotonic()
-    session._LAST_ACTION_TS = now - 60.0
-    session._ACTION_COUNT = 0
-    monkeypatch.setattr(guardrails, "random_gap", lambda: 0.001)
-
-    async def no_sleep(_secs: float) -> None:
-        return None
-
-    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    clock, _ = _install_pace_harness(monkeypatch)
+    session._LAST_ACTION_TS = clock.t - 60.0
 
     await session.pace()
 
     assert session._ACTION_COUNT == 1
+    _reset_pace_globals()
 
 
 async def test_pace_action_cap_triggers_callback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = time.monotonic()
-    session._LAST_ACTION_TS = now - 60.0
-    session._ACTION_COUNT = guardrails.ACTION_CAP - 1
-    monkeypatch.setattr(guardrails, "random_gap", lambda: 0.001)
-
-    async def no_sleep(_secs: float) -> None:
-        return None
-
-    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    clock, _ = _install_pace_harness(monkeypatch)
+    monkeypatch.setattr(guardrails, "action_cap", lambda: 5)
+    session._LAST_ACTION_TS = clock.t - 60.0
+    session._ACTION_CAP_CEILING = 5
+    session._ACTION_COUNT = 4
 
     prompted: list[str] = []
 
@@ -262,20 +245,18 @@ async def test_pace_action_cap_triggers_callback(
 
     assert len(prompted) == 1
     assert session._ACTION_COUNT == 0
+    assert session._ACTION_CAP_CEILING == 0
+    _reset_pace_globals()
 
 
 async def test_pace_action_cap_raises_when_denied(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = time.monotonic()
-    session._LAST_ACTION_TS = now - 60.0
-    session._ACTION_COUNT = guardrails.ACTION_CAP - 1
-    monkeypatch.setattr(guardrails, "random_gap", lambda: 0.001)
-
-    async def no_sleep(_secs: float) -> None:
-        return None
-
-    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    clock, _ = _install_pace_harness(monkeypatch)
+    monkeypatch.setattr(guardrails, "action_cap", lambda: 5)
+    session._LAST_ACTION_TS = clock.t - 60.0
+    session._ACTION_CAP_CEILING = 5
+    session._ACTION_COUNT = 4
 
     async def deny(_title: str, _detail: str) -> bool:
         return False
@@ -287,26 +268,24 @@ async def test_pace_action_cap_raises_when_denied(
             await session.pace()
     finally:
         guardrails.browse_confirmation_callback = None
+    _reset_pace_globals()
 
 
 async def test_pace_action_cap_without_callback_resets_counter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    now = time.monotonic()
-    session._LAST_ACTION_TS = now - 60.0
-    session._ACTION_COUNT = guardrails.ACTION_CAP - 1
-    monkeypatch.setattr(guardrails, "random_gap", lambda: 0.001)
-
-    async def no_sleep(_secs: float) -> None:
-        return None
-
-    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    clock, _ = _install_pace_harness(monkeypatch)
+    monkeypatch.setattr(guardrails, "action_cap", lambda: 5)
+    session._LAST_ACTION_TS = clock.t - 60.0
+    session._ACTION_CAP_CEILING = 5
+    session._ACTION_COUNT = 4
 
     guardrails.browse_confirmation_callback = None
 
     await session.pace()
 
     assert session._ACTION_COUNT == 0
+    _reset_pace_globals()
 
 
 def test_profile_dir_reads_config_path(
@@ -332,3 +311,117 @@ def test_profile_name_reads_config(
 ) -> None:
     monkeypatch.setattr(config, "browser_profile_name", "TestProfile")
     assert session._profile_name() == "TestProfile"
+
+
+async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "browser_profile_path", None)
+    session._PAGE = None
+
+    async def boom() -> Path:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(session, "_clone_profile", boom)
+    await session.prewarm_clone()
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _reset_pace_globals() -> None:
+    session._ACTION_COUNT = 0
+    session._ACTION_CAP_CEILING = 0
+    session._LAST_ACTION_TS = 0.0
+    session._ACTION_TIMES.clear()
+    session._SESSION_START_TS = 0.0
+    session._TEMPO = 1.0
+
+
+def _install_pace_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Clock, list[float]]:
+    clock = _Clock()
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock.t += seconds
+
+    monkeypatch.setattr(time, "monotonic", clock)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(guardrails, "random_gap", lambda: 0.0)
+    monkeypatch.setattr(guardrails, "maybe_idle_gap", lambda: 0.0)
+    monkeypatch.setattr(guardrails, "fatigue_multiplier", lambda _m: 1.0)
+    monkeypatch.setattr(guardrails, "next_tempo", lambda _t: 1.0)
+    monkeypatch.setattr(guardrails, "action_cap", lambda: 10_000)
+    _reset_pace_globals()
+    return clock, slept
+
+
+async def test_pace_sets_session_start_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock, _ = _install_pace_harness(monkeypatch)
+    await session.pace()
+    first = session._SESSION_START_TS
+    assert first == 1000.0
+    clock.t += 5.0
+    await session.pace()
+    assert first == session._SESSION_START_TS
+    _reset_pace_globals()
+
+
+async def test_pace_throttles_rapid_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clock, slept = _install_pace_harness(monkeypatch)
+    monkeypatch.setattr(guardrails, "random_gap", lambda: 0.5)
+    for _ in range(40):
+        await session.pace()
+    assert any(s > 0.5 for s in slept), "governor never throttled a fast burst"
+    window = session._ACTION_TIMES
+    span = window[-1] - window[0]
+    rate = len(window) / span * 60.0 if span > 0 else 0.0
+    assert rate <= guardrails.ACTIONS_PER_MINUTE_MAX + 1.0
+    _reset_pace_globals()
+
+
+async def test_pace_idle_gap_fires_when_forced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, slept = _install_pace_harness(monkeypatch)
+    monkeypatch.setattr(guardrails, "maybe_idle_gap", lambda: 42.0)
+    await session.pace()
+    assert 42.0 in slept
+    _reset_pace_globals()
+
+
+async def test_pace_applies_fatigue_and_tempo_to_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock, slept = _install_pace_harness(monkeypatch)
+    monkeypatch.setattr(guardrails, "random_gap", lambda: 1.0)
+    monkeypatch.setattr(guardrails, "fatigue_multiplier", lambda _m: 1.5)
+    monkeypatch.setattr(guardrails, "next_tempo", lambda _t: 1.2)
+    session._LAST_ACTION_TS = clock.t
+    await session.pace()
+    assert slept and abs(slept[0] - 1.8) < 1e-9
+    _reset_pace_globals()
+
+
+async def test_close_session_resets_pace_globals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_pace_harness(monkeypatch)
+    await session.pace()
+    session._TEMPO = 1.25
+    assert session._SESSION_START_TS != 0.0
+    session._PAGE = None
+    session._CONTEXT = None
+    session._PWS = None
+    session._LIFECYCLE_TASK = None
+    await session.close_session()
+    assert session._SESSION_START_TS == 0.0
+    assert session._TEMPO == 1.0
+    assert len(session._ACTION_TIMES) == 0
+    assert session._ACTION_COUNT == 0

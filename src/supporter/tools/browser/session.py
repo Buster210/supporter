@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +23,13 @@ _LAUNCHING: bool = False
 _LAUNCH_LOOP: object | None = None
 _CLONE_LOCK: asyncio.Lock | None = None
 _ACTION_COUNT: int = 0
+_ACTION_CAP_CEILING: int = 0
 _LAST_ACTION_TS: float = 0.0
+_ACTION_TIMES: deque[float] = deque()
+_SESSION_START_TS: float = 0.0
+_TEMPO: float = 1.0
+
+_RATE_WINDOW_SECONDS: float = 60.0
 _KEEP_OPEN: bool | None = None
 _LIFECYCLE_TASK: asyncio.Task[None] | None = None
 _FRAME_SELECTOR: str | None = None
@@ -350,7 +357,7 @@ async def _launch_context(
     return await pws.chromium.launch_persistent_context(
         user_data_dir=str(user_data_dir),
         channel="chrome",
-        headless=config.browser_headless,
+        headless=False,
         no_viewport=True,
         chromium_sandbox=True,
         args=args,
@@ -426,6 +433,7 @@ async def get_session() -> tuple[Any, Any, Any]:
 async def close_session() -> None:
     global _PWS, _CONTEXT, _PAGE, _LAUNCH_LOOP, _ACTION_COUNT, _LAST_ACTION_TS
     global _KEEP_OPEN, _FRAME_SELECTOR, _CLONE_LOCK, _LIFECYCLE_TASK
+    global _ACTION_CAP_CEILING, _SESSION_START_TS, _TEMPO
 
     if _LIFECYCLE_TASK is not None:
         _LIFECYCLE_TASK.cancel()
@@ -448,7 +456,11 @@ async def close_session() -> None:
     _PAGE = None
     _LAUNCH_LOOP = None
     _ACTION_COUNT = 0
+    _ACTION_CAP_CEILING = 0
     _LAST_ACTION_TS = 0.0
+    _ACTION_TIMES.clear()
+    _SESSION_START_TS = 0.0
+    _TEMPO = 1.0
     _KEEP_OPEN = None
     _FRAME_SELECTOR = None
     _CLONE_LOCK = None
@@ -457,17 +469,44 @@ async def close_session() -> None:
 
 
 async def pace() -> None:
-    global _LAST_ACTION_TS, _ACTION_COUNT
+    global _LAST_ACTION_TS, _ACTION_COUNT, _ACTION_CAP_CEILING
+    global _SESSION_START_TS, _TEMPO
 
-    gap = guardrails.random_gap()
-    elapsed = time.monotonic() - _LAST_ACTION_TS
+    now = time.monotonic()
+    if _SESSION_START_TS == 0.0:
+        _SESSION_START_TS = now
+
+    session_minutes = (now - _SESSION_START_TS) / 60.0
+    _TEMPO = guardrails.next_tempo(_TEMPO)
+    gap = (
+        guardrails.random_gap()
+        * guardrails.fatigue_multiplier(session_minutes)
+        * _TEMPO
+    )
+    elapsed = now - _LAST_ACTION_TS
     if elapsed < gap:
         await asyncio.sleep(gap - elapsed)
 
+    now = time.monotonic()
+    _ACTION_TIMES.append(now)
+    cutoff = now - _RATE_WINDOW_SECONDS
+    while _ACTION_TIMES and _ACTION_TIMES[0] < cutoff:
+        _ACTION_TIMES.popleft()
+    window_span = now - _ACTION_TIMES[0] if len(_ACTION_TIMES) > 1 else 0.0
+    throttle = guardrails.rate_throttle_delay(len(_ACTION_TIMES), window_span)
+    if throttle > 0.0:
+        await asyncio.sleep(throttle)
+
+    idle_gap = guardrails.maybe_idle_gap()
+    if idle_gap > 0.0:
+        await asyncio.sleep(idle_gap)
+
     _LAST_ACTION_TS = time.monotonic()
     _ACTION_COUNT += 1
+    if _ACTION_CAP_CEILING == 0:
+        _ACTION_CAP_CEILING = guardrails.action_cap()
 
-    if _ACTION_COUNT >= guardrails.ACTION_CAP:
+    if _ACTION_COUNT >= _ACTION_CAP_CEILING:
         cb = guardrails.browse_confirmation_callback
         if cb is not None:
             go = await cb(
@@ -478,7 +517,8 @@ async def pace() -> None:
                 raise RuntimeError("Action cap reached and user denied continuation")
         else:
             logger.warning(
-                f"Browser action cap ({guardrails.ACTION_CAP}) reached with no "
+                f"Browser action cap ({_ACTION_CAP_CEILING}) reached with no "
                 "confirmation callback; continuing autonomously."
             )
         _ACTION_COUNT = 0
+        _ACTION_CAP_CEILING = 0

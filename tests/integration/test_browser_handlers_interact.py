@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from supporter.tools.browser import snapshot
+from supporter.tools.browser import guardrails, snapshot
 from supporter.tools.browser.tool import browse
 
 from .conftest import FakeSession
@@ -31,7 +31,12 @@ async def test_click_without_ref_errors(fake_session: FakeSession) -> None:
     )
 
 
-async def test_type_fills_text_in_fast_mode(fake_session: FakeSession) -> None:
+async def test_type_fills_text_in_fast_mode(
+    fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fast mode is gated by the FAST_HOSTS allowlist, not req.fast alone; the
+    # fake host is off-list, so trust it explicitly to take the raw fill path.
+    monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
     await browse("type", ref="e2", text="hello", fast=True)
 
     args, _kwargs = fake_session.log.last("fill")
@@ -65,7 +70,10 @@ async def test_type_into_password_field_is_gated(
     assert len(fake_session.confirm.calls) == 1
 
 
-async def test_hover_resolves_and_hovers(fake_session: FakeSession) -> None:
+async def test_hover_resolves_and_hovers(
+    fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
     await browse("hover", ref="e2", fast=True)
 
     _args, _kwargs = fake_session.log.last("hover")
@@ -79,8 +87,9 @@ async def test_scroll_without_target_errors(fake_session: FakeSession) -> None:
 
 
 async def test_scroll_by_delta_uses_wheel_in_fast_mode(
-    fake_session: FakeSession,
+    fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
     await browse("scroll", dx=0, dy=200, fast=True)
 
     args, _kwargs = fake_session.log.last("wheel")

@@ -1,15 +1,53 @@
 from __future__ import annotations
 
+import os
 import random
 import re
 from collections.abc import Awaitable, Callable
 from typing import Final
 
+from . import humanize
+
 _UNSET: Final = object()
 
-ACTION_CAP: Final = 30
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"${name} must be an integer, got: {raw!r}") from exc
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"${name} must be a float, got: {raw!r}") from exc
+
+
+ACTION_CAP: Final = 25
+ACTION_CAP_JITTER: Final = 15
 GAP_MIN: Final = 0.8
 GAP_MAX: Final = 2.5
+
+ACTIONS_PER_MINUTE_MAX: Final = _env_int("BROWSER_ACTIONS_PER_MIN", 40)
+SESSION_IDLE_GAP_PROBABILITY: Final = 0.04
+SESSION_IDLE_GAP_RANGE: Final = (
+    _env_float("BROWSER_IDLE_GAP_MIN", 5.0),
+    60.0,
+)
+
+FATIGUE_MAX_BONUS: Final = 0.5
+FATIGUE_PER_MINUTE: Final = 0.02
+TEMPO_MIN: Final = 0.8
+TEMPO_MAX: Final = 1.3
+TEMPO_STEP: Final = 0.1
 
 SENSITIVE_DOMAINS: Final = frozenset(
     {
@@ -155,4 +193,31 @@ def needs_confirmation(
 
 
 def random_gap() -> float:
-    return random.uniform(GAP_MIN, GAP_MAX)
+    return humanize._lognormal_delay(median=1.2, sigma=0.4, lo=GAP_MIN, hi=GAP_MAX)
+
+
+def action_cap() -> int:
+    return ACTION_CAP + random.randint(0, ACTION_CAP_JITTER)
+
+
+def rate_throttle_delay(recent_action_count: int, window_seconds: float) -> float:
+    if recent_action_count <= 1 or window_seconds <= 0.0:
+        return 0.0
+    min_window = recent_action_count / ACTIONS_PER_MINUTE_MAX * 60.0
+    return max(0.0, min_window - window_seconds)
+
+
+def maybe_idle_gap() -> float:
+    if random.random() < SESSION_IDLE_GAP_PROBABILITY:
+        return random.uniform(*SESSION_IDLE_GAP_RANGE)
+    return 0.0
+
+
+def fatigue_multiplier(session_minutes: float) -> float:
+    bonus = min(FATIGUE_MAX_BONUS, max(0.0, session_minutes) * FATIGUE_PER_MINUTE)
+    return 1.0 + bonus
+
+
+def next_tempo(tempo: float) -> float:
+    stepped = tempo + random.uniform(-TEMPO_STEP, TEMPO_STEP)
+    return max(TEMPO_MIN, min(TEMPO_MAX, stepped))

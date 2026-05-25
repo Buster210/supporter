@@ -14,10 +14,12 @@ from .tool import (
     _diff_text,
     _effective_fast,
     _page_baseline_key,
+    _page_host,
     _page_or_error,
     _post_action_snapshot,
     _render_script_result,
     _require_ref,
+    _resolve_role_and_name,
     _resolve_target,
     _session_parts,
     _snapshot_full,
@@ -37,7 +39,7 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     await page.goto(req.url, wait_until="domcontentloaded", timeout=30_000)
     await asyncio.sleep(req.delay_ms / 1000.0)
     if not await _effective_fast(page, req):
-        await humanize.reading_pause()
+        await humanize.reading_pause(page)
     result = await _snapshot_full(page, req)
     if not session.keep_open():
         result += (
@@ -53,7 +55,7 @@ async def _handle_back(req: BrowseRequest) -> str:
     await page.go_back(timeout=30_000, wait_until="commit")
     await asyncio.sleep(req.delay_ms / 1000.0)
     if not await _effective_fast(page, req):
-        await humanize.reading_pause()
+        await humanize.reading_pause(page)
     return await _snapshot_full(page, req)
 
 
@@ -164,7 +166,7 @@ async def _handle_diff(req: BrowseRequest) -> str:
 async def _handle_screenshot(req: BrowseRequest) -> str:
     global _SCREENSHOT_SEQ
     page = await _page_or_error()
-    await page.wait_for_timeout(500)
+    await page.wait_for_timeout(humanize.jitter_ms(0.5, 0.3, 0.3, 0.9))
     img_bytes = await page.screenshot(type="png", full_page=False)
 
     stem = req.stamp.strip()
@@ -291,7 +293,12 @@ async def _handle_type(req: BrowseRequest) -> str:
 
     if not await _effective_fast(page, req):
         await session.pace()
-        await humanize.human_type(page, req.ref, req.text, locator=locator)
+        aria_role, aria_name = await _resolve_role_and_name(locator, req.ref)
+        host = await _page_host(page)
+        sensitive = guardrails.needs_confirmation("type", aria_role, aria_name, host)
+        await humanize.human_type(
+            page, req.ref, req.text, sensitive=sensitive, locator=locator
+        )
     else:
         await locator.fill(req.text)
     await asyncio.sleep(req.delay_ms / 1000.0)

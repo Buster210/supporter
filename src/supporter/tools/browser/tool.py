@@ -9,7 +9,7 @@ from weakref import WeakKeyDictionary
 from ...logger import logger
 from ..base import ToolError
 from ..file_ops import validate_path
-from . import guardrails, session, snapshot
+from . import guardrails, humanize, session, snapshot
 from .task import (
     _record_step,
     finish_task,
@@ -204,8 +204,6 @@ async def _page_host(page: Any) -> str:
 
 
 async def _effective_fast(page: Any, req: BrowseRequest) -> bool:
-    if req.fast:
-        return True
     return guardrails.host_is_fast(await _page_host(page))
 
 
@@ -279,7 +277,7 @@ async def _snapshot_full(page: Any, req: BrowseRequest, label: str = "") -> str:
 
 
 async def _post_action_snapshot(page: Any, req: BrowseRequest) -> str:
-    await page.wait_for_timeout(300)
+    await page.wait_for_timeout(humanize.jitter_ms(0.3, 0.3, 0.15, 0.6))
     return await _capture(page, req, force_full=False, label=f" after {req.action}")
 
 
@@ -447,10 +445,10 @@ async def browse(
         compact: If True, return only interactive elements [ref=eN].
         delay_ms: Extra delay after action in ms. Default 100. For wait with no
             selector, how long to wait.
-        fast: If True, skip humanized motion + pacing for this action (faster,
-            less stealthy — use only on sites that don't fingerprint input).
-            Hosts in guardrails.FAST_HOSTS run fast automatically even when
-            this is False.
+        fast: Deprecated as a per-call override and ignored off the allowlist.
+            Raw, un-humanized input is used ONLY on hosts in
+            guardrails.FAST_HOSTS; every other host is always humanized,
+            regardless of this flag.
         key: Key or chord to press (press), e.g. "Enter", "Control+a"; or a
             cookie/localStorage key name (cookies/storage).
         value: Option value attribute to choose (select); or the value to set

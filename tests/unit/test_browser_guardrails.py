@@ -102,6 +102,81 @@ def test_random_gap_within_bounds() -> None:
         assert guardrails.GAP_MIN <= gap <= guardrails.GAP_MAX
 
 
+def test_random_gap_is_not_uniform() -> None:
+    # Log-normal clusters near the median; a flat uniform over [0.8, 2.5] would
+    # put ~50% of draws above the 1.65 midpoint. We expect a clear majority below.
+    samples = [guardrails.random_gap() for _ in range(2000)]
+    midpoint = (guardrails.GAP_MIN + guardrails.GAP_MAX) / 2
+    below = sum(1 for g in samples if g < midpoint)
+    assert below > len(samples) * 0.6
+
+
+def test_action_cap_within_jitter_band() -> None:
+    lo = guardrails.ACTION_CAP
+    hi = guardrails.ACTION_CAP + guardrails.ACTION_CAP_JITTER
+    caps = {guardrails.action_cap() for _ in range(500)}
+    assert all(lo <= c <= hi for c in caps)
+    assert len(caps) > 1  # actually jittered, not a constant
+
+
+def test_rate_throttle_zero_under_budget() -> None:
+    # 5 actions over a 60s window is well under the 20/min ceiling → no throttle.
+    assert guardrails.rate_throttle_delay(5, 60.0) == 0.0
+
+
+def test_rate_throttle_positive_over_budget() -> None:
+    # 20 actions crammed into 10s is way over budget → must inject delay.
+    delay = guardrails.rate_throttle_delay(20, 10.0)
+    assert delay > 0.0
+
+
+def test_rate_throttle_pulls_rate_to_ceiling() -> None:
+    # After adding the returned delay, the effective rate lands on the ceiling.
+    count, window = 30, 5.0
+    delay = guardrails.rate_throttle_delay(count, window)
+    effective_rate = count / (window + delay) * 60.0
+    assert effective_rate <= guardrails.ACTIONS_PER_MINUTE_MAX + 1e-9
+
+
+def test_rate_throttle_nonpositive_count_is_zero() -> None:
+    assert guardrails.rate_throttle_delay(0, 60.0) == 0.0
+
+
+def test_rate_throttle_single_action_never_throttles() -> None:
+    # One timestamp (or a zero-length window) has no measurable rate, so the
+    # first action of a session must not be charged a spurious throttle.
+    assert guardrails.rate_throttle_delay(1, 0.0) == 0.0
+    assert guardrails.rate_throttle_delay(5, 0.0) == 0.0
+
+
+def test_maybe_idle_gap_within_range_or_zero() -> None:
+    lo, hi = guardrails.SESSION_IDLE_GAP_RANGE
+    fired = False
+    for _ in range(5000):
+        g = guardrails.maybe_idle_gap()
+        assert g == 0.0 or lo <= g <= hi
+        fired = fired or g > 0.0
+    assert fired  # at ~4% over 5000 draws it must trigger sometimes
+
+
+def test_fatigue_multiplier_monotonic_and_clamped() -> None:
+    prev = 0.0
+    for minutes in range(0, 120, 2):
+        m = guardrails.fatigue_multiplier(float(minutes))
+        assert m >= prev - 1e-9  # non-decreasing
+        assert 1.0 <= m <= 1.0 + guardrails.FATIGUE_MAX_BONUS + 1e-9
+        prev = m
+    # Negative age never dips below 1.0.
+    assert guardrails.fatigue_multiplier(-10.0) == 1.0
+
+
+def test_next_tempo_stays_in_band() -> None:
+    t = 1.0
+    for _ in range(10_000):
+        t = guardrails.next_tempo(t)
+        assert guardrails.TEMPO_MIN <= t <= guardrails.TEMPO_MAX
+
+
 def test_host_from_url_strips_www_and_lowercases() -> None:
     assert guardrails.host_from_url("https://WWW.Example.COM/path") == "example.com"
     assert guardrails.host_from_url("not a url") == ""
@@ -142,6 +217,46 @@ def test_host_is_fast_rejects_non_members_and_lookalikes(
     assert guardrails.host_is_fast("notexample.com") is False
     assert guardrails.host_is_fast("example.com.evil.com") is False
     assert guardrails.host_is_fast("") is False
+
+
+def test_actions_per_minute_max_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    monkeypatch.setenv("BROWSER_ACTIONS_PER_MIN", "55")
+    importlib.reload(guardrails)
+    assert guardrails.ACTIONS_PER_MINUTE_MAX == 55
+
+
+def test_actions_per_minute_max_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    monkeypatch.delenv("BROWSER_ACTIONS_PER_MIN", raising=False)
+    importlib.reload(guardrails)
+    assert guardrails.ACTIONS_PER_MINUTE_MAX == 40
+
+
+def test_session_idle_gap_range_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    monkeypatch.setenv("BROWSER_IDLE_GAP_MIN", "7.5")
+    importlib.reload(guardrails)
+    assert guardrails.SESSION_IDLE_GAP_RANGE == (7.5, 60.0)
+
+
+def test_session_idle_gap_range_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    monkeypatch.delenv("BROWSER_IDLE_GAP_MIN", raising=False)
+    importlib.reload(guardrails)
+    assert guardrails.SESSION_IDLE_GAP_RANGE == (5.0, 60.0)
 
 
 # --- register_browse_callback: independent-slot update + async dispatch ----
