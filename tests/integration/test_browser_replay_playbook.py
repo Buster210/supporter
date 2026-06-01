@@ -11,10 +11,6 @@ from supporter.tools.browser.task import Playbook, Step
 if TYPE_CHECKING:
     from .conftest import FakeSession
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _save_playbook(
     host: str,
@@ -35,11 +31,6 @@ def _save_playbook(
     task._save_playbook_sync(pb)
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def isolate_memory(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
@@ -50,11 +41,6 @@ def isolate_memory(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
 def fake_host(fake_session: FakeSession) -> FakeSession:
     fake_session.page.eval_result = "https://example.test/"
     return fake_session
-
-
-# ---------------------------------------------------------------------------
-# Guard — no active page or no stored playbook
-# ---------------------------------------------------------------------------
 
 
 async def test_replay_no_active_page(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,11 +57,6 @@ async def test_replay_no_playbook(fake_host: FakeSession) -> None:
     assert "No playbook found" in result
     assert "never recorded" in result
     assert "example.test" in result
-
-
-# ---------------------------------------------------------------------------
-# Happy path — all steps succeed
-# ---------------------------------------------------------------------------
 
 
 async def test_replay_happy_path(
@@ -121,11 +102,6 @@ async def test_replay_happy_path_single_step(
     assert "1/1 steps succeeded" in result
 
 
-# ---------------------------------------------------------------------------
-# Error handback — step returns an Error
-# ---------------------------------------------------------------------------
-
-
 async def test_replay_stops_on_error_step(
     fake_host: FakeSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -154,11 +130,6 @@ async def test_replay_stops_on_error_step(
     assert "Error: element not found" in result
 
 
-# ---------------------------------------------------------------------------
-# Ref resolution — target actions with role/name
-# ---------------------------------------------------------------------------
-
-
 async def test_replay_resolves_ref_from_aria_snapshot(
     fake_host: FakeSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -166,7 +137,7 @@ async def test_replay_resolves_ref_from_aria_snapshot(
     _save_playbook(
         "example.test",
         "resolve",
-        [("click", "button", "OK", None)],  # matches _SAMPLE_ARIA
+        [("click", "button", "OK", None)],
     )
 
     seen: dict[str, Any] = {}
@@ -183,7 +154,6 @@ async def test_replay_resolves_ref_from_aria_snapshot(
     assert "1/1 steps succeeded" in result
     assert seen["action"] == "click"
     assert seen["kwargs"].get("ref") == "e2"
-    # selector comes from _replay_params — empty for this step
     assert seen["kwargs"].get("selector", "") == ""
 
 
@@ -208,14 +178,8 @@ async def test_replay_uses_selector_when_present_over_ref(
     result = await task.replay_playbook("select")
 
     assert "1/1 steps succeeded" in result
-    # selector goes straight through, no ref resolution attempted
     assert seen["kwargs"].get("selector") == "#direct-btn"
     assert "ref" not in seen["kwargs"]
-
-
-# ---------------------------------------------------------------------------
-# Element not found — ref resolution fails
-# ---------------------------------------------------------------------------
 
 
 async def test_replay_stops_on_element_not_found(
@@ -261,5 +225,4 @@ async def test_replay_non_target_action_skips_ref(
     result = await task.replay_playbook("noref")
 
     assert "1/1 steps succeeded" in result
-    # navigate is not in _TARGET_ACTIONS, so no ref is injected
     assert "ref" not in seen["kwargs"]

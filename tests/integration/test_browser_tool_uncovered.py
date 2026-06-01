@@ -15,7 +15,6 @@ def _reset_snapshot_baselines() -> None:
 
 
 async def test_resolve_target_frame_selector_error(fake_session: FakeSession) -> None:
-    # Set up frame selector state using monkeypatch from conftest
     import supporter.tools.browser.session as session_module
 
     original_frame_selector = session_module.active_frame_selector
@@ -44,7 +43,6 @@ async def test_resolve_target_no_ref_error(fake_session: FakeSession) -> None:
 
 
 async def test_record_locator_frame_path(fake_session: FakeSession) -> None:
-    # Set up frame selector state
     import supporter.tools.browser.session as session_module
 
     original_frame_selector2 = session_module.active_frame_selector
@@ -55,7 +53,6 @@ async def test_record_locator_frame_path(fake_session: FakeSession) -> None:
     session_module.active_frame_selector = mock_frame_selector2
 
     try:
-        # This should return None when no selector provided
         from supporter.tools.browser.tool import _record_locator
 
         req = BrowseRequest(action="click", ref="e2", selector="")
@@ -74,9 +71,6 @@ async def test_record_locator_no_ref_path(fake_session: FakeSession) -> None:
 
 
 async def test_confirm_or_block_callback_none(fake_session: FakeSession) -> None:
-    # _confirm_or_block (not _confirm_script) is called by click/type/press/
-    # select/upload/download.  Use click on a non-sensitive host and force
-    # needs_confirmation True so we land on the cb=None guard.
     import supporter.tools.browser.guardrails as guardrails
 
     original_callback = guardrails.browse_confirmation_callback
@@ -94,7 +88,6 @@ async def test_confirm_or_block_callback_none(fake_session: FakeSession) -> None
 
 
 async def test_confirm_script_callback_none(fake_session: FakeSession) -> None:
-    # Temporarily remove the callback
     import supporter.tools.browser.guardrails as guardrails
 
     original_callback = guardrails.browse_confirmation_callback
@@ -104,12 +97,10 @@ async def test_confirm_script_callback_none(fake_session: FakeSession) -> None:
         result = await browse("eval", script="console.log('test')")
         assert "Error: browser confirmation not wired. Action cancelled." in result
     finally:
-        # Restore callback
         guardrails.browse_confirmation_callback = original_callback
 
 
 async def test_confirm_script_full_confirmation(fake_session: FakeSession) -> None:
-    # Set confirm recorder to deny
     fake_session.confirm.allow = False
 
     result = await browse("eval", script="console.log('test')")
@@ -117,7 +108,6 @@ async def test_confirm_script_full_confirmation(fake_session: FakeSession) -> No
 
 
 async def test_confirm_always_callback_none(fake_session: FakeSession) -> None:
-    # Temporarily remove the callback
     import supporter.tools.browser.guardrails as guardrails
 
     original_callback = guardrails.browse_confirmation_callback
@@ -127,14 +117,12 @@ async def test_confirm_always_callback_none(fake_session: FakeSession) -> None:
         result = await browse("storage", key="test")
         assert "Error: browser confirmation not wired. Action cancelled." in result
     finally:
-        # Restore callback
         guardrails.browse_confirmation_callback = original_callback
 
 
 async def test_render_script_result_json_failure(fake_session: FakeSession) -> None:
     from supporter.tools.browser.tool import _render_script_result
 
-    # Create a result that can't be JSON serialized
     class Unserializable:
         def __str__(self) -> str:
             return "test"

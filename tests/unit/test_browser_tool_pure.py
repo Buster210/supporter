@@ -15,9 +15,6 @@ def _req(**kw: Any) -> BrowseRequest:
     return BrowseRequest(action=kw.pop("action", "snapshot"), **kw)
 
 
-# --- _wrap_action_errors: the three exception shapes ----------------------
-
-
 def _wrap(action: str, body: Callable[[BrowseRequest], Awaitable[str]]) -> Any:
     return tool._wrap_action_errors(action)(body)
 
@@ -61,8 +58,6 @@ async def test_wrap_generic_exception_names_the_action() -> None:
         await _wrap("scroll", kaboom)(_req())
 
 
-# --- _render_snapshot -----------------------------------------------------
-
 _TREE = '- document [ref=e1]:\n  - button "OK" [ref=e2]'
 
 
@@ -83,9 +78,6 @@ def test_render_snapshot_compact_counts_interactive() -> None:
 def test_render_snapshot_empty_tree_reports_empty_page() -> None:
     out = tool._render_snapshot("", _req(compact=False), "", "https://x.test/")
     assert out == "(empty page)"
-
-
-# --- _page_key ------------------------------------------------------------
 
 
 def test_page_key_returns_url() -> None:
@@ -111,9 +103,6 @@ def test_page_key_swallows_url_failure() -> None:
     assert tool._page_key(P()) == ""
 
 
-# --- _page_baseline_key (WeakKeyDictionary token) -------------------------
-
-
 def test_baseline_key_is_stable_per_page() -> None:
     class P:
         pass
@@ -133,13 +122,7 @@ def test_baseline_key_differs_across_pages() -> None:
 
 
 def test_baseline_key_empty_when_weakref_unsupported() -> None:
-    # int isn't weak-referenceable, so it can't enter the WeakKeyDictionary; the
-    # helper must degrade to "" (the falsy key that disables baselining) rather
-    # than raise.
     assert tool._page_baseline_key(123) == ""
-
-
-# --- _diff_header ---------------------------------------------------------
 
 
 def test_diff_header_strips_scheme() -> None:
@@ -157,13 +140,9 @@ def test_diff_header_truncates_long_tail() -> None:
     key = "https://x.test/" + "a" * 100
     header = tool._diff_header(key)
     assert header.endswith("...):")
-    # 57 kept chars + the 3-dot ellipsis inside the parens.
     inner = header[len("diff vs last snapshot (") : -len("):")]
     assert len(inner) == 60
     assert inner.endswith("...")
-
-
-# --- _render_script_result ------------------------------------------------
 
 
 def test_render_script_result_json_roundtrip() -> None:
@@ -175,7 +154,6 @@ def test_render_script_result_falls_back_to_str() -> None:
         def __str__(self) -> str:
             return "OPAQUE"
 
-    # default=str makes json.dumps succeed by stringifying the value.
     assert "OPAQUE" in tool._render_script_result(NotJson())
 
 
@@ -186,10 +164,6 @@ def test_render_script_result_truncates_over_2000() -> None:
 
 
 def test_render_script_result_fallback_on_json_failure() -> None:
-    # json.dumps with default=str should succeed for everything, but the
-    # except handler is kept as a safety net.  Force it with a type that
-    # triggers a *different* failure: a deeply nested structure hitting
-    # the recursion limit in the json encoder itself.
     deep: Any = []
     for _ in range(2000):
         deep = [deep]
@@ -198,19 +172,11 @@ def test_render_script_result_fallback_on_json_failure() -> None:
     assert len(out) > 0
 
 
-# --- _validate_path_or_error ----------------------------------------------
-
-
 def test_validate_path_accepts_in_project_relative() -> None:
     resolved, err = tool._validate_path_or_error("notes.txt")
     assert err is None
     assert resolved is not None
     assert str(resolved).endswith("notes.txt")
-
-
-# ---------------------------------------------------------------------------
-# _resolve_role_and_name — exception path
-# ---------------------------------------------------------------------------
 
 
 async def test_resolve_role_and_name_returns_empty_on_failure() -> None:
@@ -224,22 +190,12 @@ async def test_resolve_role_and_name_returns_empty_on_failure() -> None:
     assert name == ""
 
 
-# ---------------------------------------------------------------------------
-# _validate_path_or_error
-# ---------------------------------------------------------------------------
-
-
 def test_validate_path_rejects_traversal() -> None:
     resolved, err = tool._validate_path_or_error("../../etc/passwd")
     assert resolved is None
     assert err is not None
     assert err.startswith("Error: ")
     assert "outside project root" in err
-
-
-# ---------------------------------------------------------------------------
-# _page_or_error / _session_parts — error mapping
-# ---------------------------------------------------------------------------
 
 
 async def test_page_or_error_raises_tool_error_on_failure(
@@ -266,11 +222,6 @@ async def test_session_parts_raises_tool_error_on_failure(
 
     with pytest.raises(ToolError, match="Browser session failed"):
         await tool._session_parts()
-
-
-# ---------------------------------------------------------------------------
-# _page_host — exception path
-# ---------------------------------------------------------------------------
 
 
 async def test_page_host_returns_empty_on_evaluate_failure() -> None:

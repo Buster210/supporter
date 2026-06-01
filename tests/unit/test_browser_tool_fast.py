@@ -29,13 +29,10 @@ def test_fast_host_runs_fast() -> None:
 
 
 def test_fast_flag_does_not_force_fast_off_allowlist() -> None:
-    # The hard-guard: a caller's fast=True is ignored on a non-allowlist host,
-    # so the action is silently humanized rather than run raw.
     assert _run_effective_fast("example.com", _Req(fast=True)) is False
 
 
 def test_fast_flag_does_not_disable_fast_on_allowlist() -> None:
-    # fast=False on an allowlist host still runs fast — the allowlist decides.
     assert _run_effective_fast("gemini.google.com", _Req(fast=False)) is True
 
 

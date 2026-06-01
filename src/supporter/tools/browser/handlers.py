@@ -116,13 +116,17 @@ async def _handle_tab(req: BrowseRequest) -> str:
 @_wrap_action_errors("newtab")
 async def _handle_newtab(req: BrowseRequest) -> str:
     _pws, context, _page = await _session_parts()
-    new_page = await context.new_page()
-    session.set_active(new_page)
-    await new_page.bring_to_front()
+    pages = session.list_pages()
+    if len(pages) == 1 and session.is_blank(pages[0]):
+        target = pages[0]
+    else:
+        target = await context.new_page()
+    session.set_active(target)
+    await target.bring_to_front()
     if req.url:
-        await new_page.goto(req.url, wait_until="domcontentloaded", timeout=30_000)
+        await target.goto(req.url, wait_until="domcontentloaded", timeout=30_000)
     await asyncio.sleep(req.delay_ms / 1000.0)
-    return await _snapshot_full(new_page, req)
+    return await _snapshot_full(target, req)
 
 
 @_wrap_action_errors("closetab")

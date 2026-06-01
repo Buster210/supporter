@@ -4,7 +4,7 @@ import os
 import random
 import re
 from collections.abc import Awaitable, Callable
-from typing import Final
+from typing import Any, Final
 
 from . import humanize
 
@@ -133,17 +133,25 @@ _FIELD_NAME_PATTERN: Final = _word_boundary_pattern(SENSITIVE_FIELD_NAMES)
 browse_confirmation_callback: Callable[[str, str], Awaitable[bool]] | None = None
 browse_image_sink: Callable[[bytes, str], Awaitable[None]] | None = None
 
+browse_profile_select_callback: Callable[..., Awaitable[str | None]] | None = None
+
 
 def register_browse_callback(
     *,
     confirmation: Callable[[str, str], Awaitable[bool]] | None | object = _UNSET,
     image_sink: Callable[[bytes, str], Awaitable[None]] | None | object = _UNSET,
+    profile_select: Callable[[list[Any]], Awaitable[str | None]]
+    | None
+    | object = _UNSET,
 ) -> None:
     global browse_confirmation_callback, browse_image_sink
+    global browse_profile_select_callback
     if confirmation is not _UNSET:
         browse_confirmation_callback = confirmation  # type: ignore[assignment]
     if image_sink is not _UNSET:
         browse_image_sink = image_sink  # type: ignore[assignment]
+    if profile_select is not _UNSET:
+        browse_profile_select_callback = profile_select  # type: ignore[assignment]
 
 
 def host_from_url(url: str) -> str:

@@ -894,33 +894,27 @@ class TestCacheKeyFunctions:
         result = _cache_key(task)
         assert result == ("security_auditor", "gemini-1.5-pro", True)
 
-        # Test with live=False
         task["live"] = False
         result = _cache_key(task)
         assert result == ("security_auditor", "gemini-1.5-pro", False)
 
-        # Test without live field (should default to False)
         del task["live"]
         result = _cache_key(task)
         assert result == ("security_auditor", "gemini-1.5-pro", False)
 
     def test_cache_key_with_invalid_role(self) -> None:
-        # Empty role
         td: dict[str, Any] = {"agent": "", "model": "gemini-1.5-pro", "task": "test"}
         result = _cache_key(td)
         assert result is None
 
-        # None role
         td = {"agent": None, "model": "gemini-1.5-pro", "task": "test"}
         result = _cache_key(td)
         assert result is None
 
-        # Custom role
         td["agent"] = "custom"
         result = _cache_key(td)
         assert result is None
 
-        # Missing agent field
         del td["agent"]
         result = _cache_key(td)
         assert result is None
@@ -936,29 +930,24 @@ class TestCacheKeyFunctions:
         _cache.role_offsets.clear()
         _cache.offset_counter = 0
         with patch("supporter.config.config.gemini_api_keys", ["key1", "key2", "key3"]):
-            # Different roles get different offsets, so their key lists rotate
             result_a = _rotated_keys_for_role("role_a")
             result_b = _rotated_keys_for_role("role_b")
             result_c = _rotated_keys_for_role("role_c")
-            # Same role again returns same rotation
             result_a2 = _rotated_keys_for_role("role_a")
 
-        assert result_a == ["key1", "key2", "key3"]  # offset 0
-        assert result_b == ["key2", "key3", "key1"]  # offset 1
-        assert result_c == ["key3", "key1", "key2"]  # offset 2
-        assert result_a2 == result_a  # same role = same rotation
+        assert result_a == ["key1", "key2", "key3"]
+        assert result_b == ["key2", "key3", "key1"]
+        assert result_c == ["key3", "key1", "key2"]
+        assert result_a2 == result_a
 
     def test_rotated_keys_for_role_different_roles(self) -> None:
         with patch("supporter.config.config.gemini_api_keys", ["key1", "key2"]):
-            # Clear any existing offsets
             _cache.role_offsets.clear()
             _cache.offset_counter = 0
 
-            # Different roles should have different offsets
             result1 = _rotated_keys_for_role("security_auditor")
             result2 = _rotated_keys_for_role("code_writer")
 
-            # Both should be valid rotations but potentially different
             assert len(result1) == 2
             assert len(result2) == 2
             assert set(result1) == {"key1", "key2"}
@@ -985,25 +974,20 @@ class TestCreateSubAgent:
             "persona": "test persona",
         }
 
-        # Create a cached agent
         cache_key = _cache_key(task)
-        assert cache_key is not None  # Should be valid for this test
+        assert cache_key is not None
         cached_agent = MagicMock()
         _cache.agents[cache_key] = cached_agent
 
-        # Call _create_sub_agent - should return cached agent
         agent, prompt = _create_sub_agent(task)
 
-        # Verify the cached agent was returned and reset
         assert agent is cached_agent
-        assert agent.history == []  # code resets history to empty list
+        assert agent.history == []
         assert agent.current_interaction_id is None
 
-        # Verify prompt is correct
         assert "my task" in prompt
         assert "my context" in prompt
 
-        # Verify new agent was not created
         mock_agent_class.assert_not_called()
         mock_get_provider.assert_not_called()
         mock_build_provider.assert_not_called()
@@ -1027,33 +1011,26 @@ class TestCreateSubAgent:
             "persona": "test persona",
         }
 
-        # Mock the provider and agent creation
         mock_provider = MagicMock()
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
         mock_build_provider.return_value = mock_provider
 
-        # First call - should create new agent and cache it
         agent1, prompt1 = _create_sub_agent(task)
 
-        # Verify agent was created and cached
         assert agent1 is mock_agent
         cache_key = _cache_key(task)
         assert cache_key is not None
         assert _cache.agents[cache_key] is mock_agent
         assert cache_key in _cache.locks
 
-        # Verify provider was built
         mock_build_provider.assert_called_once()
 
-        # Second call with same task - should return cached agent
         agent2, prompt2 = _create_sub_agent(task)
 
-        # Should return the same cached agent
         assert agent2 is mock_agent
         assert agent2 is agent1
 
-        # Verify prompt is the same
         assert prompt1 == prompt2
 
 
@@ -1063,16 +1040,13 @@ class TestTruncateDelegateOutput:
 
         result = _truncate_delegate_output(long_text)
 
-        # Should be truncated
         assert len(result) <= config.delegate_max_output_chars + len(
             "\n\n[Output truncated...]"
         )
         assert result.endswith("[Output truncated...]")
 
-        # Should contain the beginning of the original text
         assert result.startswith("x" * config.delegate_max_output_chars)
 
-        # Should not contain the full original text
         assert len(result) < len(long_text)
 
     def test_truncate_delegate_output_no_truncation(self) -> None:
@@ -1080,7 +1054,6 @@ class TestTruncateDelegateOutput:
 
         result = _truncate_delegate_output(short_text)
 
-        # Should be unchanged
         assert result == short_text
         assert not result.endswith("[Output truncated...]")
 
@@ -1092,7 +1065,7 @@ class TestRunSubAgentFinallyBlock:
             "id": "t1",
             "task": "test task",
             "agent": "custom",
-            "live": True,  # This triggers the finally block condition
+            "live": True,
             "model": "gemini-1.5-pro",
             "tools": {"read_file"},
             "timeout": 10,
@@ -1102,18 +1075,15 @@ class TestRunSubAgentFinallyBlock:
         semaphore = asyncio.Semaphore(1)
         mock_bus = MagicMock()
 
-        # Mock agent with a provider whose close method raises an exception
         mock_agent = MagicMock()
         mock_result = MagicMock()
         mock_result.text = "Done"
         mock_agent.execute = AsyncMock(return_value=mock_result)
 
-        # Mock provider with close method that raises
         mock_provider = MagicMock()
         mock_provider.close = AsyncMock(side_effect=RuntimeError("Close failed"))
         mock_agent.provider = mock_provider
 
-        # Mock _cache_key to return None (triggers the finally block condition)
         with (
             patch("supporter.tools.delegate.agents._cache_key", return_value=None),
             patch(
@@ -1121,18 +1091,11 @@ class TestRunSubAgentFinallyBlock:
                 return_value=(mock_agent, "prompt"),
             ),
         ):
-            # Call run_sub_agent
             result = await run_sub_agent(task, semaphore, mock_bus, "job1")
 
-            # Verify the task completed successfully
             assert result["status"] == "completed"
 
-            # Verify the close method was called (it should have raised but been caught)
             mock_provider.close.assert_called_once()
-
-            # The warning should have been logged (we can't easily test this
-            # without mocking logger)
-            # But we can verify the close was attempted
 
     @pytest.mark.asyncio
     async def test_finally_block_not_triggered(self) -> None:
@@ -1140,7 +1103,7 @@ class TestRunSubAgentFinallyBlock:
             "id": "t1",
             "task": "test task",
             "agent": "custom",
-            "live": False,  # This prevents the finally block condition
+            "live": False,
             "model": "gemini-1.5-pro",
             "tools": {"read_file"},
             "timeout": 10,
@@ -1161,8 +1124,6 @@ class TestRunSubAgentFinallyBlock:
         ):
             result = await run_sub_agent(task, semaphore, mock_bus, "job1")
 
-            # Verify the task completed successfully
             assert result["status"] == "completed"
 
-            # Verify close was not called since live=False
             mock_agent.provider.close.assert_not_called()

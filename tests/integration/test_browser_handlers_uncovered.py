@@ -15,7 +15,6 @@ def _reset_snapshot_baselines() -> None:
 
 
 async def test_extract_handler_ref_in_frame_error(fake_session: FakeSession) -> None:
-    # Set up frame selector state
     import supporter.tools.browser.session as session_module
 
     original_frame_selector = session_module.active_frame_selector
@@ -46,7 +45,6 @@ async def test_eval_handler_no_script(fake_session: FakeSession) -> None:
 
 
 async def test_eval_handler_confirmation_denied(fake_session: FakeSession) -> None:
-    # Set confirm recorder to deny
     fake_session.confirm.allow = False
 
     result = await browse("eval", script="console.log('test')")
@@ -59,14 +57,11 @@ async def test_frame_handler_clear_frame(fake_session: FakeSession) -> None:
 
 
 async def test_tab_handler_negative_index(fake_session: FakeSession) -> None:
-    # This tests the closetab path with negative index
     result = await browse("closetab", index=-1)
-    # Should not error and should close the last tab
     assert "Closed the last tab" in result or "no tabs remain open" in result
 
 
 async def test_close_handler_browser_already_closed(fake_session: FakeSession) -> None:
-    # Mock is_active to return False
     import supporter.tools.browser.session as session_module
 
     original_is_active_fn = session_module.is_active
@@ -84,7 +79,6 @@ async def test_close_handler_browser_already_closed(fake_session: FakeSession) -
 
 
 async def test_close_handler_pinned_open(fake_session: FakeSession) -> None:
-    # Mock pinned_open to return True
     import supporter.tools.browser.session as session_module
 
     original_pinned_open_fn = session_module.pinned_open
@@ -104,7 +98,6 @@ async def test_close_handler_pinned_open(fake_session: FakeSession) -> None:
 async def test_close_handler_confirmation_callback_none(
     fake_session: FakeSession,
 ) -> None:
-    # Temporarily remove the callback
     import supporter.tools.browser.guardrails as guardrails
 
     original_callback = guardrails.browse_confirmation_callback

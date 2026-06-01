@@ -88,6 +88,13 @@ def _int_env(name: str, default: int) -> int:
         raise ValueError(f"${name} must be an integer, got: {raw!r}") from exc
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.lower() in ("true", "1", "yes")
+
+
 def _get_project_root() -> str:
     current = Path(__file__).resolve().parent
     for parent in [current, *list(current.parents)]:
@@ -99,7 +106,7 @@ def _get_project_root() -> str:
 def load_config() -> AppConfig:
     load_dotenv()
     raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
-    stripped = raw_keys.strip()
+    stripped = raw_keys.replace("\n", " ").replace("\r", "").strip()
     if stripped.startswith("["):
         try:
             keys = [k for k in json.loads(stripped) if isinstance(k, str) and k.strip()]
@@ -152,7 +159,18 @@ def load_config() -> AppConfig:
         log_backup_count=_int_env("LOG_BACKUP_COUNT", 3),
         history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),
         browser_profile_path=os.getenv("BROWSER_PROFILE_PATH"),
-        browser_profile_name=os.getenv("BROWSER_PROFILE_NAME", "Profile 2"),
+        browser_profile_name=os.getenv("BROWSER_PROFILE_NAME"),
+        durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
+        history_dir=str(Path(project_root) / ".supporter" / "history"),
+        replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),
+        replay_tool_summary_max_chars=_int_env("REPLAY_TOOL_SUMMARY_MAX_CHARS", 200),
+        reconnect_attempts_max=_int_env("RECONNECT_ATTEMPTS_MAX", 5),
+        reconnect_backoff_base=float(os.getenv("RECONNECT_BACKOFF_BASE", "0.5")),
+        reconnect_backoff_cap=float(os.getenv("RECONNECT_BACKOFF_CAP", "8.0")),
+        keepalive_interval=float(os.getenv("KEEPALIVE_INTERVAL", "20.0")),
+        prewarm_safety_margin=float(os.getenv("PREWARM_SAFETY_MARGIN", "5.0")),
+        keepalive_enabled=_bool_env("KEEPALIVE_ENABLED", True),
+        empty_resume_policy=os.getenv("EMPTY_RESUME_POLICY", "trust").lower(),
     )
 
 

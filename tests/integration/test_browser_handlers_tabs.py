@@ -39,6 +39,20 @@ async def test_newtab_appends_a_page_and_navigates(
     assert 'button "OK"' in result
 
 
+async def test_newtab_reuses_the_sole_blank_tab(
+    fake_session: FakeSession,
+) -> None:
+    fake_session.page.url = "about:blank"
+    before = len(fake_session.context.pages)
+
+    result = await browse("newtab", url="https://second.test/")
+
+    assert len(fake_session.context.pages) == before
+    assert fake_session.context.pages[0] is fake_session.page
+    assert fake_session.page.url == "https://second.test/"
+    assert 'button "OK"' in result
+
+
 async def test_tab_switch_brings_target_to_front(
     fake_session: FakeSession,
 ) -> None:
@@ -75,7 +89,4 @@ async def test_closetab_of_background_tab_keeps_active(
 
     assert active in fake_session.context.pages
     assert len(fake_session.context.pages) == 1
-    # Closing a background tab leaves the active tab untouched, so the handler
-    # returns a cheap diff against its existing baseline rather than a full
-    # snapshot — here nothing changed, so the diff is empty.
     assert result == "(no changes since last snapshot)"

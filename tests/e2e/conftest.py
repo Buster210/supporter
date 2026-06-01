@@ -73,11 +73,6 @@ def mock_provider() -> MockLLMProvider:
     return MockLLMProvider()
 
 
-# ---------------------------------------------------------------------------
-# throwaway browser — one real-Chromium session per test
-# ---------------------------------------------------------------------------
-
-
 async def _always_allow(_title: str, _detail: str) -> bool:
     return True
 

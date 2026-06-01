@@ -25,6 +25,7 @@ _SESSION_GLOBALS = (
     "_KEEP_OPEN",
     "_LIFECYCLE_TASK",
     "_FRAME_SELECTOR",
+    "_SELECTED_PROFILE",
 )
 
 
@@ -110,6 +111,31 @@ def test_list_pages_returns_context_pages() -> None:
     context = cast("Any", type("", (), {"pages": pages})())
     session._CONTEXT = context
     assert session.list_pages() == pages
+
+
+async def test_cleanup_blank_tabs_keeps_working_tab_and_closes_other_blanks() -> None:
+    class _Tab:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+            ctx.pages.remove(self)
+
+    working = _Tab("about:blank")
+    restored_blank = _Tab("chrome://newtab/")
+    content = _Tab("https://example.test/")
+    ctx = cast("Any", type("", (), {"pages": [restored_blank, working, content]})())
+    session._CONTEXT = ctx
+    session._PAGE = cast("Any", working)
+
+    await session.cleanup_blank_tabs()
+
+    assert working.closed is False
+    assert restored_blank.closed is True
+    assert content.closed is False
+    assert ctx.pages == [working, content]
 
 
 def test_set_active_updates_page_and_clears_frame() -> None:
@@ -306,11 +332,127 @@ def test_profile_dir_fallback_uses_platform_default(
     assert "Google" in str(result) or "Chrome" in str(result)
 
 
-def test_profile_name_reads_config(
+async def test_resolve_profile_returns_env_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(config, "browser_profile_name", "TestProfile")
-    assert session._profile_name() == "TestProfile"
+    monkeypatch.setattr(config, "browser_profile_name", "EnvProfile")
+    session._SELECTED_PROFILE = None
+    result = await session._resolve_profile_name()
+    assert result == "EnvProfile"
+    assert session._SELECTED_PROFILE is None
+
+
+async def test_resolve_profile_caches_callback_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "browser_profile_name", None)
+    session._SELECTED_PROFILE = None
+
+    async def fake_callback(profiles: list[Any]) -> str | None:
+        return "PickedProfile"
+
+    guardrails.browse_profile_select_callback = fake_callback
+    test_profiles = [
+        session.profiles_mod.ChromeProfile(
+            dir_name="Profile1", display_name="P1", email="a@b.com"
+        ),
+        session.profiles_mod.ChromeProfile(
+            dir_name="Profile2", display_name="P2", email=""
+        ),
+    ]
+    monkeypatch.setattr(
+        session.profiles_mod,
+        "list_profiles",
+        lambda _: test_profiles,
+    )
+
+    try:
+        result1 = await session._resolve_profile_name()
+        result2 = await session._resolve_profile_name()
+        assert result1 == "PickedProfile"
+        assert result2 == "PickedProfile"
+        assert session._SELECTED_PROFILE == "PickedProfile"
+    finally:
+        guardrails.browse_profile_select_callback = None
+        session._SELECTED_PROFILE = None
+
+
+async def test_resolve_profile_auto_skips_when_single(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "browser_profile_name", None)
+    session._SELECTED_PROFILE = None
+
+    test_profiles = [
+        session.profiles_mod.ChromeProfile(
+            dir_name="OnlyProfile", display_name="Only", email=""
+        ),
+    ]
+    monkeypatch.setattr(
+        session.profiles_mod,
+        "list_profiles",
+        lambda _: test_profiles,
+    )
+
+    result = await session._resolve_profile_name()
+    assert result == "OnlyProfile"
+    assert session._SELECTED_PROFILE == "OnlyProfile"
+
+
+async def test_resolve_profile_uses_default_when_no_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "browser_profile_name", None)
+    session._SELECTED_PROFILE = None
+    monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: [])
+
+    result = await session._resolve_profile_name()
+    assert result == "Default"
+    assert session._SELECTED_PROFILE == "Default"
+
+
+async def test_resolve_profile_raises_when_no_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "browser_profile_name", None)
+    session._SELECTED_PROFILE = None
+    guardrails.browse_profile_select_callback = None
+    test_profiles = [
+        session.profiles_mod.ChromeProfile(
+            dir_name="P1", display_name="P1", email="a@b.com"
+        ),
+        session.profiles_mod.ChromeProfile(
+            dir_name="P2", display_name="P2", email="c@d.com"
+        ),
+    ]
+    monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: test_profiles)
+
+    with pytest.raises(RuntimeError, match="no interactive picker available"):
+        await session._resolve_profile_name()
+
+
+async def test_resolve_profile_raises_on_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "browser_profile_name", None)
+    session._SELECTED_PROFILE = None
+
+    async def cancel_callback(profiles: list[Any]) -> str | None:
+        return None
+
+    guardrails.browse_profile_select_callback = cancel_callback
+    test_profiles = [
+        session.profiles_mod.ChromeProfile(
+            dir_name="P1", display_name="P1", email="a@b.com"
+        ),
+        session.profiles_mod.ChromeProfile(
+            dir_name="P2", display_name="P2", email="c@d.com"
+        ),
+    ]
+    monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: test_profiles)
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await session._resolve_profile_name()
 
 
 async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:

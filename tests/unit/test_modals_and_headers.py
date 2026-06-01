@@ -5,7 +5,7 @@ import pytest
 from textual.geometry import Size
 
 from supporter.tui.bubble import SectionHeader
-from supporter.tui.modals import ConfirmationModal
+from supporter.tui.modals import ConfirmationModal, ProfileSelectModal
 
 
 @pytest.fixture
@@ -197,3 +197,62 @@ class TestSectionHeader:
         header._parent = mock_bubble
         result = header._find_bubble_parent()
         assert result is mock_bubble
+
+
+class TestProfileSelectModal:
+    def test_format_profile_label_default_profile(self) -> None:
+
+        class MockProfile:
+            dir_name = "Default"
+            display_name = "Personal"
+            email = "user@example.com"
+
+        label = ProfileSelectModal._format_profile_label(0, MockProfile())
+        assert "[Default]" in label
+        assert "1. " in label
+
+    def test_format_profile_label_non_default_profile(self) -> None:
+
+        class MockProfile:
+            dir_name = "Profile 1"
+            display_name = "Work"
+            email = "work@company.com"
+
+        label = ProfileSelectModal._format_profile_label(0, MockProfile())
+        assert "Profile 1" in label
+        assert "1. " in label
+
+    def test_format_profile_label_unsigned_in_email(self) -> None:
+
+        class MockProfile:
+            dir_name = "Profile 2"
+            display_name = "Gaming"
+            email = ""
+
+        label = ProfileSelectModal._format_profile_label(0, MockProfile())
+        assert "(not signed in)" in label
+
+    def test_format_profile_label_equal_width_columns(self) -> None:
+
+        class MockProfile:
+            dir_name = "Profile 1"
+            display_name = "Work"
+            email = "work@company.com"
+
+        label = ProfileSelectModal._format_profile_label(0, MockProfile())
+
+        assert "Profile 1" in label
+        assert "Work" in label
+        assert "work@company.com" in label
+
+    def test_format_profile_label_numbering(self) -> None:
+
+        class MockProfile:
+            dir_name = "Default"
+            display_name = "Personal"
+            email = ""
+
+        label1 = ProfileSelectModal._format_profile_label(0, MockProfile())
+        label2 = ProfileSelectModal._format_profile_label(1, MockProfile())
+        assert label1.startswith("1. ")
+        assert label2.startswith("2. ")

@@ -25,8 +25,6 @@ async def test_snapshot_first_sight_returns_full_tree(
 ) -> None:
     result = await browse("snapshot")
 
-    # First capture of a page has no baseline, so the full cleaned tree comes
-    # back (document ref stripped, interactive button ref kept).
     assert 'button "OK" [ref=e2]' in result
     assert "[ref=e1]" not in result
 
@@ -52,15 +50,13 @@ async def test_diff_without_baseline_announces_baseline_stored(
 async def test_diff_after_change_shows_the_delta(
     fake_session: FakeSession,
 ) -> None:
-    await browse("diff")  # establishes the baseline
+    await browse("diff")
     fake_session.page.aria_text = (
         '- document [ref=e1]:\n  - button "OK" [ref=e2]\n  - link "Next" [ref=e3]'
     )
 
     result = await browse("diff")
 
-    # The added line carries a unified-diff "+" prefix; context lines (space
-    # prefix) may precede it, so assert the added line is present, not position.
     assert '+  - link "Next" [ref=e3]' in result
 
 
@@ -87,7 +83,5 @@ async def test_screenshot_saves_file_and_reports_dims(
 
     saved = tmp_path / ".supporter" / "screenshots" / "shot.png"
     assert saved.exists()
-    # The fake yields a 12-byte PNG (8-byte signature + b"FAKE").
     assert result == f"Screenshot saved to {saved} (1280x800, 12 bytes)."
-    # The image sink (a Live session's view) receives the same bytes.
     assert fake_session.image_sink.images == [(b"\x89PNG\r\n\x1a\nFAKE", "image/png")]

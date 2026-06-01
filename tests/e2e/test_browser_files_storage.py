@@ -13,8 +13,6 @@ from supporter.tools import resolved_project_root
 from supporter.tools.browser import guardrails, session
 from supporter.tools.browser.tool import browse
 
-# localStorage and document.cookie are blocked on `data:` URLs (opaque
-# origin), so storage tests need a real http:// origin.
 STORAGE_BODY = b"<html><body><h1>Storage</h1></body></html>"
 
 

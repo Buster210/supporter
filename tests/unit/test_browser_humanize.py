@@ -45,7 +45,7 @@ def test_minimum_jerk_boundaries() -> None:
     assert math.isclose(humanize.minimum_jerk(0.0, 3.0, 9.0), 3.0)
     assert math.isclose(humanize.minimum_jerk(1.0, 3.0, 9.0), 9.0)
     mid = humanize.minimum_jerk(0.5, 0.0, 1.0)
-    assert math.isclose(mid, 0.5)  # symmetric profile crosses 0.5 at t=0.5
+    assert math.isclose(mid, 0.5)
 
 
 def test_minimum_jerk_is_monotonic() -> None:
@@ -60,7 +60,7 @@ def test_fitts_duration_grows_with_distance() -> None:
     near = humanize.fitts_duration((0.0, 0.0), (10.0, 0.0))
     far = humanize.fitts_duration((0.0, 0.0), (1000.0, 0.0))
     assert far > near
-    assert near >= 200.0  # base_ms floor
+    assert near >= 200.0
 
 
 def test_random_control_points_starts_and_ends_fixed() -> None:
@@ -69,7 +69,7 @@ def test_random_control_points_starts_and_ends_fixed() -> None:
     pts = humanize.random_control_points(start, end, count=3)
     assert pts[0] == start
     assert pts[-1] == end
-    assert len(pts) == 4  # start + (count-1=2) interior points + end
+    assert len(pts) == 4
 
 
 def test_lognormal_delay_clamped_to_bounds() -> None:
@@ -88,7 +88,6 @@ def test_lognormal_delay_centers_near_median() -> None:
 
 
 def test_origin_uses_tracked_position_when_set() -> None:
-    # The autouse _reset_cursor fixture restores the global afterward.
     humanize._LAST_POS = (123.0, 456.0)
     assert humanize._origin_for(None) == (123.0, 456.0)
     assert humanize._origin_for({"width": 800, "height": 600}) == (123.0, 456.0)
@@ -118,10 +117,6 @@ def test_reset_cursor_clears_position() -> None:
 async def test_reading_pause_sleeps_within_documented_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The old test spun up a fresh event loop 500x (asyncio.run in a range loop)
-    # just to sample the randomness. Awaiting directly with a recording sleep
-    # exercises the same contract — the single sleep lands in [0.4, 5.0] — over a
-    # handful of samples and no per-iteration loop construction.
     random.seed(11)
     slept: list[float] = []
 
@@ -133,7 +128,6 @@ async def test_reading_pause_sleeps_within_documented_window(
         await humanize.reading_pause()
 
     assert len(slept) == 50
-    # page=None must keep the exact pass-1 clamp of [0.4, 5.0].
     assert all(0.4 <= s <= humanize._READ_HI_BASE for s in slept)
 
 
@@ -160,10 +154,10 @@ def _median_sleep_for(page: _FakeTextPage, n: int = 2001) -> float:
 
 
 def test_reading_pause_scales_median_with_content() -> None:
-    short = _median_sleep_for(_FakeTextPage(100))  # below scale threshold
-    dense = _median_sleep_for(_FakeTextPage(40_000))  # well above
+    short = _median_sleep_for(_FakeTextPage(100))
+    dense = _median_sleep_for(_FakeTextPage(40_000))
     assert dense > short
-    assert short <= humanize._READ_MEDIAN_BASE + 0.2  # ~unchanged at small size
+    assert short <= humanize._READ_MEDIAN_BASE + 0.2
 
 
 def test_reading_pause_median_is_capped() -> None:
@@ -174,8 +168,6 @@ def test_reading_pause_median_is_capped() -> None:
 async def test_reading_pause_subthreshold_page_keeps_pass1_clamp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A page below the scale threshold must behave exactly like pass-1: the
-    # upper clamp stays 5.0, not the wider scaled-tail bound.
     slept: list[float] = []
 
     async def record(seconds: float) -> None:
@@ -183,7 +175,7 @@ async def test_reading_pause_subthreshold_page_keeps_pass1_clamp(
 
     monkeypatch.setattr(asyncio, "sleep", record)
     random.seed(11)
-    page = _FakeTextPage(50)  # below _READ_SCALE_CHARS
+    page = _FakeTextPage(50)
     for _ in range(500):
         await humanize.reading_pause(cast("Page", page))
     assert all(0.4 <= s <= humanize._READ_HI_BASE for s in slept)
@@ -195,9 +187,6 @@ def test_jitter_ms_within_bounds_and_int() -> None:
         v = humanize.jitter_ms(0.3, 0.3, 0.15, 0.6)
         assert isinstance(v, int)
         assert 150 <= v <= 600
-
-
-# --- fakes for input recording ------------------------------------------
 
 
 class _FakeMouse:
@@ -218,7 +207,7 @@ class _FakeMouse:
 
 class _FakeKeyboard:
     def __init__(self) -> None:
-        self.events: list[tuple[str, str]] = []  # (op, key)
+        self.events: list[tuple[str, str]] = []
 
     async def press(self, key: str) -> None:
         self.events.append(("press", key))
@@ -260,7 +249,7 @@ def _reconstruct(events: list[tuple[str, str]]) -> str:
     out: list[str] = []
     for op, key in events:
         if op == "down":
-            continue  # paired with an up; count the up
+            continue
         char = key
         if op == "up":
             out.append(char)
@@ -275,9 +264,6 @@ def _reconstruct(events: list[tuple[str, str]]) -> str:
     return "".join(out)
 
 
-# --- _move_cursor: tremor + mid-move pause keep the endpoint exact -------
-
-
 def test_move_cursor_lands_exactly_on_target() -> None:
     humanize.reset_cursor()
     random.seed(2)
@@ -290,13 +276,10 @@ def test_move_cursor_lands_exactly_on_target() -> None:
 
 
 def test_tremor_sigma_shrinks_with_speed() -> None:
-    slow = humanize._tremor_sigma(1.0, 0.0, 0.1)  # 10 px/s
-    fast = humanize._tremor_sigma(100.0, 0.0, 0.1)  # 1000 px/s
+    slow = humanize._tremor_sigma(1.0, 0.0, 0.1)
+    fast = humanize._tremor_sigma(100.0, 0.0, 0.1)
     assert slow > fast
     assert fast >= humanize._TREMOR_AMPLITUDE * humanize._TREMOR_MIN_SCALE - 1e-9
-
-
-# --- idle_flourish ------------------------------------------------------
 
 
 def test_idle_flourish_never_acts_at_rate_zero() -> None:
@@ -322,14 +305,13 @@ def test_idle_flourish_cursor_drift_branch() -> None:
         _force_branch(humanize._idle_cursor_drift),
     ):
         asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
-    assert page.mouse.moves  # drifted the cursor
+    assert page.mouse.moves
     humanize.reset_cursor()
 
 
 def test_idle_flourish_scrolls_down_when_room_below() -> None:
     humanize.reset_cursor()
     page = _FakePage(geometry={"y": 0, "ih": 800, "sh": 4000})
-    # gate passes at 0.0; 0.99 also skips human_scroll's overshoot roll.
     with (
         _no_sleep(),
         patch("random.random", return_value=0.99),
@@ -337,7 +319,7 @@ def test_idle_flourish_scrolls_down_when_room_below() -> None:
     ):
         asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
     total_dy = sum(dy for _dx, dy in page.mouse.wheels)
-    assert total_dy > 0  # scrolled down
+    assert total_dy > 0
     assert humanize._SCROLL_DRIFT_MIN <= total_dy <= humanize._SCROLL_DRIFT_MAX
 
 
@@ -351,7 +333,7 @@ def test_idle_flourish_scrolls_up_near_bottom() -> None:
     ):
         asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
     total_dy = sum(dy for _dx, dy in page.mouse.wheels)
-    assert total_dy < 0  # near bottom → drifts up
+    assert total_dy < 0
 
 
 def test_idle_flourish_noop_when_unscrollable() -> None:
@@ -363,15 +345,12 @@ def test_idle_flourish_noop_when_unscrollable() -> None:
         _force_branch(humanize._idle_position_scroll),
     ):
         asyncio.run(humanize.idle_flourish(cast("Page", page), rate=1.0))
-    assert page.mouse.wheels == []  # no room either way, never a snap-back
-
-
-# --- human_scroll overshoot+settle nets to the target -------------------
+    assert page.mouse.wheels == []
 
 
 def test_human_scroll_nets_to_target_without_overshoot() -> None:
     page = _FakePage()
-    with _no_sleep(), patch("random.random", return_value=1.0):  # no overshoot
+    with _no_sleep(), patch("random.random", return_value=1.0):
         asyncio.run(humanize.human_scroll(cast("Page", page), 0, 500))
     assert sum(dy for _dx, dy in page.mouse.wheels) == 500
 
@@ -379,11 +358,9 @@ def test_human_scroll_nets_to_target_without_overshoot() -> None:
 def test_human_scroll_overshoot_settles_back_to_target() -> None:
     page = _FakePage()
     random.seed(4)
-    with _no_sleep(), patch("random.random", return_value=0.0):  # force overshoot
+    with _no_sleep(), patch("random.random", return_value=0.0):
         asyncio.run(humanize.human_scroll(cast("Page", page), 0, 500))
-    # Net displacement still equals the requested delta after settle.
     assert sum(dy for _dx, dy in page.mouse.wheels) == 500
-    # And it actually overshot past 500 at some point.
     running = 0
     peak = 0
     for _dx, dy in page.mouse.wheels:
@@ -392,30 +369,25 @@ def test_human_scroll_overshoot_settles_back_to_target() -> None:
     assert peak > 500
 
 
-# --- human_type: typo engine + key-hold dwell + sensitive guard ---------
-
-
 def test_human_type_normal_field_reconstructs_input() -> None:
     random.seed(8)
     page = _FakePage()
     with (
         _no_sleep(),
         patch("supporter.tools.browser.humanize.random.random", return_value=0.0),
-    ):  # force a typo on every char
+    ):
         asyncio.run(
             humanize.human_type(
                 cast("Page", page), "e1", "hello world", sensitive=False
             )
         )
     assert _reconstruct(page.keyboard.events) == "hello world"
-    # A real mistake means at least one Backspace was emitted.
     assert any(k == "Backspace" for op, k in page.keyboard.events if op == "press")
 
 
 def test_human_type_sensitive_field_types_clean() -> None:
     random.seed(8)
     page = _FakePage()
-    # Even forcing the typo roll, a sensitive field must never inject a wrong key.
     with (
         _no_sleep(),
         patch("supporter.tools.browser.humanize.random.random", return_value=0.0),
@@ -430,7 +402,6 @@ def test_human_type_sensitive_field_types_clean() -> None:
 def test_human_type_uses_key_hold_dwell() -> None:
     random.seed(8)
     page = _FakePage()
-    # Force NO typos so every char is a clean down/up pair.
     with (
         _no_sleep(),
         patch("supporter.tools.browser.humanize.random.random", return_value=1.0),

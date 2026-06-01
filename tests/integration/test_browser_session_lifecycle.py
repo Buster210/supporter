@@ -10,9 +10,6 @@ from tests.browser_fakes import make_session
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-# ---------------------------------------------------------------------------
-# Hermetic isolation  (mirrors tests/unit/test_browser_session.py)
-# ---------------------------------------------------------------------------
 
 _SESSION_GLOBALS = (
     "_PWS",
@@ -39,16 +36,10 @@ def _reset_session_globals() -> Iterator[None]:
             setattr(session, name, value)
 
 
-# ---------------------------------------------------------------------------
-# close_session — idempotency
-# ---------------------------------------------------------------------------
-
-
 async def test_close_session_when_inactive_is_noop() -> None:
     assert session._PAGE is None
     assert session._CONTEXT is None
 
-    # Should complete without error despite all globals being None
     await session.close_session()
 
     assert session.is_active() is False
@@ -65,19 +56,13 @@ async def test_close_session_after_partial_teardown_is_safe() -> None:
     session._PAGE = cast("Any", object())
     session._CONTEXT = cast("Any", object())
     session._PWS = cast("Any", object())
-    # Simulate a partial teardown — page gone but context linger
     session._PAGE = None
 
-    await session.close_session()  # should not raise
+    await session.close_session()
 
     assert session._PAGE is None
     assert session._CONTEXT is None
     assert session._PWS is None
-
-
-# ---------------------------------------------------------------------------
-# close_session — global reset
-# ---------------------------------------------------------------------------
 
 
 class _FakeAsyncioTask:
@@ -123,6 +108,7 @@ async def test_close_session_resets_all_globals() -> None:
 
 
 async def test_close_session_resets_even_when_context_close_fails() -> None:
+
     class _BrokenContext:
         async def close(self) -> None:
             msg = "something went wrong"
@@ -132,17 +118,12 @@ async def test_close_session_resets_even_when_context_close_fails() -> None:
     session._CONTEXT = cast("Any", _BrokenContext())
     session._PWS = cast("Any", object())
 
-    await session.close_session()  # warning logged, but reset continues
+    await session.close_session()
 
     assert session._PAGE is None
     assert session._CONTEXT is None
     assert session._PWS is None
     assert session.is_active() is False
-
-
-# ---------------------------------------------------------------------------
-# is_active state transitions
-# ---------------------------------------------------------------------------
 
 
 async def test_is_active_reflects_close_session_transition() -> None:

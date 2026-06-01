@@ -14,10 +14,8 @@ def _reset_task_state() -> None:
 
 
 async def test_replay_playbook_no_active_page(fake_session: FakeSession) -> None:
-    # Set up the session with a URL like the existing tests
     fake_session.page.eval_result = "https://example.test/"
 
-    # Mock active_page to return None
     import supporter.tools.browser.session as session_module
 
     original_active_page = session_module.active_page
@@ -52,17 +50,15 @@ async def test_finish_task_unsuccessful() -> None:
 
 async def test_finish_task_failed_steps() -> None:
     task.start("test goal")
-    # Access the active task directly
     active_task = task._ACTIVE
     if active_task is not None:
-        active_task.failed = True  # Mark as having failed steps
+        active_task.failed = True
     result = await task.finish(True, "example.test")
     assert "Task 'test goal' had an error or unsafe step; nothing saved." in result
 
 
 async def test_finish_task_no_steps() -> None:
     task.start("test goal")
-    # Clear steps
     active_task = task._ACTIVE
     if active_task is not None:
         active_task.steps = []
@@ -71,7 +67,6 @@ async def test_finish_task_no_steps() -> None:
 
 
 async def test_query_playbook_no_active_page(fake_session: FakeSession) -> None:
-    # Mock active_page to return None
     import supporter.tools.browser.session as session_module
 
     original_active_page = session_module.active_page
@@ -92,13 +87,8 @@ async def test_record_step_exception_caught(fake_session: FakeSession) -> None:
     from supporter.tools.browser import task as browser_task
     from supporter.tools.browser.task import _record_step
 
-    # Start a task so is_recording() returns True — without this, _record_step
-    # bails at the early-return guard and never enters the try/except block.
     browser_task.start("test goal")
 
-    # Patch task.record to raise; record() is only called inside _record_step's
-    # try block (never during handler dispatch), so the handler runs normally
-    # and the exception is caught by the except Exception guard.
     original_record = browser_task.record
 
     def _raising_record(step: object) -> None:
@@ -112,8 +102,6 @@ async def test_record_step_exception_caught(fake_session: FakeSession) -> None:
             ref="e2",
         )
         await _record_step(req, "test result")
-        # No assertion needed — the test passes if _record_step swallows
-        # the exception without propagating.
     finally:
         browser_task.record = original_record
         browser_task.discard()

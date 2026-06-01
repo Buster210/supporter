@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import pytest
 
-from supporter.tools.browser import guardrails, snapshot
+from supporter.tools.browser import guardrails, humanize, snapshot
 from supporter.tools.browser.tool import browse
 
 from .conftest import FakeSession
 
 
 @pytest.fixture(autouse=True)
-def _reset_snapshot_baselines() -> None:
+def _reset_snapshot_baselines(monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot._LAST_SNAPSHOT.clear()
+
+    async def _no_idle(_page: object) -> None:
+        return None
+
+    monkeypatch.setattr(humanize, "idle_flourish", _no_idle)
 
 
 async def test_click_resolves_ref_and_clicks(fake_session: FakeSession) -> None:
-    # fast=True takes the locator path, so the click lands on the resolved
-    # locator (not the humanized mouse path) — pin that exact call.
     await browse("click", ref="e2", fast=True)
 
     _args, _kwargs = fake_session.log.last("click")
@@ -34,8 +37,6 @@ async def test_click_without_ref_errors(fake_session: FakeSession) -> None:
 async def test_type_fills_text_in_fast_mode(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Fast mode is gated by the FAST_HOSTS allowlist, not req.fast alone; the
-    # fake host is off-list, so trust it explicitly to take the raw fill path.
     monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
     await browse("type", ref="e2", text="hello", fast=True)
 
@@ -52,9 +53,6 @@ async def test_type_without_text_errors(fake_session: FakeSession) -> None:
 async def test_type_into_password_field_is_gated(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The target's role/name come from _resolve_role_and_name; a password role
-    # trips the always-confirm rule in needs_confirmation, and a denied gate
-    # surfaces the cancel string instead of filling the field.
     from supporter.tools.browser import tool
 
     async def password_role(_locator: object, _ref: str) -> tuple[str, str]:

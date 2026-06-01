@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING, Any
 from ...config import config
 from ...logger import logger
 from . import guardrails, humanize, task
+from . import profiles as profiles_mod
+
+__all__ = ["profiles_mod"]
 
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext, Page, Playwright
@@ -32,7 +35,12 @@ _TEMPO: float = 1.0
 _RATE_WINDOW_SECONDS: float = 60.0
 _KEEP_OPEN: bool | None = None
 _LIFECYCLE_TASK: asyncio.Task[None] | None = None
+_CLEANUP_TASK: asyncio.Task[None] | None = None
 _FRAME_SELECTOR: str | None = None
+
+_SELECTED_PROFILE: str | None = None
+
+_BLANK_URLS: frozenset[str] = frozenset({"about:blank", "chrome://newtab/", ""})
 
 _STEALTH_ARGS: list[str] = []
 
@@ -124,6 +132,25 @@ def _clear_lifecycle_task(_task: object) -> None:
     _LIFECYCLE_TASK = None
 
 
+def _clear_cleanup_task(_task: object) -> None:
+    global _CLEANUP_TASK
+    _CLEANUP_TASK = None
+
+
+async def cleanup_blank_tabs() -> None:
+    if _CONTEXT is None or _PAGE is None:
+        return
+
+    for tab in list(_CONTEXT.pages):
+        if tab is _PAGE:
+            continue
+        try:
+            if tab.url in _BLANK_URLS:
+                await tab.close()
+        except Exception as e:
+            logger.debug(f"cleanup_blank_tabs: failed to close tab: {e}")
+
+
 async def _await_lifecycle_answer() -> None:
     global _KEEP_OPEN
     if _KEEP_OPEN is not None:
@@ -176,6 +203,13 @@ def list_pages() -> list[Any]:
     return list(_CONTEXT.pages)
 
 
+def is_blank(page: Any) -> bool:
+    try:
+        return page.url in _BLANK_URLS
+    except Exception:
+        return False
+
+
 def set_active(page: Any) -> None:
     global _PAGE, _FRAME_SELECTOR
     _PAGE = page
@@ -202,8 +236,33 @@ def _profile_dir() -> Path:
     return home / ".config" / "google-chrome"
 
 
-def _profile_name() -> str:
-    return config.browser_profile_name
+async def _resolve_profile_name() -> str:
+    global _SELECTED_PROFILE
+
+    if config.browser_profile_name:
+        return config.browser_profile_name
+    if _SELECTED_PROFILE is not None:
+        return _SELECTED_PROFILE
+
+    profiles = profiles_mod.list_profiles(_profile_dir())
+    if not profiles:
+        _SELECTED_PROFILE = "Default"
+        return _SELECTED_PROFILE
+    if len(profiles) == 1:
+        _SELECTED_PROFILE = profiles[0].dir_name
+        return _SELECTED_PROFILE
+
+    cb = guardrails.browse_profile_select_callback
+    if cb is None:
+        raise RuntimeError(
+            "Browser profile not selected and no interactive picker available; "
+            "set BROWSER_PROFILE_NAME environment variable."
+        )
+    chosen = await cb(profiles)
+    if not chosen:
+        raise RuntimeError("Browser profile selection cancelled.")
+    _SELECTED_PROFILE = chosen
+    return _SELECTED_PROFILE
 
 
 def _clone_ignore(_dir: str, names: list[str]) -> set[str]:
@@ -302,9 +361,8 @@ def _clone_lock() -> asyncio.Lock:
     return _CLONE_LOCK
 
 
-async def _clone_profile() -> Path:
+async def _clone_profile(profile: str) -> Path:
     user_data_dir = _profile_dir()
-    profile = _profile_name()
     async with _clone_lock():
         return await asyncio.to_thread(_build_clone, user_data_dir, profile)
 
@@ -312,8 +370,10 @@ async def _clone_profile() -> Path:
 async def prewarm_clone() -> None:
     if config.browser_profile_path or _PAGE is not None:
         return
+    if not config.browser_profile_name:
+        return
     try:
-        await _clone_profile()
+        await _clone_profile(config.browser_profile_name)
         logger.info("Browser profile clone prewarmed")
     except Exception as e:
         logger.warning(f"Browser clone prewarm failed (will retry on launch): {e}")
@@ -396,19 +456,27 @@ async def get_session() -> tuple[Any, Any, Any]:
 
         _PWS = await async_playwright().start()
 
-        profile = _profile_name()
+        profile = await _resolve_profile_name()
 
         if config.browser_profile_path:
             _CONTEXT = await _launch_or_lock_error(_PWS, _profile_dir(), profile)
         else:
-            clone_dir = await _clone_profile()
+            clone_dir = await _clone_profile(profile)
             _CONTEXT = await _launch_or_lock_error(_PWS, clone_dir, profile)
 
-        _PAGE = await _CONTEXT.new_page()
+        existing_blank = next((p for p in _CONTEXT.pages if is_blank(p)), None)
+        if existing_blank is not None:
+            _PAGE = existing_blank
+        else:
+            _PAGE = await _CONTEXT.new_page()
         await _PAGE.bring_to_front()
 
         _LAST_ACTION_TS = time.monotonic()
         logger.info("Browser session launched")
+
+        global _CLEANUP_TASK
+        _CLEANUP_TASK = asyncio.ensure_future(cleanup_blank_tabs())
+        _CLEANUP_TASK.add_done_callback(_clear_cleanup_task)
 
         return _PWS, _CONTEXT, _PAGE
     except Exception:
@@ -433,11 +501,15 @@ async def get_session() -> tuple[Any, Any, Any]:
 async def close_session() -> None:
     global _PWS, _CONTEXT, _PAGE, _LAUNCH_LOOP, _ACTION_COUNT, _LAST_ACTION_TS
     global _KEEP_OPEN, _FRAME_SELECTOR, _CLONE_LOCK, _LIFECYCLE_TASK
-    global _ACTION_CAP_CEILING, _SESSION_START_TS, _TEMPO
+    global _ACTION_CAP_CEILING, _SESSION_START_TS, _TEMPO, _CLEANUP_TASK
 
     if _LIFECYCLE_TASK is not None:
         _LIFECYCLE_TASK.cancel()
         _LIFECYCLE_TASK = None
+
+    if _CLEANUP_TASK is not None:
+        _CLEANUP_TASK.cancel()
+        _CLEANUP_TASK = None
 
     try:
         if _CONTEXT is not None:

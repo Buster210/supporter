@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
 from .config import config
@@ -35,6 +37,7 @@ class ChatAgent:
         use_search: bool = False,
         use_code_execution: bool = False,
         system_instruction: str | None = None,
+        session_id: str | None = None,
     ):
         self.provider = provider
         self.history: list[Any] = []
@@ -44,6 +47,24 @@ class ChatAgent:
         self.use_search = use_search
         self.use_code_execution = use_code_execution
         self.system_instruction = system_instruction
+        self._store: Any = None
+        self._store_prev_len: int = 0
+        if config.durable_history_enabled:
+            from .session import HistoryStore, new_session_id
+
+            sid = (
+                session_id or os.environ.get("SUPPORTER_SESSION_ID") or new_session_id()
+            )
+            self._store = HistoryStore(sid, Path(config.history_dir))
+            loaded = self._store.load(limit=config.history_max_turns)
+            if loaded:
+                self.history = loaded
+                self._trim_history()
+                self._store_prev_len = len(self.history)
+                logger.info(
+                    f"ChatAgent: reloaded {len(self.history)} turns "
+                    "from durable history"
+                )
         logger.info(f"ChatAgent initialized with provider: {provider.get_name()}")
 
     def _prepare_execution_context(self) -> LLMOptions:
@@ -87,11 +108,18 @@ class ChatAgent:
     def _sync_history(self, user_message: Any, result: LLMResult) -> None:
         if result.automatic_function_calling_history:
             logger.info("Agent: syncing history from automatic function calling")
-            self.history = result.automatic_function_calling_history
+            new_list = result.automatic_function_calling_history
+            if self._store and len(new_list) > self._store_prev_len:
+                for msg in new_list[self._store_prev_len :]:
+                    self._store.append(msg)
+                self._store_prev_len = len(new_list)
+            self.history = new_list
             self._trim_history()
             return
 
         self.history.append(user_message)
+        if self._store:
+            self._store.append(user_message)
 
         assistant_message = _extract_assistant_message(result)
         if assistant_message is None:
@@ -99,6 +127,9 @@ class ChatAgent:
             return
 
         self.history.append(assistant_message)
+        if self._store:
+            self._store.append(assistant_message)
+            self._store_prev_len = len(self.history)
         self._trim_history()
         logger.info(f"Agent: history synced — new size={len(self.history)}")
 
@@ -120,7 +151,12 @@ class ChatAgent:
 
         if not exclude_from_history:
             self.history.append(user_message)
-            self.history.append(_build_message("model", "".join(text_parts)))
+            model_msg = _build_message("model", "".join(text_parts))
+            self.history.append(model_msg)
+            if self._store:
+                self._store.append(user_message)
+                self._store.append(model_msg)
+                self._store_prev_len = len(self.history)
             self._trim_history()
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
@@ -128,3 +164,6 @@ class ChatAgent:
         logger.info("Clearing agent session history")
         self.history = []
         self.current_interaction_id = None
+        if self._store:
+            self._store.rotate()
+            self._store_prev_len = 0

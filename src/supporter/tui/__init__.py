@@ -83,7 +83,10 @@ class SupporterApp(App[None]):
             confirmation=self._confirm_bash,
             notification=self._notify_error,
         )
-        register_browse_callback(confirmation=self._confirm_browse)
+        register_browse_callback(
+            confirmation=self._confirm_browse,
+            profile_select=self._select_profile,
+        )
 
         from ..tools.delegate.api import set_delegation_start_callback
 
@@ -111,7 +114,10 @@ class SupporterApp(App[None]):
 
         register_confirmation_callback(None)
         register_bash_callbacks(confirmation=None, notification=None)
-        register_browse_callback(confirmation=None)
+        register_browse_callback(
+            confirmation=None,
+            profile_select=None,
+        )
 
         from ..tools.delegate.api import set_delegation_start_callback
 
@@ -250,9 +256,6 @@ class SupporterApp(App[None]):
     async def set_live_mode(self, live: bool = False) -> None:
         await self._mode_manager.toggle_mode(live=live)
 
-    async def _toggle_mode(self, live: bool = False) -> None:
-        await self.set_live_mode(live=live)
-
     async def _process_message_cycle(
         self,
         text: str,
@@ -387,6 +390,11 @@ class SupporterApp(App[None]):
         return await self.push_screen_wait(
             ConfirmationModal(title=title, content=detail, language="text")
         )
+
+    async def _select_profile(self, profiles: list[Any]) -> str | None:
+        from .modals import ProfileSelectModal
+
+        return await self.push_screen_wait(ProfileSelectModal(profiles))
 
     def _safe_call(
         self, callback: Callable[..., Any], *args: Any, **kwargs: Any

@@ -47,8 +47,6 @@ def test_load_corrupt_returns_none(tmp_path: Path) -> None:
 
 
 def test_path_escape_attempt_rejected() -> None:
-    # A host crafted to climb out of the memory root must be sanitized, so the
-    # resolved path stays inside the root rather than raising or escaping.
     path = task._safe_path("../../etc", "x")
     root = task._memory_root().resolve()
     assert root in path.parents
@@ -68,7 +66,7 @@ async def test_finish_persists_clean_run() -> None:
 async def test_ineligible_action_poisons_buffer() -> None:
     task.start("scrape")
     task.record(task.build_step("navigate", params={"url": "u"}))
-    task.record(task.build_step("eval"))  # excluded → poison
+    task.record(task.build_step("eval"))
     msg = await task.finish(success=True, host="example.com")
     assert "unsafe step" in msg
     assert task.load_playbook("example.com", "scrape") is None

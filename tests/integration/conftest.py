@@ -71,18 +71,11 @@ def fake_session(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSession]:
     monkeypatch.setattr(guardrails, "browse_confirmation_callback", confirm)
     monkeypatch.setattr(guardrails, "browse_image_sink", image_sink)
 
-    # Neutralize pacing so dispatch tests run instantly and never touch real
-    # timers; the real _page_or_error / _session_parts wrappers stay live so
-    # their error-mapping is exercised — they resolve through patched
-    # get_session above.
     async def no_pace() -> None:
         return None
 
     monkeypatch.setattr(session, "pace", no_pace)
 
-    # Collapse every humanized delay to nothing: human_click/type/hover etc.
-    # all sleep via humanize.asyncio.sleep, so a no-op coroutine keeps the real
-    # movement/recording logic but removes the wall-clock cost.
     async def no_sleep(_seconds: float) -> None:
         return None
 

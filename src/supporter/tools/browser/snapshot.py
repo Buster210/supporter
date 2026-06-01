@@ -375,20 +375,6 @@ def filter_interactive(text: str) -> str:
     return "\n".join(out)
 
 
-def filter_compact(text: str, max_lines: int = 200, page_url: str = "") -> str:
-    cleaned = clean_snapshot(text, page_url)
-    if not cleaned:
-        return ""
-    lines = cleaned.splitlines()
-    if len(lines) <= max_lines:
-        return cleaned
-    half = max_lines // 2
-    head = lines[:half]
-    head.append(f"--- {len(lines) - max_lines} lines omitted ---")
-    head.extend(lines[-half:])
-    return "\n".join(head)
-
-
 _LAST_SNAPSHOT: dict[str, str] = {}
 
 

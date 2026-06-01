@@ -7,8 +7,6 @@ import pytest
 from supporter.tools.browser import tool
 from supporter.tools.browser.tool import BrowseRequest
 
-# --- unknown action -------------------------------------------------------
-
 
 async def test_unknown_action_returns_error_with_sorted_valid_names() -> None:
     result = await tool.browse("definitely-not-an-action")
@@ -28,16 +26,12 @@ async def test_unknown_action_does_not_touch_a_handler(
     async def boom(_req: BrowseRequest) -> str:
         raise AssertionError("handler must not run for an unknown action")
 
-    # Every handler poisoned: the early return must fire before any dispatch.
     poisoned = dict.fromkeys(tool.HANDLERS, boom)
     monkeypatch.setattr(tool, "HANDLERS", poisoned)
 
     result = await tool.browse("still-unknown")
 
     assert result.startswith("Error: Unknown action 'still-unknown'.")
-
-
-# --- happy-path routing ---------------------------------------------------
 
 
 async def test_known_action_builds_request_routes_and_records(
@@ -64,7 +58,6 @@ async def test_known_action_builds_request_routes_and_records(
     assert req.action == "snapshot"
     assert req.url == "https://example.test/"
     assert req.ref == "e1"
-    # the returned result is recorded against the same request, in order
     assert recorded == [(req, "handled")]
 
 
@@ -114,12 +107,6 @@ async def test_dispatch_forwards_keyword_args_into_the_request(
     assert req.html is True
     assert req.path == "p"
     assert req.stamp == "s"
-
-
-# --- _wrap_action_errors at the handler boundary (router-visible) ---------
-# The decorator's branch logic is unit-tested in test_browser_tool_pure.py;
-# here we only confirm an "Action cap" RuntimeError surfaces as a recoverable
-# string through a *registered* handler, i.e. the router returns it verbatim.
 
 
 async def test_action_cap_runtimeerror_surfaces_as_recoverable_string(

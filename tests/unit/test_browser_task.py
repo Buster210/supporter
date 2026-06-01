@@ -30,9 +30,6 @@ def test_record_appends_eligible_step() -> None:
     task.start("do a thing")
     task.record(task.build_step("navigate", params={"url": "u"}))
     assert task.is_recording()
-    # Inspect the buffered step, not just the recording flag: a recordable
-    # action must actually land in the active buffer, with its fields intact and
-    # the buffer left savable (failed stays False).
     active = task._ACTIVE
     assert active is not None
     assert len(active.steps) == 1
@@ -79,9 +76,6 @@ def test_find_ref_returns_empty_on_no_match() -> None:
 
 
 def test_find_ref_returns_empty_on_diff_string() -> None:
-    # Replay must read a FULL tree, never a diff. A diff/no-changes string carries
-    # no parseable role lines, so _find_ref yields "" — guarding the bug where
-    # replay fed it a baseline-diff instead of the live tree.
     assert task._find_ref("(no changes since last snapshot)", "button", "Go") == ""
     diff = 'diff vs last snapshot (x):\n+- button "Go" [ref=e3]\n-- paragraph: idle'
     assert task._find_ref(diff, "button", "Go") == ""

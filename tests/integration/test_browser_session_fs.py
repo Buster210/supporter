@@ -11,8 +11,6 @@ from supporter.tools.browser import guardrails, session
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-# Every mutable module global a test here can perturb. The prewarm tests set
-# _PAGE; saving/restoring the full set keeps each test hermetic.
 _SESSION_GLOBALS = (
     "_PWS",
     "_CONTEXT",
@@ -25,6 +23,7 @@ _SESSION_GLOBALS = (
     "_KEEP_OPEN",
     "_LIFECYCLE_TASK",
     "_FRAME_SELECTOR",
+    "_SELECTED_PROFILE",
 )
 
 
@@ -66,7 +65,6 @@ def test_mirror_dir_copies_creates_and_prunes(tmp_path: Path) -> None:
     (src / "sub").mkdir(parents=True)
     (src / "keep.txt").write_text("keep")
     (src / "sub" / "nested.txt").write_text("nested")
-    # Pre-existing dst with a stale file + stale dir that src no longer has.
     (dst / "stale_dir").mkdir(parents=True)
     (dst / "stale_dir" / "old.txt").write_text("old")
     (dst / "stale.txt").write_text("stale")
@@ -125,7 +123,6 @@ def test_build_clone_refreshes_sqlite_dirs_and_root_file(
     src_profile = source / profile
     src_profile.mkdir(parents=True)
 
-    # Live session state in the real profile.
     _make_db(src_profile / "Network" / "Cookies", "cookie-v1")
     _make_db(src_profile / "Login Data", "login-v1")
     (src_profile / "Local Storage").mkdir()
@@ -158,6 +155,7 @@ async def test_prewarm_noop_when_profile_path_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(session.config, "browser_profile_path", "/some/dir")  # type: ignore[attr-defined]
+    monkeypatch.setattr(session.config, "browser_profile_name", "Profile2")  # type: ignore[attr-defined]
     called = False
 
     async def fail() -> Path:
@@ -192,10 +190,11 @@ async def test_prewarm_builds_clone_when_cold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(session.config, "browser_profile_path", None)  # type: ignore[attr-defined]
+    monkeypatch.setattr(session.config, "browser_profile_name", "Profile2")  # type: ignore[attr-defined]
     session._PAGE = None
     built = False
 
-    async def build() -> Path:
+    async def build(profile: str) -> Path:
         nonlocal built
         built = True
         return Path("/clone")
@@ -209,8 +208,26 @@ async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session.config, "browser_profile_path", None)  # type: ignore[attr-defined]
     session._PAGE = None
 
-    async def boom() -> Path:
+    async def boom(profile: str) -> Path:
         raise OSError("disk gone")
 
     monkeypatch.setattr(session, "_clone_profile", boom)
-    await session.prewarm_clone()  # must not raise
+    await session.prewarm_clone()
+
+
+async def test_prewarm_noop_when_no_profile_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(session.config, "browser_profile_path", None)  # type: ignore[attr-defined]
+    monkeypatch.setattr(session.config, "browser_profile_name", None)  # type: ignore[attr-defined]
+    session._PAGE = None
+    called = False
+
+    async def fail(profile: str) -> Path:
+        nonlocal called
+        called = True
+        return Path("/")
+
+    monkeypatch.setattr(session, "_clone_profile", fail)
+    await session.prewarm_clone()
+    assert called is False

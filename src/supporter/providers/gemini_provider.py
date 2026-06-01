@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from ..config import config
 from ..logger import logger
-from ..tools.resolver import extract_declared_tool_names, resolve_provider_tools
+from ..tools.resolver import resolve_provider_tools
 from ..types import (
     LLMChunk,
     LLMOptions,
@@ -158,9 +158,6 @@ class GeminiProvider:
         self._tool_cache = final_tools or None
         self._last_tool_key = current_identity_key
         return self._tool_cache
-
-    def _extract_declared_tool_names(self, tools: list[Any]) -> set[str]:
-        return extract_declared_tool_names(tools)
 
     async def generate(
         self,
