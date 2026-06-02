@@ -224,11 +224,17 @@ async def test_session_parts_raises_tool_error_on_failure(
         await tool._session_parts()
 
 
-async def test_page_host_returns_empty_on_evaluate_failure() -> None:
-    class _BrokenPage:
-        async def evaluate(self, _script: str) -> Any:
-            msg = "page crashed"
-            raise RuntimeError(msg)
+async def test_page_host_reads_url_property() -> None:
+    class _Page:
+        url = "https://www.GitHub.com/foo?x=1"
 
-    result = await tool._page_host(_BrokenPage())
-    assert result == ""
+    assert await tool._page_host(_Page()) == "github.com"
+
+
+async def test_page_host_returns_empty_on_url_failure() -> None:
+    class _BrokenPage:
+        @property
+        def url(self) -> str:
+            raise RuntimeError("page crashed")
+
+    assert await tool._page_host(_BrokenPage()) == ""

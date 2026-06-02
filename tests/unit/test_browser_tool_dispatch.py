@@ -80,7 +80,6 @@ async def test_dispatch_forwards_keyword_args_into_the_request(
         "type",
         text="hello",
         delay_ms=250,
-        fast=True,
         key="Enter",
         value="v",
         selector="#in",
@@ -96,7 +95,6 @@ async def test_dispatch_forwards_keyword_args_into_the_request(
     req = captured["req"]
     assert req.text == "hello"
     assert req.delay_ms == 250
-    assert req.fast is True
     assert req.key == "Enter"
     assert req.value == "v"
     assert req.selector == "#in"

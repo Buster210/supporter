@@ -226,3 +226,188 @@ async def test_replay_non_target_action_skips_ref(
 
     assert "1/1 steps succeeded" in result
     assert "ref" not in seen["kwargs"]
+
+
+async def test_replay_sensitive_step_still_gated(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _save_playbook("example.test", "sensitive", [("click", "button", "Delete", None)])
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_browse(action: str, **kwargs: Any) -> str:
+        calls.append({"action": action, "kwargs": kwargs})
+        return "done"
+
+    monkeypatch.setattr(tool, "browse", fake_browse)
+
+    async def fake_snapshot(page: Any) -> str:
+        return '- button "Delete" [ref=e3]'
+
+    monkeypatch.setattr(tool, "_live_refs_snapshot", fake_snapshot)
+
+    result = await task.replay_playbook("sensitive")
+
+    assert "1/1 steps succeeded" in result
+    assert len(calls) == 1
+    assert calls[0]["action"] == "click"
+    assert "ref" in calls[0]["kwargs"]
+
+
+async def test_replay_self_heals_fuzzy_name(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _save_playbook("example.test", "fuzzy", [("click", "button", "Sign in", None)])
+
+    seen: dict[str, Any] = {}
+
+    async def fake_browse(action: str, **kwargs: Any) -> str:
+        seen["kwargs"] = kwargs
+        return "done"
+
+    async def fake_snapshot(page: Any) -> str:
+        return '- button "Sign In" [ref=e4]'
+
+    monkeypatch.setattr(tool, "browse", fake_browse)
+    monkeypatch.setattr(tool, "_live_refs_snapshot", fake_snapshot)
+
+    result = await task.replay_playbook("fuzzy")
+
+    assert "1/1 steps succeeded" in result
+    assert seen["kwargs"].get("ref") == "e4"
+
+
+async def test_replay_rejects_unknown_override(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _save_playbook("example.test", "override_test", [("navigate", None, None, None)])
+
+    result = await task.replay_playbook("override_test", overrides={"unknown_var": "x"})
+
+    assert "Unknown override" in result
+    assert "unknown_var" in result
+
+
+async def test_replay_success_bumps_success_count(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _save_playbook("example.test", "count_test", [("navigate", None, None, None)])
+
+    async def fake_browse(action: str, **kwargs: Any) -> str:
+        return "done"
+
+    monkeypatch.setattr(tool, "browse", fake_browse)
+
+    await task.replay_playbook("count_test")
+    await task.replay_playbook("count_test")
+
+    pb = task.load_playbook("example.test", "count_test")
+    assert pb is not None
+    assert pb.success_count >= 2
+
+
+async def test_replay_drift_bumps_fail_count(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _save_playbook(
+        "example.test",
+        "drift_test",
+        [("click", "button", "NONEXISTENT", None)],
+    )
+
+    async def empty_snapshot(page: Any) -> str:
+        return "- heading 'Other' [ref=e1]"
+
+    monkeypatch.setattr(tool, "_live_refs_snapshot", empty_snapshot)
+
+    result = await task.replay_playbook("drift_test")
+
+    assert "Stopped at step" in result
+
+    pb = task.load_playbook("example.test", "drift_test")
+    assert pb is not None
+    assert pb.fail_count >= 1
+
+
+async def test_start_task_captures_host(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    msg = await task.start_task("capture test")
+    assert "Recording task" in msg
+
+    assert task._ACTIVE is not None
+    assert task._ACTIVE.host == "example.test"
+
+    task.discard()
+
+
+async def test_replay_substitutes_recorded_variable(
+    fake_host: FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pb = Playbook(
+        host="example.test",
+        goal="login",
+        created_ts=100.0,
+        steps=[
+            Step(
+                action="type",
+                selector="#user",
+                params={"text": "admin"},
+                variable="username",
+            )
+        ],
+        variables=["username"],
+    )
+    task._save_playbook_sync(pb)
+
+    seen: dict[str, Any] = {}
+
+    async def fake_browse(action: str, **kwargs: Any) -> str:
+        seen["kwargs"] = kwargs
+        return "done"
+
+    monkeypatch.setattr(tool, "browse", fake_browse)
+
+    result = await task.replay_playbook("login", overrides={"username": "alice"})
+
+    assert "1/1 steps succeeded" in result
+    assert seen["kwargs"]["text"] == "alice"
+
+
+async def test_query_playbook_suggests_similar_on_miss(
+    fake_host: FakeSession,
+) -> None:
+    task._save_playbook_sync(
+        Playbook(
+            host="example.test",
+            goal="log in to github",
+            created_ts=100.0,
+            steps=[Step(action="navigate")],
+        )
+    )
+    result = await task.query_playbook("github login")
+    assert "No playbook found" in result
+    assert "log in to github" in result
+
+
+async def test_delete_playbook_tool_removes_and_reports(
+    fake_host: FakeSession,
+) -> None:
+    task._save_playbook_sync(
+        Playbook(
+            host="example.test",
+            goal="stale flow",
+            created_ts=100.0,
+            steps=[Step(action="navigate")],
+        )
+    )
+    msg = await task.delete_playbook("stale flow")
+    assert "Deleted playbook" in msg
+    assert task.load_playbook("example.test", "stale flow") is None

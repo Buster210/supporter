@@ -14,6 +14,8 @@ ORCHESTRATOR_TOOL_NAMES = (
     "finish_task",
     "query_playbook",
     "replay_playbook",
+    "list_playbooks",
+    "delete_playbook",
     "delegate_tasks",
     "check_delegation",
     "cancel_delegation",
@@ -40,7 +42,9 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
     from .bash.executor import execute_bash
     from .browser.tool import (
         browse,
+        delete_playbook,
         finish_task,
+        list_playbooks,
         query_playbook,
         replay_playbook,
         start_task,
@@ -61,6 +65,12 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         ),
         "replay_playbook": ToolSpec(
             "replay_playbook", replay_playbook, delegate_allowed=False
+        ),
+        "list_playbooks": ToolSpec(
+            "list_playbooks", list_playbooks, delegate_allowed=False
+        ),
+        "delete_playbook": ToolSpec(
+            "delete_playbook", delete_playbook, delegate_allowed=False
         ),
         "delegate_tasks": ToolSpec("delegate_tasks", delegate_tasks),
         "check_delegation": ToolSpec("check_delegation", check_delegation),

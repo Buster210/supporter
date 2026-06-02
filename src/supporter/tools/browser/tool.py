@@ -12,7 +12,9 @@ from ..file_ops import validate_path
 from . import guardrails, humanize, session, snapshot
 from .task import (
     _record_step,
+    delete_playbook,
     finish_task,
+    list_playbooks,
     query_playbook,
     replay_playbook,
     start_task,
@@ -22,7 +24,9 @@ __all__ = [
     "HANDLERS",
     "BrowseRequest",
     "browse",
+    "delete_playbook",
     "finish_task",
+    "list_playbooks",
     "query_playbook",
     "replay_playbook",
     "start_task",
@@ -38,7 +42,6 @@ class BrowseRequest:
     depth: int = 0
     compact: bool = False
     delay_ms: int = 100
-    fast: bool = False
     key: str = ""
     value: str = ""
     selector: str = ""
@@ -49,6 +52,7 @@ class BrowseRequest:
     html: bool = False
     path: str = ""
     stamp: str = ""
+    variable: str = ""
 
 
 async def _page_or_error() -> Any:
@@ -195,15 +199,17 @@ async def _confirm_always(title: str, detail: str) -> str | None:
 
 
 async def _page_host(page: Any) -> str:
+    # page.url is Playwright's tracked main-frame URL — a sync property — so this
+    # avoids a JS round-trip on every humanized action (this runs per action via
+    # _effective_fast and _confirm_or_block).
     try:
-        location = await page.evaluate("document.location.href")
-        return guardrails.host_from_url(location)
+        return guardrails.host_from_url(page.url or "")
     except Exception:
         logger.debug("Could not read page URL", exc_info=True)
         return ""
 
 
-async def _effective_fast(page: Any, req: BrowseRequest) -> bool:
+async def _effective_fast(page: Any) -> bool:
     return guardrails.host_is_fast(await _page_host(page))
 
 
@@ -362,7 +368,6 @@ async def browse(
     compact: bool = False,
     delay_ms: int = 100,
     *,
-    fast: bool = False,
     key: str = "",
     value: str = "",
     selector: str = "",
@@ -373,6 +378,7 @@ async def browse(
     html: bool = False,
     path: str = "",
     stamp: str = "",
+    variable: str = "",
 ) -> str:
     """Browser automation tool using your Chrome profile and cookies.
 
@@ -445,10 +451,6 @@ async def browse(
         compact: If True, return only interactive elements [ref=eN].
         delay_ms: Extra delay after action in ms. Default 100. For wait with no
             selector, how long to wait.
-        fast: Deprecated as a per-call override and ignored off the allowlist.
-            Raw, un-humanized input is used ONLY on hosts in
-            guardrails.FAST_HOSTS; every other host is always humanized,
-            regardless of this flag.
         key: Key or chord to press (press), e.g. "Enter", "Control+a"; or a
             cookie/localStorage key name (cookies/storage).
         value: Option value attribute to choose (select); or the value to set
@@ -466,13 +468,16 @@ async def browse(
             save). Must resolve inside the project directory.
         stamp: Optional filename stem for a screenshot artifact. Empty uses an
             in-process counter.
+        variable: While recording a task (start_task), tag this step's input as
+            a named template variable so replay_playbook can override its value
+            per run, e.g. type(..., text="alice", variable="username").
 
     Returns:
         Snapshot text, confirmation prompt, or error message.
     """
     logger.info(
         f"Tool: browse — action={action}, url={url!r}, ref={ref!r}, "
-        f"depth={depth}, compact={compact}, fast={fast}"
+        f"depth={depth}, compact={compact}"
     )
 
     if action not in HANDLERS:
@@ -487,7 +492,6 @@ async def browse(
         depth=depth,
         compact=compact,
         delay_ms=delay_ms,
-        fast=fast,
         key=key,
         value=value,
         selector=selector,
@@ -498,6 +502,7 @@ async def browse(
         html=html,
         path=path,
         stamp=stamp,
+        variable=variable,
     )
     result = await HANDLERS[action](req)
     await _record_step(req, result)

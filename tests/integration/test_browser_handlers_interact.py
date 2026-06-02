@@ -19,7 +19,7 @@ def _reset_snapshot_baselines(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_click_resolves_ref_and_clicks(fake_session: FakeSession) -> None:
-    await browse("click", ref="e2", fast=True)
+    await browse("click", ref="e2")
 
     _args, _kwargs = fake_session.log.last("click")
     assert fake_session.log.count("click") == 1
@@ -38,7 +38,7 @@ async def test_type_fills_text_in_fast_mode(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
-    await browse("type", ref="e2", text="hello", fast=True)
+    await browse("type", ref="e2", text="hello")
 
     args, _kwargs = fake_session.log.last("fill")
     assert args == ("hello",)
@@ -72,7 +72,7 @@ async def test_hover_resolves_and_hovers(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
-    await browse("hover", ref="e2", fast=True)
+    await browse("hover", ref="e2")
 
     _args, _kwargs = fake_session.log.last("hover")
     assert fake_session.log.count("hover") == 1
@@ -88,7 +88,7 @@ async def test_scroll_by_delta_uses_wheel_in_fast_mode(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
-    await browse("scroll", dx=0, dy=200, fast=True)
+    await browse("scroll", dx=0, dy=200)
 
     args, _kwargs = fake_session.log.last("wheel")
     assert args == (0, 200)
@@ -101,7 +101,7 @@ async def test_press_without_key_errors(fake_session: FakeSession) -> None:
 
 
 async def test_press_sends_key_in_fast_mode(fake_session: FakeSession) -> None:
-    await browse("press", key="Enter", fast=True)
+    await browse("press", key="Enter")
 
     args, _kwargs = fake_session.log.last("press")
     assert args == ("Enter",)
@@ -122,7 +122,7 @@ async def test_select_without_value_or_text_errors(
 
 
 async def test_select_by_value_chooses_option(fake_session: FakeSession) -> None:
-    await browse("select", ref="e2", value="opt1", fast=True)
+    await browse("select", ref="e2", value="opt1")
 
     _args, kwargs = fake_session.log.last("select_option")
     assert kwargs == {"value": "opt1"}

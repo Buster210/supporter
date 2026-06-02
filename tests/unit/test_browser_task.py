@@ -91,3 +91,120 @@ def test_format_playbook_is_numbered() -> None:
     out = task.format_playbook(pb)
     assert "1. click" in out
     assert "OK" in out
+
+
+def test_replay_params_substitutes_overrides() -> None:
+    step = Step(
+        action="type",
+        role="textbox",
+        name="username",
+        params={"text": "${username}"},
+        variable="username",
+    )
+    kwargs = task._replay_params(step, overrides={"username": "admin"})
+    assert kwargs["text"] == "admin"
+
+
+def test_replay_params_preserves_selector() -> None:
+    step = Step(action="click", selector="#submit")
+    kwargs = task._replay_params(step)
+    assert kwargs["selector"] == "#submit"
+
+
+def test_find_ref_fuzzy_name_match() -> None:
+    tree = '- button "Sign In" [ref=e1]\n- button "Submit" [ref=e2]'
+    assert task._find_ref_fuzzy(tree, "button", "Sign In") == "e1"
+    assert task._find_ref_fuzzy(tree, "button", "Sign") == "e1"
+
+
+def test_find_ref_fuzzy_returns_empty_on_no_match() -> None:
+    tree = '- button "Sign In" [ref=e1]'
+    assert task._find_ref_fuzzy(tree, "button", "Logout") == ""
+
+
+def test_find_ref_fuzzy_prefers_exact_over_partial() -> None:
+    tree = '- button "Sign in account" [ref=e1]\n- button "Sign in" [ref=e2]'
+    assert task._find_ref_fuzzy(tree, "button", "Sign in") == "e2"
+
+
+def test_find_ref_fuzzy_refuses_ambiguous_duplicates() -> None:
+    tree = '- button "Sign in" [ref=e1]\n- button "Sign in" [ref=e2]'
+    assert task._find_ref_fuzzy(tree, "button", "Sign in") == ""
+
+
+def test_step_variable_defaults_to_empty() -> None:
+    step = Step(action="navigate")
+    assert step.variable == ""
+
+
+def test_v2_playbook_defaults() -> None:
+    pb = Playbook(host="h.com", goal="g", created_ts=1.0, steps=[])
+    assert pb.schema_version == task.SCHEMA_VERSION
+    assert pb.variables == []
+    assert pb.success_count == 0
+    assert pb.fail_count == 0
+    assert pb.last_used_ts == 0.0
+    assert pb.last_outcome == ""
+
+
+def test_replay_params_whole_value_substitution() -> None:
+    step = Step(action="type", params={"text": "admin"}, variable="username")
+    kwargs = task._replay_params(step, overrides={"username": "alice"})
+    assert kwargs["text"] == "alice"
+
+
+def test_replay_params_without_override_keeps_recorded_value() -> None:
+    step = Step(action="type", params={"text": "admin"}, variable="username")
+    assert task._replay_params(step)["text"] == "admin"
+    assert task._replay_params(step, overrides={"other": "x"})["text"] == "admin"
+
+
+def test_replay_params_placeholder_preserves_surrounding_text() -> None:
+    step = Step(
+        action="navigate",
+        params={"url": "https://x.test/u/${user}"},
+        variable="user",
+    )
+    kwargs = task._replay_params(step, overrides={"user": "alice"})
+    assert kwargs["url"] == "https://x.test/u/alice"
+
+
+def test_replay_params_multi_var_template_substitutes_each() -> None:
+    step = Step(
+        action="navigate",
+        params={"url": "https://${user}.x.test/${repo}"},
+        variable="user,repo",
+    )
+    kwargs = task._replay_params(step, overrides={"user": "alice", "repo": "site"})
+    assert kwargs["url"] == "https://alice.x.test/site"
+
+
+def test_replay_params_template_var_not_clobbered_by_sibling() -> None:
+    step = Step(
+        action="type",
+        params={"text": "admin@${domain}"},
+        variable="username,domain",
+    )
+    kwargs = task._replay_params(
+        step, overrides={"username": "alice", "domain": "test.com"}
+    )
+    assert kwargs["text"] == "admin@test.com"
+
+
+def test_find_ref_fuzzy_strips_punctuation() -> None:
+    tree = '- button "Sign in!" [ref=e1]'
+    assert task._find_ref_fuzzy(tree, "button", "Sign in") == "e1"
+
+
+def test_find_ref_fuzzy_requires_exact_role() -> None:
+    tree = '- link "Sign in" [ref=e1]'
+    assert task._find_ref_fuzzy(tree, "button", "Sign in") == ""
+
+
+def test_normalize_name_collapses_punctuation_and_space() -> None:
+    assert task._normalize_name("  Sign-In!!  Now ") == "sign in now"
+
+
+def test_recordable_actions_include_navigation_steps() -> None:
+    for action in ("back", "forward", "newtab", "frame"):
+        assert action in task.RECORDABLE_ACTIONS

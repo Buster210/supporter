@@ -62,7 +62,7 @@ async def test_upload_existing_file_sets_input(
     src = project_root / "doc.txt"
     src.write_text("hi")
 
-    await browse("upload", ref="e2", path="doc.txt", fast=True)
+    await browse("upload", ref="e2", path="doc.txt")
 
     args, _kwargs = fake_session.log.last("set_input_files")
     assert args == (str(src),)
@@ -79,7 +79,7 @@ async def test_download_saves_to_resolved_path(
 ) -> None:
     dest = project_root / "saved.bin"
 
-    result = await browse("download", ref="e2", path="saved.bin", fast=True)
+    result = await browse("download", ref="e2", path="saved.bin")
 
     assert result == f"Downloaded to {dest}"
     args, _kwargs = fake_session.log.last("save_as")

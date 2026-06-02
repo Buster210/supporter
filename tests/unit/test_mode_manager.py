@@ -194,6 +194,8 @@ async def test_setup_agent_registry_tools() -> None:
         "finish_task",
         "query_playbook",
         "replay_playbook",
+        "list_playbooks",
+        "delete_playbook",
         "delegate_tasks",
         "check_delegation",
         "cancel_delegation",

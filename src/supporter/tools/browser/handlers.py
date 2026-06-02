@@ -38,7 +38,7 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     page = await _page_or_error()
     await page.goto(req.url, wait_until="domcontentloaded", timeout=30_000)
     await asyncio.sleep(req.delay_ms / 1000.0)
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await humanize.reading_pause(page)
     result = await _snapshot_full(page, req)
     if not session.keep_open():
@@ -54,7 +54,7 @@ async def _handle_back(req: BrowseRequest) -> str:
     page = await _page_or_error()
     await page.go_back(timeout=30_000, wait_until="commit")
     await asyncio.sleep(req.delay_ms / 1000.0)
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await humanize.reading_pause(page)
     return await _snapshot_full(page, req)
 
@@ -272,7 +272,7 @@ async def _handle_click(req: BrowseRequest) -> str:
     if blocked is not None:
         return blocked
 
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await session.pace()
         await humanize.human_click(page, req.ref, locator=locator)
     else:
@@ -295,7 +295,7 @@ async def _handle_type(req: BrowseRequest) -> str:
     if not req.text:
         return "Error: 'text' is required for type action."
 
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await session.pace()
         aria_role, aria_name = await _resolve_role_and_name(locator, req.ref)
         host = await _page_host(page)
@@ -316,7 +316,7 @@ async def _handle_hover(req: BrowseRequest) -> str:
     if err is not None:
         return err
 
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await session.pace()
         await humanize.human_hover(page, req.ref, locator=locator)
     else:
@@ -337,7 +337,7 @@ async def _handle_scroll(req: BrowseRequest) -> str:
         if locator is None:
             return f"Error: ref {req.ref} not found, take a fresh snapshot"
 
-    fast = await _effective_fast(page, req)
+    fast = await _effective_fast(page)
     if not fast:
         await session.pace()
 
@@ -369,7 +369,7 @@ async def _handle_press(req: BrowseRequest) -> str:
 
     if locator is not None:
         await locator.focus()
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await session.pace()
         await humanize.human_press(page, req.key)
     else:
@@ -393,7 +393,7 @@ async def _handle_select(req: BrowseRequest) -> str:
     if blocked is not None:
         return blocked
 
-    if not await _effective_fast(page, req):
+    if not await _effective_fast(page):
         await session.pace()
     if req.value:
         await locator.select_option(value=req.value)
@@ -505,7 +505,7 @@ async def _handle_upload(req: BrowseRequest) -> str:
     if blocked is not None:
         return blocked
 
-    if not req.fast:
+    if not await _effective_fast(page):
         await session.pace()
     await locator.set_input_files(str(target))
     await asyncio.sleep(req.delay_ms / 1000.0)
@@ -532,7 +532,7 @@ async def _handle_download(req: BrowseRequest) -> str:
     if blocked is not None:
         return blocked
 
-    if not req.fast:
+    if not await _effective_fast(page):
         await session.pace()
     async with page.expect_download(timeout=30_000) as info:
         await locator.click()
