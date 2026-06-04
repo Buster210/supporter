@@ -271,13 +271,14 @@ def _dedup_siblings(node: _Node) -> None:
     for child in node.children:
         _dedup_siblings(child)
     children = node.children
+    sigs = [_signature(c) for c in children]
     result: list[_Node] = []
     i = 0
     while i < len(children):
         run_end = i
         while (
             run_end + 1 < len(children)
-            and _signature(children[run_end + 1]) == _signature(children[i])
+            and sigs[run_end + 1] == sigs[i]
             and len(children[i].children) >= _DEDUP_MIN_CHILDREN
         ):
             run_end += 1

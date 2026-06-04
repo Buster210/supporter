@@ -160,6 +160,7 @@ def load_config() -> AppConfig:
         history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),
         browser_profile_path=os.getenv("BROWSER_PROFILE_PATH"),
         browser_profile_name=os.getenv("BROWSER_PROFILE_NAME"),
+        browser_debug_overlay=_bool_env("BROWSER_DEBUG_OVERLAY", False),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),
@@ -167,9 +168,10 @@ def load_config() -> AppConfig:
         reconnect_attempts_max=_int_env("RECONNECT_ATTEMPTS_MAX", 5),
         reconnect_backoff_base=float(os.getenv("RECONNECT_BACKOFF_BASE", "0.5")),
         reconnect_backoff_cap=float(os.getenv("RECONNECT_BACKOFF_CAP", "8.0")),
-        keepalive_interval=float(os.getenv("KEEPALIVE_INTERVAL", "20.0")),
         prewarm_safety_margin=float(os.getenv("PREWARM_SAFETY_MARGIN", "5.0")),
+        keepalive_interval=float(os.getenv("KEEPALIVE_INTERVAL", "20.0")),
         keepalive_enabled=_bool_env("KEEPALIVE_ENABLED", True),
+        idle_monitor_enabled=_bool_env("IDLE_MONITOR_ENABLED", True),
         empty_resume_policy=os.getenv("EMPTY_RESUME_POLICY", "trust").lower(),
     )
 

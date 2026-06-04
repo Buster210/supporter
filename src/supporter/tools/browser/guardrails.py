@@ -34,9 +34,9 @@ def _env_float(name: str, default: float) -> float:
 ACTION_CAP: Final = 25
 ACTION_CAP_JITTER: Final = 15
 GAP_MIN: Final = 0.8
-GAP_MAX: Final = 2.5
+GAP_MAX: Final = 4.5
 
-ACTIONS_PER_MINUTE_MAX: Final = _env_int("BROWSER_ACTIONS_PER_MIN", 40)
+ACTIONS_PER_MINUTE_MAX: Final = _env_int("BROWSER_ACTIONS_PER_MIN", 24)
 SESSION_IDLE_GAP_PROBABILITY: Final = 0.04
 SESSION_IDLE_GAP_RANGE: Final = (
     _env_float("BROWSER_IDLE_GAP_MIN", 5.0),
@@ -202,7 +202,7 @@ def needs_confirmation(
 
 
 def random_gap() -> float:
-    return humanize._lognormal_delay(median=1.2, sigma=0.4, lo=GAP_MIN, hi=GAP_MAX)
+    return humanize._lognormal_delay(median=1.2, sigma=0.5, lo=GAP_MIN, hi=GAP_MAX)
 
 
 def action_cap() -> int:

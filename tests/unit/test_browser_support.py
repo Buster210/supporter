@@ -476,6 +476,9 @@ async def test_post_action_snapshot_waits_and_captures() -> None:
         async def wait_for_timeout(self, ms: float) -> None:
             slept.append(ms)
 
+        async def wait_for_load_state(self, state: str, **kw: object) -> None:
+            slept.append(0.0)
+
     req = BrowseRequest(action="click", compact=False)
     await support._post_action_snapshot(FakePage(), req)
     assert len(slept) >= 1
@@ -505,7 +508,10 @@ async def test_diff_text_returns_diff() -> None:
 async def test_effective_fast_allowlisted() -> None:
     from unittest.mock import patch
 
-    with patch.object(support, "_page_host", AsyncMock(return_value="google.com")):
+    with (
+        patch.object(support, "_page_host", AsyncMock(return_value="google.com")),
+        patch.object(support.config, "browser_debug_overlay", False),
+    ):
         assert await support._effective_fast(object()) is True
 
 
@@ -513,6 +519,16 @@ async def test_effective_fast_non_allowlisted() -> None:
     from unittest.mock import patch
 
     with patch.object(support, "_page_host", AsyncMock(return_value="example.com")):
+        assert await support._effective_fast(object()) is False
+
+
+async def test_effective_fast_forced_off_by_debug_overlay() -> None:
+    from unittest.mock import patch
+
+    with (
+        patch.object(support, "_page_host", AsyncMock(return_value="google.com")),
+        patch.object(support.config, "browser_debug_overlay", True),
+    ):
         assert await support._effective_fast(object()) is False
 
 

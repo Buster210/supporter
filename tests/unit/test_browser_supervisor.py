@@ -1,14 +1,9 @@
-"""Tests for browser_supervise — orchestrator-only browser supervisor tool.
-
-Covers: whitelist enforcement, action dispatch, force teardown, status
-handler, catalog wiring, and role isolation.
-"""
-
 from __future__ import annotations
 
 import asyncio
 import json
 import time
+from collections.abc import Generator
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -23,8 +18,7 @@ from supporter.tools.browser.supervisor import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_session() -> None:  # type: ignore[misc]
-    """Save and restore all session globals around each test."""
+def _reset_session() -> Generator[None, None, None]:
     saved = {
         name: getattr(session, name)
         for name in (
@@ -55,7 +49,6 @@ def _reset_session() -> None:  # type: ignore[misc]
 
 
 def _fake_page(url: str = "https://example.test/") -> Any:
-    """Create a minimal fake page object with required methods."""
     page = cast("Any", type("_FakePage", (), {"url": url})())
     page.close = AsyncMock()
     page.title = AsyncMock(return_value="Fake Title")
@@ -63,7 +56,6 @@ def _fake_page(url: str = "https://example.test/") -> Any:
 
 
 def _fake_session(*, url: str = "https://example.test/", tabs: int = 1) -> None:
-    """Install a fake browser session for testing."""
     pages = [_fake_page(url) for _ in range(tabs)]
     context = cast("Any", type("_Ctx", (), {"pages": pages})())
     session._PWS = cast("Any", object())
@@ -72,19 +64,12 @@ def _fake_session(*, url: str = "https://example.test/", tabs: int = 1) -> None:
     session._LAST_ACTION_TS = time.monotonic() - 5.0
 
 
-# --- Whitelist enforcement ---------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "action",
     sorted(SUPERVISOR_ACTIONS),
 )
 async def test_whitelisted_actions_are_accepted(action: str) -> None:
-    """Every action in SUPERVISOR_ACTIONS must pass the whitelist gate."""
     _fake_session()
-    # The key assertion is the whitelist gate accepts the action. snapshot/
-    # screenshot/closetab then fail on the fake page (ToolError) — reaching the
-    # handler at all proves the gate let them through.
     try:
         result = await browser_supervise(action)
     except ToolError:
@@ -120,20 +105,15 @@ async def test_whitelisted_actions_are_accepted(action: str) -> None:
     ],
 )
 async def test_non_whitelisted_actions_are_rejected(action: str) -> None:
-    """Actions outside the whitelist must be hard-rejected."""
     result = await browser_supervise(action)
     assert "not permitted" in result
     assert action in result
 
 
 async def test_rejection_lists_allowed_actions() -> None:
-    """The rejection message must list the allowed actions."""
     result = await browser_supervise("eval")
     for name in sorted(SUPERVISOR_ACTIONS):
         assert name in result
-
-
-# --- Status action -----------------------------------------------------------
 
 
 async def test_status_returns_json_with_session_fields() -> None:
@@ -164,12 +144,7 @@ async def test_status_reflects_launching_flag() -> None:
     assert data["launching"] is True
 
 
-# --- Force teardown ----------------------------------------------------------
-
-
 async def test_closenow_tears_down_active_session() -> None:
-    """closenow closes an active session and reports it (errors from the fake
-    teardown are best-effort swallowed by close_session, as in production)."""
     _fake_session()
     assert session.is_active()
     result = await browser_supervise("closenow")
@@ -197,11 +172,7 @@ async def test_closenow_force_on_inactive_session() -> None:
     assert result == "Browser already closed."
 
 
-# --- Close with confirmation -------------------------------------------------
-
-
 async def test_close_denied_by_user() -> None:
-    """close action respects the confirmation callback."""
     _fake_session()
 
     async def _deny(title: str, detail: str) -> bool:
@@ -214,7 +185,6 @@ async def test_close_denied_by_user() -> None:
 
 
 async def test_close_confirmed_by_user() -> None:
-    """close action with confirmation closes the session."""
     _fake_session()
     assert session.is_active()
 
@@ -233,9 +203,6 @@ async def test_close_already_closed() -> None:
     assert result == "Browser already closed."
 
 
-# --- Tabs / closetab ---------------------------------------------------------
-
-
 async def test_tabs_lists_open_tabs() -> None:
     _fake_session(tabs=2)
     result = await browser_supervise("tabs")
@@ -247,9 +214,6 @@ async def test_closetab_rejects_out_of_range() -> None:
     _fake_session(tabs=2)
     result = await browser_supervise("closetab", index=5)
     assert "out of range" in result
-
-
-# --- Catalog wiring ----------------------------------------------------------
 
 
 def test_browser_supervise_in_orchestrator_tool_names() -> None:
@@ -267,20 +231,16 @@ def test_browser_supervise_not_delegate_allowed() -> None:
 
 
 def test_browse_still_exclusive_to_page_pilot() -> None:
-    """browse remains page-pilot only — supervisor doesn't change that."""
     from supporter.tools.catalog import build_tool_catalog, select_delegate_tools
 
     catalog = build_tool_catalog()
-    # Non-page-pilot must NOT get browse
     registry = select_delegate_tools(catalog, "all", role="code_writer")
     assert "browse" not in registry
-    # page-pilot must still get browse
     pp_registry = select_delegate_tools(catalog, "all", role="page-pilot")
     assert "browse" in pp_registry
 
 
 def test_sub_agents_cannot_get_supervisor_tool() -> None:
-    """browser_supervise must NOT be available to any delegate role."""
     from supporter.tools.catalog import build_tool_catalog, select_delegate_tools
 
     catalog = build_tool_catalog()
@@ -289,9 +249,6 @@ def test_sub_agents_cannot_get_supervisor_tool() -> None:
         assert "browser_supervise" not in registry, (
             f"role {role!r} should not get browser_supervise"
         )
-
-
-# --- Prompt surface ----------------------------------------------------------
 
 
 def test_orchestrator_prompt_mentions_browser_supervise() -> None:
@@ -305,9 +262,6 @@ def test_orchestrator_prompt_has_recovery_protocol() -> None:
 
     assert "Browser Recovery Protocol" in DEFAULT_SYSTEM_INSTRUCTION
     assert "cancel_delegation" in DEFAULT_SYSTEM_INSTRUCTION
-
-
-# --- session_status -----------------------------------------------------------
 
 
 async def test_session_status_returns_dict() -> None:
@@ -325,9 +279,6 @@ async def test_session_status_inactive_session() -> None:
     assert info["tabs"] == 0
 
 
-# --- force param on close_session -------------------------------------------
-
-
 async def test_close_session_force_resets_globals() -> None:
     _fake_session()
     session._KEEP_OPEN = True
@@ -339,14 +290,12 @@ async def test_close_session_force_resets_globals() -> None:
 
 
 async def test_close_session_force_swallows_close_error() -> None:
-    """A context.close() that raises must not stop force teardown."""
     _fake_session()
 
     async def _raise() -> None:
         raise OSError("wedged")
 
-    assert session._CONTEXT is not None
-    session._CONTEXT.close = _raise  # type: ignore[method-assign,assignment]
+    session._CONTEXT.close = _raise  # type: ignore[method-assign,union-attr]
     await session.close_session(force=True)
     assert not session.is_active()
 
@@ -354,15 +303,12 @@ async def test_close_session_force_swallows_close_error() -> None:
 async def test_close_session_force_bounds_hanging_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A context.close() that hangs must be bounded by the force timeout so
-    recovery still completes and globals are reset."""
     _fake_session()
     monkeypatch.setattr(session, "_FORCE_CLOSE_TIMEOUT_S", 0.01)
 
     async def _hang() -> None:
         await asyncio.sleep(10)
 
-    assert session._CONTEXT is not None
-    session._CONTEXT.close = _hang  # type: ignore[method-assign,assignment]
+    session._CONTEXT.close = _hang  # type: ignore[method-assign,union-attr]
     await session.close_session(force=True)
     assert not session.is_active()

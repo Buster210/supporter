@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Any
 
+from ...config import config
 from ...logger import logger
 from .. import resolved_project_root
-from . import cloudflare, guardrails, humanize, session, snapshot
+from . import cloudflare, debug_overlay, guardrails, humanize, session, snapshot
 from .core import BrowseRequest, _page_host
 from .support import (
     _confirm_always,
@@ -27,7 +29,31 @@ from .support import (
     _wrap_action_errors,
 )
 
+__all__ = [
+    "config",
+    "debug_overlay",
+    "session",
+]
+
 _SCREENSHOT_SEQ = 0
+
+
+async def _overlay_mark(page: Any, locator: Any, kind: str) -> None:
+    """Draw the debug overlay at an element's center (fast-path; flag-gated)."""
+    if not config.browser_debug_overlay:
+        return
+    try:
+        box = await locator.bounding_box()
+    except Exception:
+        box = None
+    if not box:
+        return
+    cx = box["x"] + box["width"] / 2
+    cy = box["y"] + box["height"] / 2
+    if kind == "click":
+        await debug_overlay.overlay_click(page, cx, cy)
+    else:
+        await debug_overlay.overlay_move(page, cx, cy)
 
 
 @_wrap_action_errors("navigate")
@@ -124,6 +150,8 @@ async def _handle_newtab(req: BrowseRequest) -> str:
         target = await context.new_page()
     session.set_active(target)
     await target.bring_to_front()
+    if config.browser_debug_overlay:
+        await debug_overlay.inject_overlay(target)
     if req.url:
         await target.goto(req.url, wait_until="domcontentloaded", timeout=30_000)
     await asyncio.sleep(req.delay_ms / 1000.0)
@@ -278,6 +306,7 @@ async def _handle_click(req: BrowseRequest) -> str:
         await humanize.human_click(page, req.ref, locator=locator)
     else:
         await locator.click()
+        await _overlay_mark(page, locator, "click")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
 
@@ -306,6 +335,7 @@ async def _handle_type(req: BrowseRequest) -> str:
         )
     else:
         await locator.fill(req.text)
+        await _overlay_mark(page, locator, "move")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
 
@@ -322,6 +352,7 @@ async def _handle_hover(req: BrowseRequest) -> str:
         await humanize.human_hover(page, req.ref, locator=locator)
     else:
         await locator.hover()
+        await _overlay_mark(page, locator, "move")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
 

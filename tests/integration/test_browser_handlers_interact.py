@@ -16,6 +16,7 @@ def _reset_snapshot_baselines(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(humanize, "idle_flourish", _no_idle)
+    monkeypatch.setattr(support.config, "browser_debug_overlay", False)
 
 
 async def test_click_resolves_ref_and_clicks(fake_session: FakeSession) -> None:

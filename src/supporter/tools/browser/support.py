@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 from weakref import WeakKeyDictionary
 
+from ...config import config
 from ...logger import logger
 from ..base import ToolError
 from ..file_ops import validate_path
@@ -15,7 +17,9 @@ __all__ = [
     "_EVAL_DETAIL_MAX",
     "_PAGE_IDS",
     "_PAGE_ID_SEQ",
+    "_REF_VISIBLE_TIMEOUT_MS",
     "_ROLE_NAME_JS",
+    "_SETTLE_TIMEOUT_MS",
     "_capture",
     "_confirm_always",
     "_confirm_or_block",
@@ -39,12 +43,15 @@ __all__ = [
     "_snapshot_text",
     "_validate_path_or_error",
     "_wrap_action_errors",
+    "config",
 ]
 
 _PAGE_IDS: WeakKeyDictionary[Any, str] = WeakKeyDictionary()
 _PAGE_ID_SEQ = 0
 
 _EVAL_DETAIL_MAX = 500
+_REF_VISIBLE_TIMEOUT_MS = 8_000
+_SETTLE_TIMEOUT_MS = 2000
 
 
 async def _page_or_error() -> Any:
@@ -89,7 +96,7 @@ async def _require_ref(page: Any, ref: str) -> Any:
 
     try:
         locator = page.locator(f"aria-ref={ref}")
-        await locator.wait_for(state="visible", timeout=5_000)
+        await locator.wait_for(state="visible", timeout=_REF_VISIBLE_TIMEOUT_MS)
         return locator
     except PlaywrightTimeoutError:
         return None
@@ -188,6 +195,11 @@ async def _confirm_always(title: str, detail: str) -> str | None:
 
 
 async def _effective_fast(page: Any) -> bool:
+    # The debug overlay only paints a visible cursor trail along the humanized
+    # movement path; fast mode would replace it with an instant click and show
+    # nothing. When the overlay is on, force the visible path on every host.
+    if config.browser_debug_overlay:
+        return False
     return guardrails.host_is_fast(await _page_host(page))
 
 
@@ -257,7 +269,11 @@ async def _snapshot_full(page: Any, req: BrowseRequest, label: str = "") -> str:
 
 
 async def _post_action_snapshot(page: Any, req: BrowseRequest) -> str:
+    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+
     await page.wait_for_timeout(humanize.jitter_ms(0.3, 0.3, 0.15, 0.6))
+    with contextlib.suppress(PlaywrightTimeoutError):
+        await page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
     return await _capture(page, req, force_full=False, label=f" after {req.action}")
 
 

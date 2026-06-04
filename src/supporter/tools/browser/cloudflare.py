@@ -25,8 +25,10 @@ _CHECKBOX_SELECTORS: tuple[str, ...] = (
     "[role=checkbox]",
 )
 
-# Seconds to let Cloudflare process the click before checking for completion.
-_SETTLE_SECONDS = 1.2
+# Poll interval and overall budget for confirming the click landed (token
+# populated or frame detached), instead of a single fixed settle + one read.
+_SOLVE_POLL_SECONDS = 0.4
+_SOLVE_TIMEOUT_SECONDS = 5.0
 
 
 def _turnstile_frame(page: Page) -> Frame | None:
@@ -46,19 +48,29 @@ async def detect_turnstile_in_page(page: Page) -> bool:
         return False
 
 
-async def _looks_solved(page: Page, frame: Frame) -> bool:
-    await asyncio.sleep(_SETTLE_SECONDS)
-    if frame not in page.frames:
-        return True
+async def _read_token(page: Page) -> str:
     try:
         token = await page.evaluate(
             "() => { const el = document.querySelector("
             "'[name=cf-turnstile-response]'); return el ? el.value : ''; }"
         )
-        return bool(token)
+        return token or ""
     except Exception as exc:
         logger.debug(f"Turnstile token check failed: {exc}")
-        return False
+        return ""
+
+
+async def _looks_solved(page: Page, frame: Frame) -> bool:
+    elapsed = 0.0
+    while True:
+        if frame not in page.frames:
+            return True
+        if await _read_token(page):
+            return True
+        if elapsed >= _SOLVE_TIMEOUT_SECONDS:
+            return False
+        await asyncio.sleep(_SOLVE_POLL_SECONDS)
+        elapsed += _SOLVE_POLL_SECONDS
 
 
 async def solve_cloudflare(page: Page) -> str:

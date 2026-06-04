@@ -331,3 +331,24 @@ async def test_realize_and_fix() -> None:
         await humanize._realize_and_fix(cast("Any", keyboard), 2)
     presses = [k for op, k in keyboard.events if op == "press"]
     assert presses == ["Backspace", "Backspace"]
+
+
+async def test_human_click_drives_overlay_when_flag_enabled() -> None:
+    random.seed(1)
+    page = _FakePage()
+    clicks: list[tuple[float, float]] = []
+
+    async def fake_click(_page: Any, x: float, y: float) -> None:
+        clicks.append((x, y))
+
+    async def fake_move(_page: Any, x: float, y: float) -> None:
+        pass
+
+    with (
+        _no_sleep(),
+        patch.object(humanize.config, "browser_debug_overlay", True),
+        patch.object(humanize.debug_overlay, "overlay_click", fake_click),
+        patch.object(humanize.debug_overlay, "overlay_move", fake_move),
+    ):
+        await humanize.human_click(cast("Page", page), "e1")
+    assert len(clicks) == 1

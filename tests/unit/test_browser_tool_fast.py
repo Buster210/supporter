@@ -10,7 +10,10 @@ def _run_effective_fast(host: str) -> bool:
     async def fake_host(_page: object) -> str:
         return host
 
-    with patch.object(support, "_page_host", fake_host):
+    with (
+        patch.object(support, "_page_host", fake_host),
+        patch.object(support.config, "browser_debug_overlay", False),
+    ):
         return asyncio.run(support._effective_fast(object()))
 
 

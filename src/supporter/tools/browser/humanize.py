@@ -5,8 +5,16 @@ import math
 import random
 from typing import TYPE_CHECKING, Final, Literal
 
+from ...config import config
+from . import debug_overlay
+
 if TYPE_CHECKING:
     from patchright.async_api import Keyboard, Locator, Mouse, Page, ViewportSize
+
+__all__ = [
+    "config",
+    "debug_overlay",
+]
 
 
 def bezier_2d(t: float, points: tuple[tuple[float, float], ...]) -> tuple[float, float]:
@@ -162,10 +170,14 @@ def _origin_for(viewport: ViewportSize | None) -> tuple[float, float]:
 
 
 async def _move_cursor(
-    mouse: Mouse, target: tuple[float, float], viewport: ViewportSize | None
+    mouse: Mouse,
+    target: tuple[float, float],
+    viewport: ViewportSize | None,
+    page: Page | None = None,
 ) -> None:
     global _LAST_POS
     start = _origin_for(viewport)
+    dbg = page is not None and config.browser_debug_overlay
 
     control_points = random_control_points(start, target, count=3)
     duration_ms = fitts_duration(start, target) + random.uniform(100, 300)
@@ -177,7 +189,11 @@ async def _move_cursor(
         jt = minimum_jerk(step / steps, 0.0, 1.0)
         mx, my = bezier_2d(jt, control_points)
         sigma = _tremor_sigma(mx - prev_x, my - prev_y, step_delay)
-        await mouse.move(mx + random.gauss(0.0, sigma), my + random.gauss(0.0, sigma))
+        nx = mx + random.gauss(0.0, sigma)
+        ny = my + random.gauss(0.0, sigma)
+        await mouse.move(nx, ny)
+        if dbg:
+            await debug_overlay.overlay_move(page, nx, ny)
         prev_x, prev_y = mx, my
         await asyncio.sleep(_lognormal_delay(step_delay, 0.3, 0.0, step_delay * 4))
         if random.random() < _MID_MOVE_PAUSE_PROBABILITY:
@@ -187,6 +203,8 @@ async def _move_cursor(
         await _overshoot_correction(mouse, start, target)
 
     await mouse.move(*target)
+    if dbg:
+        await debug_overlay.overlay_move(page, target[0], target[1])
     _LAST_POS = target
 
 
@@ -222,7 +240,7 @@ async def _idle_cursor_drift(page: Page) -> None:
         ox + random.uniform(-_CURSOR_DRIFT_MAX, _CURSOR_DRIFT_MAX),
         oy + random.uniform(-_CURSOR_DRIFT_MAX, _CURSOR_DRIFT_MAX),
     )
-    await _move_cursor(page.mouse, drift, page.viewport_size)
+    await _move_cursor(page.mouse, drift, page.viewport_size, page=page)
 
 
 async def _idle_position_scroll(page: Page) -> None:
@@ -246,9 +264,9 @@ async def _idle_hover_reconsider(page: Page) -> None:
         ox + random.uniform(-_RECONSIDER_REACH, _RECONSIDER_REACH),
         oy + random.uniform(-_RECONSIDER_REACH, _RECONSIDER_REACH),
     )
-    await _move_cursor(page.mouse, away, page.viewport_size)
+    await _move_cursor(page.mouse, away, page.viewport_size, page=page)
     await asyncio.sleep(_lognormal_delay(0.2, 0.4, 0.08, 0.8))
-    await _move_cursor(page.mouse, (ox, oy), page.viewport_size)
+    await _move_cursor(page.mouse, (ox, oy), page.viewport_size, page=page)
 
 
 async def _idle_scroll_back_reread(page: Page) -> None:
@@ -300,16 +318,18 @@ async def human_click(
     target = await _element_target(page, ref, locator)
     mouse: Mouse = page.mouse
 
-    await _move_cursor(mouse, target, page.viewport_size)
+    await _move_cursor(mouse, target, page.viewport_size, page=page)
     await asyncio.sleep(_lognormal_delay(0.09, 0.3, 0.05, 0.15))
     await mouse.click(target[0], target[1], button=button)
+    if config.browser_debug_overlay:
+        await debug_overlay.overlay_click(page, target[0], target[1])
     await asyncio.sleep(_lognormal_delay(0.18, 0.3, 0.1, 0.3))
 
 
 async def human_hover(page: Page, ref: str, *, locator: Locator | None = None) -> None:
     await idle_flourish(page)
     target = await _element_target(page, ref, locator)
-    await _move_cursor(page.mouse, target, page.viewport_size)
+    await _move_cursor(page.mouse, target, page.viewport_size, page=page)
     await asyncio.sleep(_lognormal_delay(0.09, 0.3, 0.05, 0.15))
 
 

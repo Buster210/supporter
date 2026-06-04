@@ -221,7 +221,7 @@ def test_actions_per_minute_max_default(
 
     monkeypatch.delenv("BROWSER_ACTIONS_PER_MIN", raising=False)
     importlib.reload(guardrails)
-    assert guardrails.ACTIONS_PER_MINUTE_MAX == 40
+    assert guardrails.ACTIONS_PER_MINUTE_MAX == 24
 
 
 def test_session_idle_gap_range_from_env(

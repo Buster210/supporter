@@ -84,7 +84,8 @@ async def test_solve_no_checkbox_returns_manual(monkeypatch: Any) -> None:
 async def test_solve_clicks_and_confirms(monkeypatch: Any) -> None:
     click = AsyncMock()
     monkeypatch.setattr(humanize, "human_click", click)
-    monkeypatch.setattr(cloudflare, "_SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(cloudflare, "_SOLVE_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(cloudflare, "_SOLVE_TIMEOUT_SECONDS", 0.0)
     page = _Page([_cf_frame(checkbox_count=1)], cf_response="solved-token")
     result = await cloudflare.solve_cloudflare(page)  # type: ignore[arg-type]
     assert result == "Cloudflare Turnstile solved."
@@ -95,14 +96,16 @@ async def test_solve_clicks_and_confirms(monkeypatch: Any) -> None:
 
 async def test_solve_clicks_unconfirmed(monkeypatch: Any) -> None:
     monkeypatch.setattr(humanize, "human_click", AsyncMock())
-    monkeypatch.setattr(cloudflare, "_SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(cloudflare, "_SOLVE_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(cloudflare, "_SOLVE_TIMEOUT_SECONDS", 0.0)
     page = _Page([_cf_frame(checkbox_count=1)], cf_response="")
     result = await cloudflare.solve_cloudflare(page)  # type: ignore[arg-type]
     assert "could not confirm" in result
 
 
 async def test_looks_solved_when_frame_detaches(monkeypatch: Any) -> None:
-    monkeypatch.setattr(cloudflare, "_SETTLE_SECONDS", 0.0)
+    monkeypatch.setattr(cloudflare, "_SOLVE_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(cloudflare, "_SOLVE_TIMEOUT_SECONDS", 0.0)
     frame = _cf_frame(checkbox_count=1)
-    page = _Page([])  # frame no longer attached
+    page = _Page([])
     assert await cloudflare._looks_solved(page, frame) is True  # type: ignore[arg-type]

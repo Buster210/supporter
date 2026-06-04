@@ -76,6 +76,7 @@ class AppConfig:
     history_max_turns: int = 200
     browser_profile_path: str | None = None
     browser_profile_name: str | None = None
+    browser_debug_overlay: bool = False
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2
@@ -83,9 +84,10 @@ class AppConfig:
     reconnect_attempts_max: int = 5
     reconnect_backoff_base: float = 0.5
     reconnect_backoff_cap: float = 8.0
-    keepalive_interval: float = 20.0
     prewarm_safety_margin: float = 5.0
+    keepalive_interval: float = 20.0
     keepalive_enabled: bool = True
+    idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
 
 

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...config import config
 from ...logger import logger
-from . import blocklist, guardrails, humanize, recorder
+from . import blocklist, debug_overlay, guardrails, humanize, recorder
 from . import profiles as profiles_mod
 
 __all__: list[str] = ["guardrails", "profiles_mod"]
@@ -216,10 +216,6 @@ def pinned_open() -> bool:
 
 def is_active() -> bool:
     return _PAGE is not None
-
-
-def is_launching() -> bool:
-    return _LAUNCHING
 
 
 def active_page() -> Any:
@@ -528,6 +524,8 @@ async def get_session() -> tuple[Any, Any, Any]:
         else:
             _PAGE = await _CONTEXT.new_page()
         await _PAGE.bring_to_front()
+        if config.browser_debug_overlay:
+            await debug_overlay.inject_overlay(_PAGE)
 
         _LAST_ACTION_TS = time.monotonic()
         logger.info("Browser session launched")

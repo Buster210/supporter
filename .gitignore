@@ -22,3 +22,4 @@ dist/
 
 # test artifact: tests/unit/test_bash.py touches this in CWD
 mutation_test
+.claude/workers/
