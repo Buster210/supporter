@@ -5,16 +5,15 @@ from collections.abc import Awaitable, Callable
 
 from ...logger import logger
 from .. import resolved_project_root
-from . import guardrails, humanize, session, snapshot
-from .tool import (
-    BrowseRequest,
+from . import cloudflare, guardrails, humanize, session, snapshot
+from .core import BrowseRequest, _page_host
+from .support import (
     _confirm_always,
     _confirm_or_block,
     _confirm_script,
     _diff_text,
     _effective_fast,
     _page_baseline_key,
-    _page_host,
     _page_or_error,
     _post_action_snapshot,
     _render_script_result,
@@ -41,6 +40,8 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     if not await _effective_fast(page):
         await humanize.reading_pause(page)
     result = await _snapshot_full(page, req)
+    if await cloudflare.detect_turnstile_in_page(page):
+        result = "[Turnstile detected] — call solve_cloudflare to proceed.\n\n" + result
     if not session.keep_open():
         result += (
             "\n(When the task is finished, call finish_task to wrap up; "
@@ -547,6 +548,12 @@ async def _handle_download(req: BrowseRequest) -> str:
     return f"Downloaded to {final}"
 
 
+@_wrap_action_errors("solve_cloudflare")
+async def _handle_solve_cloudflare(req: BrowseRequest) -> str:
+    page = await _page_or_error()
+    return await cloudflare.solve_cloudflare(page)
+
+
 HANDLERS: dict[str, Callable[[BrowseRequest], Awaitable[str]]] = {
     "navigate": _handle_navigate,
     "back": _handle_back,
@@ -575,4 +582,5 @@ HANDLERS: dict[str, Callable[[BrowseRequest], Awaitable[str]]] = {
     "waitnetwork": _handle_waitnetwork,
     "close": _handle_close,
     "closenow": _handle_closenow,
+    "solve_cloudflare": _handle_solve_cloudflare,
 }

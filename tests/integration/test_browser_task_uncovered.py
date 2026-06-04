@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-from supporter.tools.browser import task
-from supporter.tools.browser.tool import BrowseRequest
+from supporter.tools.browser import recorder
+from supporter.tools.browser.core import BrowseRequest
+from supporter.tools.browser.recorder import discard, finish, start
+from supporter.tools.browser.task import (
+    query_playbook,
+    replay_playbook,
+)
 
 from .conftest import FakeSession
 
 
 @pytest.fixture(autouse=True)
 def _reset_task_state() -> None:
-    task.discard()
+    discard()
 
 
 async def test_replay_playbook_no_active_page(fake_session: FakeSession) -> None:
@@ -26,43 +31,43 @@ async def test_replay_playbook_no_active_page(fake_session: FakeSession) -> None
     session_module.active_page = mock_active_page
 
     try:
-        result = await task.replay_playbook("test goal")
+        result = await replay_playbook("test goal")
         assert "No active page; navigate first, then replay a playbook." in result
     finally:
         session_module.active_page = original_active_page
 
 
 async def test_start_task_empty_goal() -> None:
-    result = task.start("")
+    result = start("")
     assert "Error: a task goal is required." in result
 
 
 async def test_finish_task_no_active_task() -> None:
-    result = await task.finish(True, "example.test")
+    result = await finish(True)
     assert "No task is being recorded." in result
 
 
 async def test_finish_task_unsuccessful() -> None:
-    task.start("test goal")
-    result = await task.finish(False, "example.test")
+    start("test goal")
+    result = await finish(False)
     assert "Task 'test goal' ended (success=False); nothing saved." in result
 
 
 async def test_finish_task_failed_steps() -> None:
-    task.start("test goal")
-    active_task = task._ACTIVE
+    start("test goal")
+    active_task = recorder._ACTIVE
     if active_task is not None:
         active_task.failed = True
-    result = await task.finish(True, "example.test")
+    result = await finish(True)
     assert "Task 'test goal' had an error or unsafe step; nothing saved." in result
 
 
 async def test_finish_task_no_steps() -> None:
-    task.start("test goal")
-    active_task = task._ACTIVE
+    start("test goal")
+    active_task = recorder._ACTIVE
     if active_task is not None:
         active_task.steps = []
-    result = await task.finish(True, "example.test")
+    result = await finish(True)
     assert "Task 'test goal' recorded no reusable steps; nothing saved." in result
 
 
@@ -77,24 +82,23 @@ async def test_query_playbook_no_active_page(fake_session: FakeSession) -> None:
     session_module.active_page = mock_active_page2
 
     try:
-        result = await task.query_playbook("test goal")
+        result = await query_playbook("test goal")
         assert "No active page; navigate first, then query a playbook." in result
     finally:
         session_module.active_page = original_active_page
 
 
 async def test_record_step_exception_caught(fake_session: FakeSession) -> None:
-    from supporter.tools.browser import task as browser_task
-    from supporter.tools.browser.task import _record_step
+    from supporter.tools.browser.recorder import _record_step
 
-    browser_task.start("test goal")
+    recorder.start("test goal")
 
-    original_record = browser_task.record
+    original_record = recorder.record
 
     def _raising_record(step: object) -> None:
         raise ValueError("simulated record failure")
 
-    browser_task.record = _raising_record
+    recorder.record = _raising_record
 
     try:
         req = BrowseRequest(
@@ -103,5 +107,5 @@ async def test_record_step_exception_caught(fake_session: FakeSession) -> None:
         )
         await _record_step(req, "test result")
     finally:
-        browser_task.record = original_record
-        browser_task.discard()
+        recorder.record = original_record
+        recorder.discard()

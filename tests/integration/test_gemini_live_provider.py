@@ -1603,7 +1603,7 @@ async def test_keepalive_no_storm_after_reconnect(provider: Any) -> None:
         prewarm_call_count += 1
         original_schedule()
 
-    provider._schedule_prewarm = counting_schedule_prewarm  # type: ignore[assignment]
+    provider._schedule_prewarm = counting_schedule_prewarm
 
     new_session = AsyncMock()
     mock_mgr = MagicMock()

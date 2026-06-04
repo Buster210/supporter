@@ -40,8 +40,7 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         return _BUILTIN_CATALOG_CACHE[include_bash]
 
     from .bash.executor import execute_bash
-    from .browser.tool import (
-        browse,
+    from .browser.task import (
         delete_playbook,
         finish_task,
         list_playbooks,
@@ -49,6 +48,7 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         replay_playbook,
         start_task,
     )
+    from .browser.tool import browse
     from .delegate.api import cancel_delegation, check_delegation, delegate_tasks
     from .delegate.capsule_query import query_delegation
     from .file_ops import read_file, write_file

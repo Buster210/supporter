@@ -3,15 +3,15 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import patch
 
-from supporter.tools.browser import tool
+from supporter.tools.browser import support
 
 
 def _run_effective_fast(host: str) -> bool:
     async def fake_host(_page: object) -> str:
         return host
 
-    with patch.object(tool, "_page_host", fake_host):
-        return asyncio.run(tool._effective_fast(object()))
+    with patch.object(support, "_page_host", fake_host):
+        return asyncio.run(support._effective_fast(object()))
 
 
 def test_allowlisted_host_runs_fast() -> None:

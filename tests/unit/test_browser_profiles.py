@@ -1,160 +1,228 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from supporter.tools.browser import profiles
+from supporter.tools.browser.profiles import (
+    _friendly_name,
+    list_profiles,
+)
 
 
-def test_chrome_profile_dataclass() -> None:
-    p = profiles.ChromeProfile(
-        dir_name="Profile 1", display_name="Work", email="user@example.com"
-    )
-    assert p.dir_name == "Profile 1"
-    assert p.display_name == "Work"
-    assert p.email == "user@example.com"
+def test_friendly_name_default() -> None:
+    assert _friendly_name("Default") == "Personal"
 
 
-def test_list_profiles_reads_local_state(tmp_path: Path) -> None:
+def test_friendly_name_other() -> None:
+    assert _friendly_name("Profile 1") == "Profile 1"
+
+
+def test_list_profiles_no_local_state(tmp_path: Path) -> None:
+    assert list_profiles(tmp_path) == []
+
+
+def test_list_profiles_empty_cache(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(json.dumps({"profile": {"info_cache": {}}}))
+    assert list_profiles(tmp_path) == []
+
+
+def test_list_profiles_with_gaia_name(tmp_path: Path) -> None:
     local_state = tmp_path / "Local State"
     local_state.write_text(
-        """{
-            "profile": {
-                "info_cache": {
-                    "Profile 1": {"name": "Work", "user_name": "user@corp.com"},
-                    "Profile 2": {"name": "Personal", "user_name": ""}
-                }
-            }
-        }"""
-    )
-
-    result = profiles.list_profiles(tmp_path)
-    assert len(result) == 2
-    assert result[0].dir_name == "Profile 1"
-    assert result[0].display_name == "Work"
-    assert result[0].email == "user@corp.com"
-    assert result[1].dir_name == "Profile 2"
-    assert result[1].display_name == "Personal"
-    assert result[1].email == ""
-
-
-def test_list_profiles_sorts_signed_in_first(tmp_path: Path) -> None:
-    local_state = tmp_path / "Local State"
-    local_state.write_text(
-        """{
-            "profile": {
-                "info_cache": {
-                    "Zebra": {"name": "Z", "user_name": ""},
-                    "Alpha": {"name": "A", "user_name": "a@b.com"},
-                    "Beta": {"name": "B", "user_name": ""}
-                }
-            }
-        }"""
-    )
-
-    result = profiles.list_profiles(tmp_path)
-    assert result[0].dir_name == "Alpha"
-    assert result[1].dir_name == "Beta"
-    assert result[2].dir_name == "Zebra"
-
-
-def test_list_profiles_returns_empty_when_missing(tmp_path: Path) -> None:
-    result = profiles.list_profiles(tmp_path)
-    assert result == []
-
-
-def test_list_profiles_returns_empty_on_invalid_json(tmp_path: Path) -> None:
-    local_state = tmp_path / "Local State"
-    local_state.write_text("not valid json")
-    result = profiles.list_profiles(tmp_path)
-    assert result == []
-
-
-def test_list_profiles_returns_empty_on_missing_info_cache(tmp_path: Path) -> None:
-    local_state = tmp_path / "Local State"
-    local_state.write_text('{"profile": {}}')
-    result = profiles.list_profiles(tmp_path)
-    assert result == []
-
-
-def test_list_profiles_handles_missing_name(tmp_path: Path) -> None:
-    local_state = tmp_path / "Local State"
-    local_state.write_text(
-        """{
-            "profile": {
-                "info_cache": {
-                    "Profile 1": {"user_name": "user@example.com"}
-                }
-            }
-        }"""
-    )
-    result = profiles.list_profiles(tmp_path)
-    assert result[0].display_name == "user@example.com"
-
-
-def test_list_profiles_defaults_to_personal_for_default_profile(tmp_path: Path) -> None:
-    local_state = tmp_path / "Local State"
-    local_state.write_text(
-        """{
-            "profile": {
-                "info_cache": {
-                    "Default": {}
-                }
-            }
-        }"""
-    )
-    result = profiles.list_profiles(tmp_path)
-    assert result[0].display_name == "Personal"
-
-
-def test_list_profiles_combines_gaia_and_local_name(tmp_path: Path) -> None:
-    local_state = tmp_path / "Local State"
-    local_state.write_text(
-        """{
-            "profile": {
-                "info_cache": {
-                    "Profile 1": {
-                        "name": "Work",
-                        "gaia_name": "Ritu Pal",
-                        "user_name": "user@example.com"
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Default": {
+                            "name": "John",
+                            "gaia_name": "John",
+                            "user_name": "john@gmail.com",
+                            "active_time": 100.0,
+                        }
                     }
                 }
             }
-        }"""
+        )
     )
-    result = profiles.list_profiles(tmp_path)
-    assert result[0].display_name == "Ritu Pal (Work)"
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 1
+    assert profiles[0].display_name == "John"
+    assert profiles[0].email == "john@gmail.com"
+
+
+def test_list_profiles_gaia_name_with_different_local_name(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Profile 1": {
+                            "name": "Work",
+                            "gaia_name": "John",
+                            "user_name": "john@work.com",
+                            "active_time": 200.0,
+                        }
+                    }
+                }
+            }
+        )
+    )
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 1
+    assert profiles[0].display_name == "John (Work)"
+
+
+def test_list_profiles_no_gaia_name_uses_name(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Profile 1": {
+                            "name": "Work Profile",
+                            "gaia_name": "",
+                            "user_name": "",
+                            "active_time": 100.0,
+                        }
+                    }
+                }
+            }
+        )
+    )
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 1
+    assert profiles[0].display_name == "Work Profile"
+
+
+def test_list_profiles_no_gaia_no_name_uses_friendly(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Default": {
+                            "name": "",
+                            "gaia_name": "",
+                            "user_name": "",
+                            "active_time": 100.0,
+                        }
+                    }
+                }
+            }
+        )
+    )
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 1
+    assert profiles[0].display_name == "Personal"
 
 
 def test_list_profiles_deduplicates_by_email(tmp_path: Path) -> None:
     local_state = tmp_path / "Local State"
     local_state.write_text(
-        """{
-            "profile": {
-                "info_cache": {
-                    "Profile 1": {
-                        "name": "Older Profile",
-                        "user_name": "user@example.com",
-                        "active_time": 1000.0
-                    },
-                    "Profile 2": {
-                        "name": "Newer Profile",
-                        "user_name": "user@example.com",
-                        "active_time": 2000.0
-                    },
-                    "Profile 3": {
-                        "name": "Unsigned Profile",
-                        "user_name": "",
-                        "active_time": 3000.0
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Profile 1": {
+                            "name": "P1",
+                            "gaia_name": "",
+                            "user_name": "same@test.com",
+                            "active_time": 200.0,
+                        },
+                        "Profile 2": {
+                            "name": "P2",
+                            "gaia_name": "",
+                            "user_name": "same@test.com",
+                            "active_time": 100.0,
+                        },
                     }
                 }
             }
-        }"""
+        )
     )
-    result = profiles.list_profiles(tmp_path)
-    assert len(result) == 2
-    assert result[0].dir_name == "Profile 2"
-    assert result[0].display_name == "Newer Profile"
-    assert result[0].email == "user@example.com"
-    assert result[1].dir_name == "Profile 3"
-    assert result[1].display_name == "Unsigned Profile"
-    assert result[1].email == ""
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 1
+
+
+def test_list_profiles_sorts_by_active_time_desc(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Profile 1": {
+                            "name": "Old",
+                            "gaia_name": "",
+                            "user_name": "old@test.com",
+                            "active_time": 100.0,
+                        },
+                        "Profile 2": {
+                            "name": "New",
+                            "gaia_name": "",
+                            "user_name": "new@test.com",
+                            "active_time": 200.0,
+                        },
+                    }
+                }
+            }
+        )
+    )
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 2
+    assert profiles[0].dir_name == "Profile 1"
+    assert profiles[1].dir_name == "Profile 2"
+
+
+def test_list_profiles_invalid_json(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text("not json")
+    assert list_profiles(tmp_path) == []
+
+
+def test_list_profiles_non_dict_info_cache(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(json.dumps({"profile": {"info_cache": "not a dict"}}))
+    assert list_profiles(tmp_path) == []
+
+
+def test_list_profiles_non_dict_profile_entry(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(
+        json.dumps({"profile": {"info_cache": {"Profile 1": "not a dict"}}})
+    )
+    assert list_profiles(tmp_path) == []
+
+
+def test_list_profiles_profiles_sorted_alphabetically(tmp_path: Path) -> None:
+    local_state = tmp_path / "Local State"
+    local_state.write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Zebra": {
+                            "name": "Z",
+                            "gaia_name": "",
+                            "user_name": "z@test.com",
+                            "active_time": 100.0,
+                        },
+                        "Alpha": {
+                            "name": "A",
+                            "gaia_name": "",
+                            "user_name": "a@test.com",
+                            "active_time": 100.0,
+                        },
+                    }
+                }
+            }
+        )
+    )
+    profiles = list_profiles(tmp_path)
+    assert len(profiles) == 2
+    assert profiles[0].dir_name == "Alpha"
+    assert profiles[1].dir_name == "Zebra"

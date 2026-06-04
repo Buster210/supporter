@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from supporter.tools.base import ToolError
-from supporter.tools.browser import session, tool
-from supporter.tools.browser.tool import BrowseRequest
+from supporter.tools.browser import core, session, support
+from supporter.tools.browser.core import BrowseRequest
 
 
 def _req(**kw: Any) -> BrowseRequest:
@@ -16,7 +16,7 @@ def _req(**kw: Any) -> BrowseRequest:
 
 
 def _wrap(action: str, body: Callable[[BrowseRequest], Awaitable[str]]) -> Any:
-    return tool._wrap_action_errors(action)(body)
+    return support._wrap_action_errors(action)(body)
 
 
 async def test_wrap_passes_through_success() -> None:
@@ -62,13 +62,13 @@ _TREE = '- document [ref=e1]:\n  - button "OK" [ref=e2]'
 
 
 def test_render_snapshot_lossless_when_not_compact() -> None:
-    out = tool._render_snapshot(_TREE, _req(compact=False), "", "https://x.test/")
+    out = support._render_snapshot(_TREE, _req(compact=False), "", "https://x.test/")
     assert "OK" in out
     assert "interactive elements" not in out
 
 
 def test_render_snapshot_compact_counts_interactive() -> None:
-    out = tool._render_snapshot(
+    out = support._render_snapshot(
         _TREE, _req(compact=True), " after click", "https://x.test/"
     )
     assert "interactive elements after click" in out
@@ -76,7 +76,7 @@ def test_render_snapshot_compact_counts_interactive() -> None:
 
 
 def test_render_snapshot_empty_tree_reports_empty_page() -> None:
-    out = tool._render_snapshot("", _req(compact=False), "", "https://x.test/")
+    out = support._render_snapshot("", _req(compact=False), "", "https://x.test/")
     assert out == "(empty page)"
 
 
@@ -84,14 +84,14 @@ def test_page_key_returns_url() -> None:
     class P:
         url = "https://x.test/p"
 
-    assert tool._page_key(P()) == "https://x.test/p"
+    assert support._page_key(P()) == "https://x.test/p"
 
 
 def test_page_key_empty_url_is_empty_string() -> None:
     class P:
         url = ""
 
-    assert tool._page_key(P()) == ""
+    assert support._page_key(P()) == ""
 
 
 def test_page_key_swallows_url_failure() -> None:
@@ -100,7 +100,7 @@ def test_page_key_swallows_url_failure() -> None:
         def url(self) -> str:
             raise RuntimeError("detached")
 
-    assert tool._page_key(P()) == ""
+    assert support._page_key(P()) == ""
 
 
 def test_baseline_key_is_stable_per_page() -> None:
@@ -108,8 +108,8 @@ def test_baseline_key_is_stable_per_page() -> None:
         pass
 
     page = P()
-    first = tool._page_baseline_key(page)
-    second = tool._page_baseline_key(page)
+    first = support._page_baseline_key(page)
+    second = support._page_baseline_key(page)
     assert first == second
     assert first.startswith("pg")
 
@@ -118,27 +118,27 @@ def test_baseline_key_differs_across_pages() -> None:
     class P:
         pass
 
-    assert tool._page_baseline_key(P()) != tool._page_baseline_key(P())
+    assert support._page_baseline_key(P()) != support._page_baseline_key(P())
 
 
 def test_baseline_key_empty_when_weakref_unsupported() -> None:
-    assert tool._page_baseline_key(123) == ""
+    assert support._page_baseline_key(123) == ""
 
 
 def test_diff_header_strips_scheme() -> None:
     assert (
-        tool._diff_header("https://x.test/page")
+        support._diff_header("https://x.test/page")
         == "diff vs last snapshot (x.test/page):"
     )
 
 
 def test_diff_header_empty_key() -> None:
-    assert tool._diff_header("") == "diff vs last snapshot:"
+    assert support._diff_header("") == "diff vs last snapshot:"
 
 
 def test_diff_header_truncates_long_tail() -> None:
     key = "https://x.test/" + "a" * 100
-    header = tool._diff_header(key)
+    header = support._diff_header(key)
     assert header.endswith("...):")
     inner = header[len("diff vs last snapshot (") : -len("):")]
     assert len(inner) == 60
@@ -146,7 +146,7 @@ def test_diff_header_truncates_long_tail() -> None:
 
 
 def test_render_script_result_json_roundtrip() -> None:
-    assert tool._render_script_result({"a": 1}) == json.dumps({"a": 1}, default=str)
+    assert support._render_script_result({"a": 1}) == json.dumps({"a": 1}, default=str)
 
 
 def test_render_script_result_falls_back_to_str() -> None:
@@ -154,11 +154,11 @@ def test_render_script_result_falls_back_to_str() -> None:
         def __str__(self) -> str:
             return "OPAQUE"
 
-    assert "OPAQUE" in tool._render_script_result(NotJson())
+    assert "OPAQUE" in support._render_script_result(NotJson())
 
 
 def test_render_script_result_truncates_over_2000() -> None:
-    out = tool._render_script_result("z" * 5000)
+    out = support._render_script_result("z" * 5000)
     assert out.endswith("...(truncated)")
     assert len(out) == 2000 + len("...(truncated)")
 
@@ -167,13 +167,13 @@ def test_render_script_result_fallback_on_json_failure() -> None:
     deep: Any = []
     for _ in range(2000):
         deep = [deep]
-    out = tool._render_script_result(deep)
+    out = support._render_script_result(deep)
     assert isinstance(out, str)
     assert len(out) > 0
 
 
 def test_validate_path_accepts_in_project_relative() -> None:
-    resolved, err = tool._validate_path_or_error("notes.txt")
+    resolved, err = support._validate_path_or_error("notes.txt")
     assert err is None
     assert resolved is not None
     assert str(resolved).endswith("notes.txt")
@@ -185,13 +185,13 @@ async def test_resolve_role_and_name_returns_empty_on_failure() -> None:
             msg = "element detached"
             raise RuntimeError(msg)
 
-    role, name = await tool._resolve_role_and_name(_BrokenLocator(), "e5")
+    role, name = await support._resolve_role_and_name(_BrokenLocator(), "e5")
     assert role == ""
     assert name == ""
 
 
 def test_validate_path_rejects_traversal() -> None:
-    resolved, err = tool._validate_path_or_error("../../etc/passwd")
+    resolved, err = support._validate_path_or_error("../../etc/passwd")
     assert resolved is None
     assert err is not None
     assert err.startswith("Error: ")
@@ -208,7 +208,7 @@ async def test_page_or_error_raises_tool_error_on_failure(
     monkeypatch.setattr(session, "get_session", raise_get_session)
 
     with pytest.raises(ToolError, match="Browser session failed"):
-        await tool._page_or_error()
+        await support._page_or_error()
 
 
 async def test_session_parts_raises_tool_error_on_failure(
@@ -221,14 +221,14 @@ async def test_session_parts_raises_tool_error_on_failure(
     monkeypatch.setattr(session, "get_session", raise_get_session)
 
     with pytest.raises(ToolError, match="Browser session failed"):
-        await tool._session_parts()
+        await support._session_parts()
 
 
 async def test_page_host_reads_url_property() -> None:
     class _Page:
         url = "https://www.GitHub.com/foo?x=1"
 
-    assert await tool._page_host(_Page()) == "github.com"
+    assert await core._page_host(_Page()) == "github.com"
 
 
 async def test_page_host_returns_empty_on_url_failure() -> None:
@@ -237,4 +237,4 @@ async def test_page_host_returns_empty_on_url_failure() -> None:
         def url(self) -> str:
             raise RuntimeError("page crashed")
 
-    assert await tool._page_host(_BrokenPage()) == ""
+    assert await core._page_host(_BrokenPage()) == ""

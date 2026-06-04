@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from supporter.tools.browser import guardrails, humanize, session
+from supporter.tools.browser import guardrails, session
 from tests.browser_fakes import FakeContext, FakePage, make_session
 
 if TYPE_CHECKING:
@@ -79,7 +79,7 @@ def fake_session(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSession]:
     async def no_sleep(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(humanize.asyncio, "sleep", no_sleep)  # type: ignore[attr-defined]
+    monkeypatch.setattr("supporter.tools.browser.humanize.asyncio.sleep", no_sleep)
 
     yield FakeSession(
         context=context, page=page, confirm=confirm, image_sink=image_sink

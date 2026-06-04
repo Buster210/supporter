@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from supporter.tools.browser import guardrails, humanize, snapshot
+from supporter.tools.browser import guardrails, humanize, snapshot, support
 from supporter.tools.browser.tool import browse
 
 from .conftest import FakeSession
@@ -53,12 +53,10 @@ async def test_type_without_text_errors(fake_session: FakeSession) -> None:
 async def test_type_into_password_field_is_gated(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from supporter.tools.browser import tool
-
     async def password_role(_locator: object, _ref: str) -> tuple[str, str]:
         return "password", "pw"
 
-    monkeypatch.setattr(tool, "_resolve_role_and_name", password_role)
+    monkeypatch.setattr(support, "_resolve_role_and_name", password_role)
     fake_session.confirm.allow = False
 
     result = await browse("type", ref="e2", text="secret")

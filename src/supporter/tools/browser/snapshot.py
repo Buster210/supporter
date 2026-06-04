@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ...config import config
 from ...logger import logger
+from . import blocklist
 
 _REF_PATTERN = re.compile(r"\[ref=e\d+\]")
 _NODE_PATTERN = re.compile(r"^(\s*)- (.*)$")
@@ -63,14 +64,6 @@ _TRACK_PARAMS = frozenset(
     }
 )
 _URL_PARAM = re.compile(r"([?&])([^=&]+)=[^&]*")
-_AD_HOSTS = frozenset(
-    {
-        "googleadservices.com",
-        "doubleclick.net",
-        "googlesyndication.com",
-        "g.doubleclick.net",
-    }
-)
 _URL_HOST = re.compile(r"^https?://([^/]+)")
 
 
@@ -244,7 +237,7 @@ def _trim_urls(node: _Node, page_host: str = "") -> None:
     host_match = _URL_HOST.match(stripped)
     if host_match:
         href_host = _bare_host(host_match.group(1))
-        if href_host in _AD_HOSTS:
+        if blocklist.host_listed(href_host):
             node.raw = head.rstrip()
             return
         if page_host and href_host == _bare_host(page_host):

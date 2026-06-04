@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING, Any
 
 from ...config import config
 from ...logger import logger
-from . import guardrails, humanize, task
+from . import blocklist, guardrails, humanize, recorder
 from . import profiles as profiles_mod
 
-__all__ = ["profiles_mod"]
+__all__: list[str] = ["profiles_mod"]
 
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext, Page, Playwright
@@ -41,6 +41,30 @@ _FRAME_SELECTOR: str | None = None
 _SELECTED_PROFILE: str | None = None
 
 _BLANK_URLS: frozenset[str] = frozenset({"about:blank", "chrome://newtab/", ""})
+
+
+async def _install_block_route(context: Any) -> None:
+    async def _handler(route: Any) -> None:
+        request = route.request
+        try:
+            if (
+                blocklist.host_blocked(request.url)
+                or request.resource_type in blocklist.BLOCKED_TYPES
+            ):
+                await route.abort()
+            else:
+                await route.continue_()
+        except Exception as exc:
+            logger.debug(f"Block-route handler failed for {request.url}: {exc}")
+            # Leaving a route unhandled hangs the request until timeout; fall back
+            # to letting it through. If the route was already handled this no-ops.
+            try:
+                await route.continue_()
+            except Exception:
+                logger.debug(f"Block-route fallback failed for {request.url}")
+
+    await context.route("**/*", _handler)
+
 
 _STEALTH_ARGS: list[str] = []
 
@@ -464,6 +488,12 @@ async def get_session() -> tuple[Any, Any, Any]:
             clone_dir = await _clone_profile(profile)
             _CONTEXT = await _launch_or_lock_error(_PWS, clone_dir, profile)
 
+        if blocklist.should_block_resources():
+            try:
+                await _install_block_route(_CONTEXT)
+            except Exception as exc:
+                logger.warning(f"Could not install resource block route: {exc}")
+
         existing_blank = next((p for p in _CONTEXT.pages if is_blank(p)), None)
         if existing_blank is not None:
             _PAGE = existing_blank
@@ -537,7 +567,7 @@ async def close_session() -> None:
     _FRAME_SELECTOR = None
     _CLONE_LOCK = None
     humanize.reset_cursor()
-    task.discard()
+    recorder.discard()
 
 
 async def pace() -> None:

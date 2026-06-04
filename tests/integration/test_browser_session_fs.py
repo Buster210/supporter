@@ -215,6 +215,31 @@ async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     await session.prewarm_clone()
 
 
+def test_build_clone_refreshes_root_file_when_clone_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    source = tmp_path / "User Data"
+    profile = "Default"
+    (source / profile).mkdir(parents=True)
+    (source / "Local State").write_text("new-state")
+
+    clone_root = tmp_path / "clone"
+    (clone_root / profile).mkdir(parents=True)
+    stale = clone_root / "Local State"
+    stale.write_text("old-state")
+    os.utime(stale, (1, 1))
+    os.utime(source / "Local State", (10, 10))
+
+    monkeypatch.setattr(session, "_CLONE_ROOT", clone_root)
+
+    out = session._build_clone(source, profile)
+
+    assert out == clone_root
+    assert (clone_root / "Local State").read_text() == "new-state"
+
+
 async def test_prewarm_noop_when_no_profile_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

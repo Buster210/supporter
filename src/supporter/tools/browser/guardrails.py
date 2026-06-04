@@ -114,6 +114,7 @@ _PASSIVE_ACTIONS: Final = frozenset(
         "tabs",
         "tab",
         "newtab",
+        "solve_cloudflare",
     }
 )
 

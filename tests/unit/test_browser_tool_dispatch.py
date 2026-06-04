@@ -4,8 +4,9 @@ from typing import Any
 
 import pytest
 
-from supporter.tools.browser import tool
-from supporter.tools.browser.tool import BrowseRequest
+from supporter.tools.browser import support, tool
+from supporter.tools.browser.core import BrowseRequest
+from supporter.tools.browser.handlers import HANDLERS
 
 
 async def test_unknown_action_returns_error_with_sorted_valid_names() -> None:
@@ -16,8 +17,8 @@ async def test_unknown_action_returns_error_with_sorted_valid_names() -> None:
     )
     names = result.split("Valid actions: ", 1)[1]
     listed = names.split(", ")
-    assert listed == sorted(tool.HANDLERS)
-    assert set(listed) == set(tool.HANDLERS)
+    assert listed == sorted(HANDLERS)
+    assert set(listed) == set(HANDLERS)
 
 
 async def test_unknown_action_does_not_touch_a_handler(
@@ -26,7 +27,7 @@ async def test_unknown_action_does_not_touch_a_handler(
     async def boom(_req: BrowseRequest) -> str:
         raise AssertionError("handler must not run for an unknown action")
 
-    poisoned = dict.fromkeys(tool.HANDLERS, boom)
+    poisoned = dict.fromkeys(HANDLERS, boom)
     monkeypatch.setattr(tool, "HANDLERS", poisoned)
 
     result = await tool.browse("still-unknown")
@@ -116,7 +117,7 @@ async def test_action_cap_runtimeerror_surfaces_as_recoverable_string(
     async def record(_req: BrowseRequest, _result: str) -> None:
         return None
 
-    wrapped = tool._wrap_action_errors("snapshot")(capped)
+    wrapped = support._wrap_action_errors("snapshot")(capped)
     monkeypatch.setattr(tool, "HANDLERS", {"snapshot": wrapped})
     monkeypatch.setattr(tool, "_record_step", record)
 

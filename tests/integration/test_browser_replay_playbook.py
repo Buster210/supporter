@@ -5,8 +5,19 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from supporter.config import config
-from supporter.tools.browser import session, task, tool
-from supporter.tools.browser.task import Playbook, Step
+from supporter.tools.browser import recorder, session, support, tool
+from supporter.tools.browser.playbook_store import (
+    Playbook,
+    Step,
+    _save_playbook_sync,
+    load_playbook,
+)
+from supporter.tools.browser.task import (
+    delete_playbook,
+    query_playbook,
+    replay_playbook,
+    start_task,
+)
 
 if TYPE_CHECKING:
     from .conftest import FakeSession
@@ -28,13 +39,13 @@ def _save_playbook(
             for a, r, n, s in steps
         ],
     )
-    task._save_playbook_sync(pb)
+    _save_playbook_sync(pb)
 
 
 @pytest.fixture(autouse=True)
 def isolate_memory(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
-    task.discard()
+    recorder.discard()
 
 
 @pytest.fixture
@@ -46,13 +57,13 @@ def fake_host(fake_session: FakeSession) -> FakeSession:
 async def test_replay_no_active_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session, "active_page", lambda: None)
 
-    result = await task.replay_playbook("anything")
+    result = await replay_playbook("anything")
 
     assert result == "No active page; navigate first, then replay a playbook."
 
 
 async def test_replay_no_playbook(fake_host: FakeSession) -> None:
-    result = await task.replay_playbook("never recorded")
+    result = await replay_playbook("never recorded")
 
     assert "No playbook found" in result
     assert "never recorded" in result
@@ -80,7 +91,7 @@ async def test_replay_happy_path(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("my task")
+    result = await replay_playbook("my task")
 
     assert "2/2 steps succeeded" in result
     assert calls == ["navigate", "click"]
@@ -97,7 +108,7 @@ async def test_replay_happy_path_single_step(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("single")
+    result = await replay_playbook("single")
 
     assert "1/1 steps succeeded" in result
 
@@ -123,7 +134,7 @@ async def test_replay_stops_on_error_step(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("flaky")
+    result = await replay_playbook("flaky")
 
     assert "Stopped at step 2" in result
     assert "1/3 step(s)" in result or "1/3" in result
@@ -149,7 +160,7 @@ async def test_replay_resolves_ref_from_aria_snapshot(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("resolve")
+    result = await replay_playbook("resolve")
 
     assert "1/1 steps succeeded" in result
     assert seen["action"] == "click"
@@ -175,7 +186,7 @@ async def test_replay_uses_selector_when_present_over_ref(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("select")
+    result = await replay_playbook("select")
 
     assert "1/1 steps succeeded" in result
     assert seen["kwargs"].get("selector") == "#direct-btn"
@@ -197,7 +208,7 @@ async def test_replay_stops_on_element_not_found(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("missing")
+    result = await replay_playbook("missing")
 
     assert "Stopped at step 1" in result
     assert "element not found" in result
@@ -222,7 +233,7 @@ async def test_replay_non_target_action_skips_ref(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("noref")
+    result = await replay_playbook("noref")
 
     assert "1/1 steps succeeded" in result
     assert "ref" not in seen["kwargs"]
@@ -245,9 +256,9 @@ async def test_replay_sensitive_step_still_gated(
     async def fake_snapshot(page: Any) -> str:
         return '- button "Delete" [ref=e3]'
 
-    monkeypatch.setattr(tool, "_live_refs_snapshot", fake_snapshot)
+    monkeypatch.setattr(support, "_live_refs_snapshot", fake_snapshot)
 
-    result = await task.replay_playbook("sensitive")
+    result = await replay_playbook("sensitive")
 
     assert "1/1 steps succeeded" in result
     assert len(calls) == 1
@@ -271,9 +282,9 @@ async def test_replay_self_heals_fuzzy_name(
         return '- button "Sign In" [ref=e4]'
 
     monkeypatch.setattr(tool, "browse", fake_browse)
-    monkeypatch.setattr(tool, "_live_refs_snapshot", fake_snapshot)
+    monkeypatch.setattr(support, "_live_refs_snapshot", fake_snapshot)
 
-    result = await task.replay_playbook("fuzzy")
+    result = await replay_playbook("fuzzy")
 
     assert "1/1 steps succeeded" in result
     assert seen["kwargs"].get("ref") == "e4"
@@ -285,7 +296,7 @@ async def test_replay_rejects_unknown_override(
 ) -> None:
     _save_playbook("example.test", "override_test", [("navigate", None, None, None)])
 
-    result = await task.replay_playbook("override_test", overrides={"unknown_var": "x"})
+    result = await replay_playbook("override_test", overrides={"unknown_var": "x"})
 
     assert "Unknown override" in result
     assert "unknown_var" in result
@@ -302,10 +313,10 @@ async def test_replay_success_bumps_success_count(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    await task.replay_playbook("count_test")
-    await task.replay_playbook("count_test")
+    await replay_playbook("count_test")
+    await replay_playbook("count_test")
 
-    pb = task.load_playbook("example.test", "count_test")
+    pb = load_playbook("example.test", "count_test")
     assert pb is not None
     assert pb.success_count >= 2
 
@@ -323,13 +334,13 @@ async def test_replay_drift_bumps_fail_count(
     async def empty_snapshot(page: Any) -> str:
         return "- heading 'Other' [ref=e1]"
 
-    monkeypatch.setattr(tool, "_live_refs_snapshot", empty_snapshot)
+    monkeypatch.setattr(support, "_live_refs_snapshot", empty_snapshot)
 
-    result = await task.replay_playbook("drift_test")
+    result = await replay_playbook("drift_test")
 
     assert "Stopped at step" in result
 
-    pb = task.load_playbook("example.test", "drift_test")
+    pb = load_playbook("example.test", "drift_test")
     assert pb is not None
     assert pb.fail_count >= 1
 
@@ -338,13 +349,13 @@ async def test_start_task_captures_host(
     fake_host: FakeSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    msg = await task.start_task("capture test")
+    msg = await start_task("capture test")
     assert "Recording task" in msg
 
-    assert task._ACTIVE is not None
-    assert task._ACTIVE.host == "example.test"
+    assert recorder._ACTIVE is not None
+    assert recorder._ACTIVE.host == "example.test"
 
-    task.discard()
+    recorder.discard()
 
 
 async def test_replay_substitutes_recorded_variable(
@@ -365,7 +376,7 @@ async def test_replay_substitutes_recorded_variable(
         ],
         variables=["username"],
     )
-    task._save_playbook_sync(pb)
+    _save_playbook_sync(pb)
 
     seen: dict[str, Any] = {}
 
@@ -375,7 +386,7 @@ async def test_replay_substitutes_recorded_variable(
 
     monkeypatch.setattr(tool, "browse", fake_browse)
 
-    result = await task.replay_playbook("login", overrides={"username": "alice"})
+    result = await replay_playbook("login", overrides={"username": "alice"})
 
     assert "1/1 steps succeeded" in result
     assert seen["kwargs"]["text"] == "alice"
@@ -384,7 +395,7 @@ async def test_replay_substitutes_recorded_variable(
 async def test_query_playbook_suggests_similar_on_miss(
     fake_host: FakeSession,
 ) -> None:
-    task._save_playbook_sync(
+    _save_playbook_sync(
         Playbook(
             host="example.test",
             goal="log in to github",
@@ -392,7 +403,7 @@ async def test_query_playbook_suggests_similar_on_miss(
             steps=[Step(action="navigate")],
         )
     )
-    result = await task.query_playbook("github login")
+    result = await query_playbook("github login")
     assert "No playbook found" in result
     assert "log in to github" in result
 
@@ -400,7 +411,7 @@ async def test_query_playbook_suggests_similar_on_miss(
 async def test_delete_playbook_tool_removes_and_reports(
     fake_host: FakeSession,
 ) -> None:
-    task._save_playbook_sync(
+    _save_playbook_sync(
         Playbook(
             host="example.test",
             goal="stale flow",
@@ -408,6 +419,6 @@ async def test_delete_playbook_tool_removes_and_reports(
             steps=[Step(action="navigate")],
         )
     )
-    msg = await task.delete_playbook("stale flow")
+    msg = await delete_playbook("stale flow")
     assert "Deleted playbook" in msg
-    assert task.load_playbook("example.test", "stale flow") is None
+    assert load_playbook("example.test", "stale flow") is None

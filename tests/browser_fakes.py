@@ -175,6 +175,7 @@ class FakePage:
         self.mouse = FakeMouse(self.log)
         self.keyboard = FakeKeyboard(self.log)
         self.locators: list[FakeLocator] = []
+        self.frames: list[Any] = []
         self.download = FakeDownload(self.log)
 
     def _rec(self, method: str, *args: Any, **kwargs: Any) -> None:

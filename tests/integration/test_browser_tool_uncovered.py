@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from supporter.tools.browser.tool import BrowseRequest, browse
+from supporter.tools.browser.core import BrowseRequest
+from supporter.tools.browser.tool import browse
 
 from .conftest import FakeSession
 
@@ -53,7 +54,7 @@ async def test_record_locator_frame_path(fake_session: FakeSession) -> None:
     session_module.active_frame_selector = mock_frame_selector2
 
     try:
-        from supporter.tools.browser.tool import _record_locator
+        from supporter.tools.browser.support import _record_locator
 
         req = BrowseRequest(action="click", ref="e2", selector="")
         result = _record_locator(fake_session.page, req)
@@ -63,7 +64,7 @@ async def test_record_locator_frame_path(fake_session: FakeSession) -> None:
 
 
 async def test_record_locator_no_ref_path(fake_session: FakeSession) -> None:
-    from supporter.tools.browser.tool import _record_locator
+    from supporter.tools.browser.support import _record_locator
 
     req = BrowseRequest(action="click", ref="", selector="")
     result = _record_locator(fake_session.page, req)
@@ -121,7 +122,7 @@ async def test_confirm_always_callback_none(fake_session: FakeSession) -> None:
 
 
 async def test_render_script_result_json_failure(fake_session: FakeSession) -> None:
-    from supporter.tools.browser.tool import _render_script_result
+    from supporter.tools.browser.support import _render_script_result
 
     class Unserializable:
         def __str__(self) -> str:

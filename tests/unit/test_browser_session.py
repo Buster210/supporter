@@ -9,6 +9,7 @@ import pytest
 
 from supporter.config import config
 from supporter.tools.browser import guardrails, session
+from supporter.tools.browser.profiles import ChromeProfile
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -353,12 +354,8 @@ async def test_resolve_profile_caches_callback_result(
 
     guardrails.browse_profile_select_callback = fake_callback
     test_profiles = [
-        session.profiles_mod.ChromeProfile(
-            dir_name="Profile1", display_name="P1", email="a@b.com"
-        ),
-        session.profiles_mod.ChromeProfile(
-            dir_name="Profile2", display_name="P2", email=""
-        ),
+        ChromeProfile(dir_name="Profile1", display_name="P1", email="a@b.com"),
+        ChromeProfile(dir_name="Profile2", display_name="P2", email=""),
     ]
     monkeypatch.setattr(
         session.profiles_mod,
@@ -384,9 +381,7 @@ async def test_resolve_profile_auto_skips_when_single(
     session._SELECTED_PROFILE = None
 
     test_profiles = [
-        session.profiles_mod.ChromeProfile(
-            dir_name="OnlyProfile", display_name="Only", email=""
-        ),
+        ChromeProfile(dir_name="OnlyProfile", display_name="Only", email=""),
     ]
     monkeypatch.setattr(
         session.profiles_mod,
@@ -418,12 +413,8 @@ async def test_resolve_profile_raises_when_no_callback(
     session._SELECTED_PROFILE = None
     guardrails.browse_profile_select_callback = None
     test_profiles = [
-        session.profiles_mod.ChromeProfile(
-            dir_name="P1", display_name="P1", email="a@b.com"
-        ),
-        session.profiles_mod.ChromeProfile(
-            dir_name="P2", display_name="P2", email="c@d.com"
-        ),
+        ChromeProfile(dir_name="P1", display_name="P1", email="a@b.com"),
+        ChromeProfile(dir_name="P2", display_name="P2", email="c@d.com"),
     ]
     monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: test_profiles)
 
@@ -442,12 +433,8 @@ async def test_resolve_profile_raises_on_cancel(
 
     guardrails.browse_profile_select_callback = cancel_callback
     test_profiles = [
-        session.profiles_mod.ChromeProfile(
-            dir_name="P1", display_name="P1", email="a@b.com"
-        ),
-        session.profiles_mod.ChromeProfile(
-            dir_name="P2", display_name="P2", email="c@d.com"
-        ),
+        ChromeProfile(dir_name="P1", display_name="P1", email="a@b.com"),
+        ChromeProfile(dir_name="P2", display_name="P2", email="c@d.com"),
     ]
     monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: test_profiles)
 
