@@ -12,7 +12,7 @@ from .conftest import FakeSession
 def close_calls(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     calls: list[bool] = []
 
-    async def fake_close() -> None:
+    async def fake_close(*, force: bool = False) -> None:
         calls.append(True)
 
     monkeypatch.setattr(session, "close_session", fake_close)

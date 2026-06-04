@@ -29,6 +29,7 @@ class BrowseRequest:
     path: str = ""
     stamp: str = ""
     variable: str = ""
+    force: bool = False
 
 
 async def _page_host(page: Any) -> str:

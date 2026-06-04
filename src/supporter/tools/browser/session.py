@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import sqlite3
 import sys
@@ -14,7 +15,7 @@ from ...logger import logger
 from . import blocklist, guardrails, humanize, recorder
 from . import profiles as profiles_mod
 
-__all__: list[str] = ["profiles_mod"]
+__all__: list[str] = ["guardrails", "profiles_mod"]
 
 if TYPE_CHECKING:
     from patchright.async_api import BrowserContext, Page, Playwright
@@ -217,8 +218,35 @@ def is_active() -> bool:
     return _PAGE is not None
 
 
+def is_launching() -> bool:
+    return _LAUNCHING
+
+
 def active_page() -> Any:
     return _PAGE
+
+
+async def session_status() -> dict[str, Any]:
+    """Read-only snapshot of the browser session state for supervisor decisions."""
+    now = time.monotonic()
+    idle_s = (now - _LAST_ACTION_TS) if _LAST_ACTION_TS > 0.0 else -1.0
+    tab_count = len(_CONTEXT.pages) if _CONTEXT is not None else 0
+    url = ""
+    title = ""
+    if _PAGE is not None:
+        with contextlib.suppress(Exception):
+            url = _PAGE.url or ""
+        with contextlib.suppress(Exception):
+            title = await _PAGE.title()
+    return {
+        "active": _PAGE is not None,
+        "launching": _LAUNCHING,
+        "url": url,
+        "title": title,
+        "tabs": tab_count,
+        "idle_seconds": round(idle_s, 2) if idle_s >= 0 else None,
+        "pinned_open": pinned_open(),
+    }
 
 
 def list_pages() -> list[Any]:
@@ -528,7 +556,12 @@ async def get_session() -> tuple[Any, Any, Any]:
         _LAUNCHING = False
 
 
-async def close_session() -> None:
+# Force-close bounds each teardown await so a wedged/hung session can't block
+# recovery; on timeout we swallow and still reset all globals.
+_FORCE_CLOSE_TIMEOUT_S = 5.0
+
+
+async def close_session(*, force: bool = False) -> None:
     global _PWS, _CONTEXT, _PAGE, _LAUNCH_LOOP, _ACTION_COUNT, _LAST_ACTION_TS
     global _KEEP_OPEN, _FRAME_SELECTOR, _CLONE_LOCK, _LIFECYCLE_TASK
     global _ACTION_CAP_CEILING, _SESSION_START_TS, _TEMPO, _CLEANUP_TASK
@@ -543,13 +576,19 @@ async def close_session() -> None:
 
     try:
         if _CONTEXT is not None:
-            await _CONTEXT.close()
+            if force:
+                await asyncio.wait_for(_CONTEXT.close(), timeout=_FORCE_CLOSE_TIMEOUT_S)
+            else:
+                await _CONTEXT.close()
     except Exception as e:
         logger.warning(f"Error closing browser context: {e}")
 
     try:
         if _PWS is not None:
-            await _PWS.stop()
+            if force:
+                await asyncio.wait_for(_PWS.stop(), timeout=_FORCE_CLOSE_TIMEOUT_S)
+            else:
+                await _PWS.stop()
     except Exception as e:
         logger.warning(f"Error stopping playwright: {e}")
 

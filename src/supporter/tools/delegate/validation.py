@@ -60,7 +60,7 @@ def _validate_single_task(
 
     profile = _resolve_agent_profile(t)
     raw_tools = profile.get("tools") or t.get("tools", "all")
-    allowed_tools = delegate_allowed_tool_names()
+    allowed_tools = delegate_allowed_tool_names(t.get("agent"))
     granted_tools = allowed_tools
 
     if isinstance(raw_tools, set):

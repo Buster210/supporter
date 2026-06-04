@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from supporter.config import config
-from supporter.tools.browser import guardrails, session
+from supporter.tools.browser import guardrails, profiles, session
 from supporter.tools.browser.profiles import ChromeProfile
 
 if TYPE_CHECKING:
@@ -358,7 +358,7 @@ async def test_resolve_profile_caches_callback_result(
         ChromeProfile(dir_name="Profile2", display_name="P2", email=""),
     ]
     monkeypatch.setattr(
-        session.profiles_mod,
+        profiles,
         "list_profiles",
         lambda _: test_profiles,
     )
@@ -384,7 +384,7 @@ async def test_resolve_profile_auto_skips_when_single(
         ChromeProfile(dir_name="OnlyProfile", display_name="Only", email=""),
     ]
     monkeypatch.setattr(
-        session.profiles_mod,
+        profiles,
         "list_profiles",
         lambda _: test_profiles,
     )
@@ -399,7 +399,7 @@ async def test_resolve_profile_uses_default_when_no_profiles(
 ) -> None:
     monkeypatch.setattr(config, "browser_profile_name", None)
     session._SELECTED_PROFILE = None
-    monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: [])
+    monkeypatch.setattr(profiles, "list_profiles", lambda _: [])
 
     result = await session._resolve_profile_name()
     assert result == "Default"
@@ -416,7 +416,7 @@ async def test_resolve_profile_raises_when_no_callback(
         ChromeProfile(dir_name="P1", display_name="P1", email="a@b.com"),
         ChromeProfile(dir_name="P2", display_name="P2", email="c@d.com"),
     ]
-    monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: test_profiles)
+    monkeypatch.setattr(profiles, "list_profiles", lambda _: test_profiles)
 
     with pytest.raises(RuntimeError, match="no interactive picker available"):
         await session._resolve_profile_name()
@@ -436,7 +436,7 @@ async def test_resolve_profile_raises_on_cancel(
         ChromeProfile(dir_name="P1", display_name="P1", email="a@b.com"),
         ChromeProfile(dir_name="P2", display_name="P2", email="c@d.com"),
     ]
-    monkeypatch.setattr(session.profiles_mod, "list_profiles", lambda _: test_profiles)
+    monkeypatch.setattr(profiles, "list_profiles", lambda _: test_profiles)
 
     with pytest.raises(RuntimeError, match="cancelled"):
         await session._resolve_profile_name()

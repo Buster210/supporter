@@ -18,6 +18,7 @@ def test_catalog_exposes_current_tool_surface() -> None:
         "read_file",
         "write_file",
         "browse",
+        "browser_supervise",
         "start_task",
         "finish_task",
         "query_playbook",
@@ -41,20 +42,21 @@ def test_orchestrator_selects_root_tools_without_search_function() -> None:
     assert set(registry) == {
         "read_file",
         "write_file",
-        "browse",
-        "start_task",
-        "finish_task",
-        "query_playbook",
-        "replay_playbook",
-        "list_playbooks",
-        "delete_playbook",
         "delegate_tasks",
         "check_delegation",
         "cancel_delegation",
         "query_delegation",
         "execute_bash",
+        "browser_supervise",
     }
     assert "google_search" not in registry
+    assert "browse" not in registry
+    assert "start_task" not in registry
+    assert "finish_task" not in registry
+    assert "query_playbook" not in registry
+    assert "replay_playbook" not in registry
+    assert "list_playbooks" not in registry
+    assert "delete_playbook" not in registry
 
 
 def test_bash_can_be_disabled_without_changing_selection_sites() -> None:

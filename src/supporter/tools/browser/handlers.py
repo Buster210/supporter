@@ -404,6 +404,14 @@ async def _handle_select(req: BrowseRequest) -> str:
     return await _post_action_snapshot(page, req)
 
 
+@_wrap_action_errors("status")
+async def _handle_status(_req: BrowseRequest) -> str:
+    import json as _json
+
+    info = await session.session_status()
+    return _json.dumps(info)
+
+
 @_wrap_action_errors("close")
 async def _handle_close(req: BrowseRequest) -> str:
     if not session.is_active():
@@ -423,7 +431,7 @@ async def _handle_close(req: BrowseRequest) -> str:
 async def _handle_closenow(req: BrowseRequest) -> str:
     if not session.is_active():
         return "Browser already closed."
-    await session.close_session()
+    await session.close_session(force=req.force)
     return "Browser closed."
 
 
@@ -555,6 +563,7 @@ async def _handle_solve_cloudflare(req: BrowseRequest) -> str:
 
 
 HANDLERS: dict[str, Callable[[BrowseRequest], Awaitable[str]]] = {
+    "status": _handle_status,
     "navigate": _handle_navigate,
     "back": _handle_back,
     "forward": _handle_forward,

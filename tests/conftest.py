@@ -7,6 +7,25 @@ import pytest
 from tests.mocks import create_mock_genai_client
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    os.environ.setdefault("GEMINI_API_KEY", "test-key")  # pragma: allowlist secret
+    os.environ.setdefault("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+    os.environ.setdefault("LOG_LEVEL", "DEBUG")
+    for var in ("GEMINI_API_KEYS",):
+        os.environ.pop(var, None)
+
+    config.addinivalue_line(
+        "markers", "unit: Unit tests that test individual components in isolation"
+    )
+    config.addinivalue_line(
+        "markers",
+        "integration: Integration tests that test multiple components together",
+    )
+    config.addinivalue_line(
+        "markers", "e2e: End-to-end tests that test the full application flow"
+    )
+
+
 @pytest.fixture(autouse=True)
 def setup_env() -> Generator[None, None, None]:
     with patch.dict(
@@ -55,19 +74,6 @@ def mock_genai_client() -> Generator[MagicMock, None, None]:
         mock_client.return_value = instance
         mock_client.side_effect = lambda **kwargs: instance
         yield mock_client
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers", "unit: Unit tests that test individual components in isolation"
-    )
-    config.addinivalue_line(
-        "markers",
-        "integration: Integration tests that test multiple components together",
-    )
-    config.addinivalue_line(
-        "markers", "e2e: End-to-end tests that test the full application flow"
-    )
 
 
 def pytest_collection_modifyitems(

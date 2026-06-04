@@ -8,6 +8,7 @@ from . import (  # noqa: F401 — explicit submodule imports for mypy
     recorder,
     session,
     snapshot,
+    supervisor,
     support,
     task,
     tool,
