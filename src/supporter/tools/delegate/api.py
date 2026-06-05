@@ -43,26 +43,36 @@ async def delegate_tasks(
 
     Args:
         milestone: A brief label for the overall objective.
-        tasks: A JSON string representing a list of task objects.
-            EACH task object MUST include:
+        tasks: A JSON string holding a list of task objects. `id` and `task`
+            are required; every other field is optional:
             - id: A unique string identifier (e.g., "t1", "analyze_file").
             - task: Detailed instructions for the sub-agent.
-            - agent: (Optional) Role from the roster (e.g., "explorer", "code_writer").
-            - depends_on: (Optional) List of task IDs to wait for.
-            - tolerate_failures: (Optional) If true, run even when deps failed/
-              timed-out/skipped; their outputs are injected with a status tag.
+            - agent: Role from the roster (e.g., "explorer", "code_writer").
+              Omitted -> a generic "custom" agent.
+            - backend: Executor backend for the task ("gemini" default). Selects
+              who runs it; unknown backends are rejected.
+            - context: Extra context string passed to the sub-agent.
+            - tools: "all" (default) or a comma-separated subset; intersected
+              with the tools delegation permits.
+            - timeout: Per-task seconds before it is killed (clamped to the
+              configured min/max; defaults to the configured value).
+            - retry: Times to retry on failure (clamped to the configured max).
+            - depends_on: List (or comma string) of task IDs to wait for.
+            - tolerate_failures: If true, run even when deps failed/timed-out/
+              skipped; their outputs are injected with a status tag.
             Example: '[{"id": "t1", "agent": "explorer", "task": "map src/app.py"}]'
-        max_parallel: Max number of agents to run at once (Default: 3).
+        max_parallel: Max agents running concurrently (default 3; values above
+            the hard cap of 5 are clamped).
         notify_per_task: If true, compact completed/failed task signals are
             fed back to the orchestrator so it can query details and adapt
             while siblings still run. Default true.
 
     Returns:
-        A job confirmation message with a JOB_ID.
+        A job confirmation message containing a JOB_ID.
 
     Raises:
-        ValueError: Cycle or invalid JSON.
-        KeyError: Missing id/agent/task in task object.
+        ToolError: Invalid JSON, a dependency cycle, or a missing required
+            field (id/task).
     """
     logger.info(f"Tool: delegate_tasks -- milestone='{milestone}'")
     try:
@@ -143,7 +153,20 @@ async def delegate_tasks(
 
 
 async def check_delegation(job_id: str) -> str:
-    """Non-blocking snapshot of the current job state."""
+    """Non-blocking snapshot of a delegation job's current task states.
+
+    Results post back automatically when a milestone finishes, so do NOT poll
+    this. Use it only when a job seems stalled, a task may have timed out, or
+    the user explicitly asks for live status.
+
+    Args:
+        job_id: The JOB_ID returned by delegate_tasks.
+
+    Returns:
+        A markdown table (Task, Status, Agent, Elapsed) for the job, or a short
+        message if the job is unknown, already complete, or has no tasks tracked
+        yet.
+    """
     if not bus_exists(job_id):
         return f"Job `{job_id}` is unknown or already complete."
 
@@ -171,7 +194,20 @@ async def check_delegation(job_id: str) -> str:
 
 
 async def cancel_delegation(job_id: str) -> str:
-    """Cancels a running delegation job."""
+    """Request cancellation of a running delegation job (cooperative).
+
+    Signals the job's asyncio task to cancel; in-flight sub-agent work unwinds
+    at the next await point rather than stopping instantly. Use when the user
+    cancels, when you detect a wrong or cyclic plan, or to stop runaway resource
+    use.
+
+    Args:
+        job_id: The JOB_ID returned by delegate_tasks.
+
+    Returns:
+        A confirmation that cancellation was requested, or a message if the job
+        is unknown or already complete.
+    """
     task = JOB_TASKS.get(job_id)
     if task is None or task.done():
         return f"Job `{job_id}` is unknown or already complete."

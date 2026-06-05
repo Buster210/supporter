@@ -5,6 +5,7 @@ from typing import Any
 
 from ...config import config
 from .agents import delegate_allowed_tool_names
+from .backends import GEMINI_BACKEND, KNOWN_BACKENDS
 
 
 def _resolve_agent_profile(task: dict[str, Any]) -> dict[str, Any]:
@@ -93,12 +94,29 @@ def _validate_single_task(
     ):
         pre_approved_commands = []
 
+    raw_backend = t.get("backend")
+    if raw_backend is None:
+        backend = GEMINI_BACKEND
+    elif isinstance(raw_backend, str):
+        backend = raw_backend.lower()
+    else:
+        raise ValueError(
+            f"Task '{task_id}' has a non-string 'backend': {raw_backend!r}"
+        )
+    if backend not in KNOWN_BACKENDS:
+        known = ", ".join(sorted(KNOWN_BACKENDS))
+        raise ValueError(
+            f"Task '{task_id}' requests unknown backend '{backend}'; "
+            f"known backends: {known}"
+        )
+
     live = bool(profile.get("live", False))
     default_model = config.gemini_live_model if live else config.gemini_model
     return {
         "id": task_id,
         "task": task_desc,
         "agent": t.get("agent"),
+        "backend": backend,
         "persona": profile["persona"],
         "tools": granted_tools,
         "model": profile.get("model") or default_model,

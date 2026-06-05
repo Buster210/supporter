@@ -139,6 +139,22 @@ class TestValidation:
         with pytest.raises(ValueError, match="Too many tasks"):
             validate_tasks(json.dumps(tasks))
 
+    def test_backend_defaults_to_gemini(self) -> None:
+        validated = validate_tasks('[{"id": "t1", "task": "a"}]')
+        assert validated[0]["backend"] == "gemini"
+
+    def test_backend_explicit_is_case_insensitive(self) -> None:
+        validated = validate_tasks('[{"id": "t1", "task": "a", "backend": "GEMINI"}]')
+        assert validated[0]["backend"] == "gemini"
+
+    def test_backend_unknown_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unknown backend 'opencode'"):
+            validate_tasks('[{"id": "t1", "task": "a", "backend": "opencode"}]')
+
+    def test_backend_non_string_rejected(self) -> None:
+        with pytest.raises(ValueError, match="non-string 'backend'"):
+            validate_tasks('[{"id": "t1", "task": "a", "backend": 123}]')
+
     def test_timeout_parsing(self) -> None:
         tasks_json = json.dumps(
             [
