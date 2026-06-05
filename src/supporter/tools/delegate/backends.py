@@ -8,5 +8,6 @@ validates it against ``KNOWN_BACKENDS`` and dispatches deterministically.
 """
 
 GEMINI_BACKEND = "gemini"
+OPENCODE_BACKEND = "opencode"
 
-KNOWN_BACKENDS: frozenset[str] = frozenset({GEMINI_BACKEND})
+KNOWN_BACKENDS: frozenset[str] = frozenset({GEMINI_BACKEND, OPENCODE_BACKEND})

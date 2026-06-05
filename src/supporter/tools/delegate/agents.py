@@ -9,7 +9,9 @@ from ...config import DELEGATE_RETRY_BACKOFF, config
 from ...logger import logger
 from ...types import LLMProvider, TaskRetrying, TaskStatus
 from ..catalog import build_tool_catalog, select_delegate_tools
+from .backends import OPENCODE_BACKEND
 from .bus import DelegationBus
+from .opencode_backend import run_opencode
 
 
 class _DelegateCache:
@@ -164,32 +166,34 @@ async def run_sub_agent(
             agent: ChatAgent | None = None
             cache_key = _cache_key(task)
             try:
-                agent, prompt = _create_sub_agent(
-                    task,
-                    provider=provider,
-                )
-                role_lock = _cache.locks.get(cache_key) if cache_key else None
-                async with role_lock or contextlib.nullcontext():
-                    result = await asyncio.wait_for(
-                        agent.execute(prompt), timeout=task["timeout"]
+                if task.get("backend") == OPENCODE_BACKEND:
+                    text, model_name, tokens = await run_opencode(task)
+                else:
+                    agent, prompt = _create_sub_agent(
+                        task,
+                        provider=provider,
                     )
+                    role_lock = _cache.locks.get(cache_key) if cache_key else None
+                    async with role_lock or contextlib.nullcontext():
+                        result = await asyncio.wait_for(
+                            agent.execute(prompt), timeout=task["timeout"]
+                        )
+                    text, model_name, tokens = result.text, result.model, result.usage
                 duration = time.perf_counter() - start_time
                 logger.info(
                     f"Sub-agent '{task_id}' completed in {duration:.2f}s "
                     f"(attempt {attempt + 1})"
                 )
 
-                output = _truncate_delegate_output(
-                    result.text or "(No text output returned)"
-                )
+                output = _truncate_delegate_output(text or "(No text output returned)")
 
                 return {
                     "id": task_id,
                     "status": TaskStatus.COMPLETED,
                     "output": output,
-                    "model": result.model,
+                    "model": model_name,
                     "duration": duration,
-                    "tokens": result.usage,
+                    "tokens": tokens,
                 }
             except TimeoutError:
                 logger.warning(

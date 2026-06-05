@@ -147,9 +147,13 @@ class TestValidation:
         validated = validate_tasks('[{"id": "t1", "task": "a", "backend": "GEMINI"}]')
         assert validated[0]["backend"] == "gemini"
 
+    def test_backend_opencode_accepted(self) -> None:
+        validated = validate_tasks('[{"id": "t1", "task": "a", "backend": "opencode"}]')
+        assert validated[0]["backend"] == "opencode"
+
     def test_backend_unknown_rejected(self) -> None:
-        with pytest.raises(ValueError, match="unknown backend 'opencode'"):
-            validate_tasks('[{"id": "t1", "task": "a", "backend": "opencode"}]')
+        with pytest.raises(ValueError, match="unknown backend 'bogus'"):
+            validate_tasks('[{"id": "t1", "task": "a", "backend": "bogus"}]')
 
     def test_backend_non_string_rejected(self) -> None:
         with pytest.raises(ValueError, match="non-string 'backend'"):
@@ -377,6 +381,37 @@ class TestSubAgentRunner:
 
         assert result["status"] == TaskStatus.ERROR
         assert "Boom" in result["output"]
+
+    @pytest.mark.asyncio
+    async def test_opencode_backend_dispatch(self) -> None:
+        task = {
+            "id": "t1",
+            "task": "task",
+            "backend": "opencode",
+            "tools": {"read_file"},
+            "model": "m",
+            "persona": "p",
+            "context": "c",
+            "timeout": 10,
+            "max_retries": 0,
+            "depends_on": [],
+        }
+        semaphore = asyncio.Semaphore(1)
+
+        from supporter.tools.delegate.bus import DelegationBus
+
+        mock_bus = MagicMock(spec=DelegationBus)
+
+        with patch(
+            "supporter.tools.delegate.agents.run_opencode",
+            new=AsyncMock(return_value=("changed a.py", "google/x", {})),
+        ) as mock_oc:
+            result = await run_sub_agent(task, semaphore, mock_bus, "job1")
+
+        mock_oc.assert_awaited_once()
+        assert result["status"] == TaskStatus.COMPLETED
+        assert result["output"] == "changed a.py"
+        assert result["model"] == "google/x"
 
 
 class TestDAGExecution:
