@@ -291,6 +291,24 @@ class TestSubAgentFactory:
         mock_agent_class.assert_called_once()
         assert "my task" in prompt
         assert "my context" in prompt
+        assert '"confidence"' in prompt
+
+    @patch("supporter.pool.get_provider")
+    @patch("supporter.tools.delegate.agents.ChatAgent")
+    def test_create_sub_agent_suppresses_result_contract(
+        self, mock_agent_class: Any, mock_get_provider: Any
+    ) -> None:
+        task = {
+            "id": "t1",
+            "task": "my task",
+            "persona": "my persona",
+            "tools": {"read_file"},
+            "model": "my-model",
+            "context": "my context",
+            "result_contract": False,
+        }
+        _agent, prompt = _create_sub_agent(task)
+        assert '"confidence"' not in prompt
 
 
 class TestSubAgentRunner:
@@ -412,6 +430,20 @@ class TestSubAgentRunner:
         assert result["status"] == TaskStatus.COMPLETED
         assert result["output"] == "changed a.py"
         assert result["model"] == "google/x"
+
+    def test_build_spec_includes_result_contract(self) -> None:
+        from supporter.tools.delegate.opencode_backend import _build_spec
+
+        spec = _build_spec({"task": "do it", "context": "ctx"})
+        assert "do it" in spec
+        assert "ctx" in spec
+        assert '"confidence"' in spec
+
+    def test_build_spec_suppresses_result_contract(self) -> None:
+        from supporter.tools.delegate.opencode_backend import _build_spec
+
+        spec = _build_spec({"task": "do it", "result_contract": False})
+        assert '"confidence"' not in spec
 
 
 class TestDAGExecution:

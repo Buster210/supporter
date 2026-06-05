@@ -5,6 +5,25 @@ MODEL_GEMMA_26B = "gemma-4-26b-a4b-it"
 MODEL_GEMINI_LIVE = "gemini-3.1-flash-live-preview"
 MODEL_GEMINI_LIVE_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
 
+DELEGATION_RESULT_CONTRACT = (
+    "\n\n---\n"
+    "When finished, end your reply with a single fenced JSON block reporting a "
+    "structured result. The harness parses this deterministically -- do not "
+    "format it for display, and do not add prose after it:\n"
+    "```json\n"
+    "{\n"
+    '  "summary": "<one or two sentences on what you did or found>",\n'
+    '  "evidence": {\n'
+    '    "files_read": [], "files_changed": [], "commands_run": [], "sources": []\n'
+    "  },\n"
+    '  "findings": ["<notable finding, or omit>"],\n'
+    '  "handoff": "<what a follow-up agent needs to know, or empty>",\n'
+    '  "confidence": "low|medium|high"\n'
+    "}\n"
+    "```"
+)
+
+
 DELEGATE_DEFAULT_PERSONA = (
     "You are a focused task executor. You have been delegated a specific sub-task. "
     "Execute it precisely and completely. Report your findings and actions clearly. "

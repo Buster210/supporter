@@ -7,6 +7,7 @@ from typing import Any
 from ...agent import ChatAgent
 from ...config import DELEGATE_RETRY_BACKOFF, config
 from ...logger import logger
+from ...prompts import DELEGATION_RESULT_CONTRACT
 from ...types import LLMProvider, TaskRetrying, TaskStatus
 from ..catalog import build_tool_catalog, select_delegate_tools
 from .backends import OPENCODE_BACKEND
@@ -88,6 +89,8 @@ def _create_sub_agent(
     prompt = f"TASK:\n{task['task']}"
     if task["context"]:
         prompt += f"\n\nCONTEXT:\n{task['context']}"
+    if task.get("result_contract", True):
+        prompt += DELEGATION_RESULT_CONTRACT
 
     if cache_key and cache_key in _cache.agents:
         cached = _cache.agents[cache_key]

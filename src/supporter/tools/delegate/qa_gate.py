@@ -74,6 +74,7 @@ def _make_task(
         "depends_on": [],
         "pre_approved_commands": [],
         "tolerate_failures": False,
+        "result_contract": False,
     }
 
 

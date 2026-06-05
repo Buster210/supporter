@@ -15,6 +15,7 @@ from typing import Any
 
 from ...config import config
 from ...logger import logger
+from ...prompts import DELEGATION_RESULT_CONTRACT
 
 OPENCODE_BIN = os.path.expanduser(os.getenv("OPENCODE_BIN", "~/.opencode/bin/opencode"))
 
@@ -28,10 +29,7 @@ _STANDARDS = (
     "hand-rolling."
 )
 
-_CONTRACT = (
-    "\n\n---\nMake only the changes the task requires. Stop when done. "
-    "Report the files you changed and a one-line result."
-)
+_CONTRACT = "\n\n---\nMake only the changes the task requires. Stop when done."
 
 
 def _build_spec(task: dict[str, Any]) -> str:
@@ -39,6 +37,8 @@ def _build_spec(task: dict[str, Any]) -> str:
     if task.get("context"):
         parts.append(f"\n\nCONTEXT:\n{task['context']}")
     parts.append(_CONTRACT)
+    if task.get("result_contract", True):
+        parts.append(DELEGATION_RESULT_CONTRACT)
     return "".join(parts)
 
 
