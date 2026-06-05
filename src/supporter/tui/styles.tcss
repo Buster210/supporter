@@ -251,30 +251,63 @@ ConfirmationModal {
 }
 
 #modal-buttons {
-    height: 3;
+    height: 5;
     align: center middle;
     border-top: solid $modal-border;
-    padding-top: 1;
 }
 
 #modal-buttons Button {
     width: auto;
-    height: 1;
-    min-width: 12;
-    border: none;
+    height: 3;
+    min-width: 14;
     margin: 0 1;
-    padding: 0;
 }
 
 #modal-buttons #allow {
-    background: $success-alt;
-    color: #000;
+    background: transparent !important;
+    color: $primary !important;
+    border: solid $primary !important;
+    text-style: bold;
+}
+
+#modal-buttons #allow:hover {
+    background: $primary 15% !important;
+    border: solid $primary !important;
+}
+
+#modal-buttons #allow:focus {
+    border: tall #ffffff !important;
 }
 
 #modal-buttons #cancel {
-    background: $error;
-    color: #fff;
+    background: transparent !important;
+    color: #ff6b6b !important;
+    border: solid #ff6b6b !important;
 }
+
+#modal-buttons #cancel:hover {
+    background: #ff6b6b 15% !important;
+    border: solid #ff6b6b !important;
+}
+
+#modal-buttons #cancel:focus {
+    border: tall #ffffff !important;
+}
+
+ProfileSelectModal {
+    align: center middle;
+}
+
+#profile-list {
+    width: 1fr;
+    height: auto;
+    max-height: 30;
+    color: white;
+    overflow: hidden;
+    margin-bottom: 1;
+}
+
+
 
 #queue-display {
     height: auto;
@@ -311,14 +344,22 @@ ConfirmationModal {
 }
 
 #scroll-bottom-btn {
-    background: $primary;
-    color: #000;
+    background: transparent !important;
+    color: $primary !important;
+    border: solid $primary !important;
     text-style: bold;
-    border: none;
     height: 3;
     width: auto;
     margin-right: 1;
-    padding: 0 2;
+}
+
+#scroll-bottom-btn:hover {
+    background: $primary 15% !important;
+    border: solid $primary !important;
+}
+
+#scroll-bottom-btn:focus {
+    border: tall #ffffff !important;
 }
 
 #scroll-btn-wrapper.hidden {

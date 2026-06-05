@@ -189,6 +189,7 @@ async def test_setup_agent_registry_tools() -> None:
     assert set(registry) == {
         "read_file",
         "write_file",
+        "browser_supervise",
         "delegate_tasks",
         "check_delegation",
         "cancel_delegation",

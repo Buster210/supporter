@@ -36,7 +36,7 @@ def serialize_capsule_result(job_id: str) -> dict[str, Any]:
 async def delegate_tasks(
     milestone: str,
     tasks: str,
-    max_parallel: int = 3,
+    max_parallel: int = config.delegate_default_parallel,
     notify_per_task: bool = True,
 ) -> str:
     """Orchestrates background sub-agents to complete a complex milestone.

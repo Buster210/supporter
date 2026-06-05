@@ -29,13 +29,9 @@ class _DelegateCache:
 _cache = _DelegateCache()
 
 
-def clear_delegate_cache() -> None:
-    _cache.clear()
-
-
 @functools.cache
-def delegate_allowed_tool_names() -> set[str]:
-    return set(select_delegate_tools(build_tool_catalog(), "all"))
+def delegate_allowed_tool_names(role: str | None = None) -> set[str]:
+    return set(select_delegate_tools(build_tool_catalog(), "all", role=role))
 
 
 def _cache_key(task: dict[str, Any]) -> tuple[str, str, bool] | None:
@@ -83,7 +79,9 @@ def _create_sub_agent(
 ) -> tuple[ChatAgent, str]:
     from ...pool import get_provider
 
-    registry = select_delegate_tools(build_tool_catalog(), task["tools"])
+    registry = select_delegate_tools(
+        build_tool_catalog(), task["tools"], role=task.get("agent")
+    )
     cache_key = _cache_key(task)
     prompt = f"TASK:\n{task['task']}"
     if task["context"]:

@@ -10,6 +10,7 @@ dependencies = [
     "textual>=8.2.3",
     "python-dotenv>=1.1.1",
     "rich>=14.3.4",
+    "patchright>=1.60.0",
 ]
 
 [dependency-groups]
@@ -60,6 +61,10 @@ ignore = ["S101", "B019", "UP043"]
 "tests/**" = ["T201"]
 "scripts/**" = ["T201"]
 "src/supporter/tools/file_ops.py" = ["T201"]
+"src/supporter/tools/browser/humanize.py" = ["S311"]
+"src/supporter/tools/browser/guardrails.py" = ["S311"]
+"src/supporter/tools/browser/session.py" = ["ASYNC110"]
+"src/supporter/tools/browser/tool.py" = ["S110"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -69,6 +74,7 @@ indent-style = "space"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not e2e' --cov=src --cov-report=term-missing"
 filterwarnings = [
     "ignore:.*deprecated.*:DeprecationWarning",
 ]
@@ -87,8 +93,14 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
+exclude = [
+    "build/",
+    "supporter.egg-info/",
+    "dist/",
+    "\\.venv/",
+]
 
 
 [tool.bandit]
-exclude_dirs = ["tests", ".venv"]
-skips = ["B101", "B404", "B108"]
+exclude_dirs = ["tests", ".venv", "scripts"]
+skips = ["B101", "B404", "B108", "B311", "B603", "B607", "B110"]

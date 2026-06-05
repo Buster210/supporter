@@ -1,13 +1,16 @@
 import os
 from collections.abc import AsyncIterator, Generator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from google.genai.types import Content, Part
 
+from supporter.config import config as real_config
 from supporter.pool import LLMProvider, clear_providers
+from supporter.tools.browser import guardrails, session
 from supporter.types import LLMChunk, LLMOptions, LLMResult
 
 TEST_MODEL = "gemini-3.1-flash-lite-preview"
@@ -68,3 +71,22 @@ def setup_test_env() -> Generator[None, None, None]:
 @pytest.fixture
 def mock_provider() -> MockLLMProvider:
     return MockLLMProvider()
+
+
+async def _always_allow(_title: str, _detail: str) -> bool:
+    return True
+
+
+@pytest.fixture
+async def throwaway_browser(tmp_path: Path) -> AsyncIterator[None]:
+    saved_path = real_config.browser_profile_path
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir()
+    real_config.browser_profile_path = str(profile_dir)
+    guardrails.register_browse_callback(confirmation=_always_allow)
+    try:
+        yield
+    finally:
+        await session.close_session()
+        guardrails.register_browse_callback(confirmation=None)
+        real_config.browser_profile_path = saved_path

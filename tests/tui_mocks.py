@@ -24,6 +24,7 @@ class MockApp:
         self._user_message_queue: list[str] = []
         self._toast_manager: Any = MagicMock()
         self._supporter_queue_display: Any = MagicMock()
+        self._message_processor: Any = MagicMock()
 
     def _flush_queued(self) -> None:
         pass
@@ -73,9 +74,6 @@ class MockApp:
     def set_live_mode(self, live: bool = False) -> None:
         if live:
             self.toggled_live = True
-
-    def _toggle_mode(self, live: bool = False) -> None:
-        self.set_live_mode(live=live)
 
     def query_one(self, selector: str, type: Any = None) -> Any:
         return MockWidget(selector)

@@ -74,6 +74,7 @@ class SupporterApp(App[None]):
 
     async def on_mount(self) -> None:
         from ..tools.bash.sandbox import register_bash_callbacks
+        from ..tools.browser.guardrails import register_browse_callback
         from ..tools.file_ops import register_confirmation_callback
 
         init_logger()
@@ -82,16 +83,23 @@ class SupporterApp(App[None]):
             confirmation=self._confirm_bash,
             notification=self._notify_error,
         )
+        register_browse_callback(
+            confirmation=self._confirm_browse,
+            profile_select=self._select_profile,
+        )
 
         from ..tools.delegate.api import set_delegation_start_callback
 
         set_delegation_start_callback(self._start_delegation_listener)
+
+        from ..tools.browser.session import prewarm_clone
 
         logger.info("Supporter TUI dashboard active")
         self._mode_manager.start_warmup()
         try:
             self.run_worker(self._setup_agent(use_live=True), exclusive=True)
             self.run_worker(self._mode_manager.trigger_live_greeting())
+            self.run_worker(prewarm_clone())
             self.query_one("#user-input").focus()
         except Exception as e:
             msg = f"Startup failure [{type(e).__name__}]: {e}"
@@ -100,14 +108,22 @@ class SupporterApp(App[None]):
 
     async def on_unmount(self) -> None:
         from ..tools.bash.sandbox import register_bash_callbacks
+        from ..tools.browser.guardrails import register_browse_callback
+        from ..tools.browser.session import close_session
         from ..tools.file_ops import register_confirmation_callback
 
         register_confirmation_callback(None)
         register_bash_callbacks(confirmation=None, notification=None)
+        register_browse_callback(
+            confirmation=None,
+            profile_select=None,
+        )
 
         from ..tools.delegate.api import set_delegation_start_callback
 
         set_delegation_start_callback(None)
+
+        await close_session()
 
         if (
             self.agent
@@ -240,9 +256,6 @@ class SupporterApp(App[None]):
     async def set_live_mode(self, live: bool = False) -> None:
         await self._mode_manager.toggle_mode(live=live)
 
-    async def _toggle_mode(self, live: bool = False) -> None:
-        await self.set_live_mode(live=live)
-
     async def _process_message_cycle(
         self,
         text: str,
@@ -370,6 +383,18 @@ class SupporterApp(App[None]):
         )
         event.wait()
         return result[0]
+
+    async def _confirm_browse(self, title: str, detail: str) -> bool:
+        from .modals import ConfirmationModal
+
+        return await self.push_screen_wait(
+            ConfirmationModal(title=title, content=detail, language="text")
+        )
+
+    async def _select_profile(self, profiles: list[Any]) -> str | None:
+        from .modals import ProfileSelectModal
+
+        return await self.push_screen_wait(ProfileSelectModal(profiles))
 
     def _safe_call(
         self, callback: Callable[..., Any], *args: Any, **kwargs: Any

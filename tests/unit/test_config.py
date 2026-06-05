@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supporter.config import AppConfig, _get_project_root, load_config
+from supporter.config import AppConfig, _get_project_root, _int_env, load_config
 from supporter.prompts import DEFAULT_SYSTEM_INSTRUCTION
 
 
@@ -76,6 +76,32 @@ class TestLoadConfig:
         os.environ["LOG_LEVEL"] = "INFO"
         config = load_config()
         assert config.gemini_api_keys == ["primary-key"]
+
+    def test_load_config_with_json_array_keys(self, clean_env: Any) -> None:
+        os.environ["GEMINI_API_KEYS"] = (
+            '["key1", "key2", "key3"]'  # pragma: allowlist secret
+        )
+        config = load_config()
+        assert config.gemini_api_keys == ["key1", "key2", "key3"]
+
+    def test_load_config_with_json_array_single_key(self, clean_env: Any) -> None:
+        os.environ["GEMINI_API_KEYS"] = '["only-key"]'  # pragma: allowlist secret
+        config = load_config()
+        assert config.gemini_api_keys == ["only-key"]
+
+    def test_load_config_with_invalid_json_array_raises(self, clean_env: Any) -> None:
+        os.environ["GEMINI_API_KEYS"] = '["unterminated'  # pragma: allowlist secret
+        with pytest.raises(ValueError, match="GEMINI_API_KEYS is not valid JSON array"):
+            load_config()
+
+    def test_load_config_with_json_array_non_string_items_dropped(
+        self, clean_env: Any
+    ) -> None:
+        os.environ["GEMINI_API_KEYS"] = (
+            '["key1", 123, null, "key2"]'  # pragma: allowlist secret
+        )
+        config = load_config()
+        assert config.gemini_api_keys == ["key1", "key2"]
 
     def test_load_config_default_model(self, clean_env: Any) -> None:
         os.environ["GEMINI_API_KEY"] = "test-key"  # pragma: allowlist secret
@@ -183,3 +209,10 @@ class TestDefaultSystemInstruction:
             in DEFAULT_SYSTEM_INSTRUCTION
         )
         assert "instead of '1 subagent'" in DEFAULT_SYSTEM_INSTRUCTION
+
+
+class TestIntEnv:
+    def test_non_integer_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("_TEST_INT_ENV_BAD", "not-a-number")
+        with pytest.raises(ValueError, match="must be an integer"):
+            _int_env("_TEST_INT_ENV_BAD", 42)

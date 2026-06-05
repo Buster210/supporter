@@ -20,6 +20,28 @@ class ChatMessageProcessor:
     def __init__(self, app: Any) -> None:
         self._app = app
 
+    def wire_recovery_observer(self, agent: Any) -> None:
+        provider = getattr(agent, "provider", None)
+        if provider is None:
+            return
+        live = getattr(provider, "primary", provider)
+        if hasattr(live, "recovery_observer"):
+            live.recovery_observer = self._on_recovery
+
+    def _on_recovery(self, event: str, data: dict[str, Any]) -> None:
+        if event in ("reconnecting", "replaying"):
+            self._update_status("Reconnecting")
+        elif event == "context_partial":
+            self._update_status("Context may be partial")
+            if not getattr(self._app, "_partial_banner_shown", False):
+                self._app._partial_banner_shown = True
+                from .chat import WelcomeBanner
+
+                for widget in self._app.query(WelcomeBanner):
+                    widget.message = (
+                        "Connection recovered; earlier context may be partial."
+                    )
+
     async def process_streaming(
         self,
         text: str,

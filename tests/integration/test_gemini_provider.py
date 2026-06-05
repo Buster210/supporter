@@ -10,6 +10,7 @@ import supporter.pool as index
 from supporter.config import load_config
 from supporter.pool import get_provider
 from supporter.providers.gemini_provider import GeminiProvider
+from supporter.tools.resolver import extract_declared_tool_names
 from tests.mocks import build_mock_stream_chunk, build_mock_stream_part
 
 
@@ -333,8 +334,7 @@ def test_transform_tools_returns_cached_result_on_cache_hit() -> Any:
 
 
 def test_extract_declared_tool_names_supports_dict_function_declarations() -> None:
-    provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
-    names = provider._extract_declared_tool_names(
+    names = extract_declared_tool_names(
         [{"function_declarations": [{"name": "sync_tool"}, {"name": "async_tool"}]}]
     )
     assert names == {"sync_tool", "async_tool"}

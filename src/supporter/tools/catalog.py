@@ -14,6 +14,7 @@ ORCHESTRATOR_TOOL_NAMES = (
     "cancel_delegation",
     "query_delegation",
     "execute_bash",
+    "browser_supervise",
 )
 
 
@@ -23,6 +24,7 @@ class ToolSpec:
     callable: Callable[..., Any]
     default_enabled: bool = True
     delegate_allowed: bool = False
+    allowed_roles: frozenset[str] | None = None
 
 
 _BUILTIN_CATALOG_CACHE: dict[bool, dict[str, ToolSpec]] = {}
@@ -33,6 +35,16 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         return _BUILTIN_CATALOG_CACHE[include_bash]
 
     from .bash.executor import execute_bash
+    from .browser.supervisor import browser_supervise
+    from .browser.task import (
+        delete_playbook,
+        finish_task,
+        list_playbooks,
+        query_playbook,
+        replay_playbook,
+        start_task,
+    )
+    from .browser.tool import browse
     from .delegate.api import cancel_delegation, check_delegation, delegate_tasks
     from .delegate.capsule_query import query_delegation
     from .file_ops import read_file, write_file
@@ -41,6 +53,52 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
     catalog: dict[str, ToolSpec] = {
         "read_file": ToolSpec("read_file", read_file, delegate_allowed=True),
         "write_file": ToolSpec("write_file", write_file, delegate_allowed=True),
+        "browse": ToolSpec(
+            "browse",
+            browse,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "browser_supervise": ToolSpec(
+            "browser_supervise",
+            browser_supervise,
+        ),
+        "start_task": ToolSpec(
+            "start_task",
+            start_task,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "finish_task": ToolSpec(
+            "finish_task",
+            finish_task,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "query_playbook": ToolSpec(
+            "query_playbook",
+            query_playbook,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "replay_playbook": ToolSpec(
+            "replay_playbook",
+            replay_playbook,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "list_playbooks": ToolSpec(
+            "list_playbooks",
+            list_playbooks,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "delete_playbook": ToolSpec(
+            "delete_playbook",
+            delete_playbook,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
         "delegate_tasks": ToolSpec("delegate_tasks", delegate_tasks),
         "check_delegation": ToolSpec("check_delegation", check_delegation),
         "cancel_delegation": ToolSpec("cancel_delegation", cancel_delegation),
@@ -95,6 +153,7 @@ def select_delegate_tools(
     names: _ToolSelection,
     *,
     include_disabled: bool = False,
+    role: str | None = None,
 ) -> dict[str, Callable[..., Any]]:
     selected_names = set(catalog) if names == "all" else set(names)
     return {
@@ -103,4 +162,5 @@ def select_delegate_tools(
         if name in selected_names
         and spec.delegate_allowed
         and (include_disabled or spec.default_enabled)
+        and (spec.allowed_roles is None or role in spec.allowed_roles)
     }
