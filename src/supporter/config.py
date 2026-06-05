@@ -72,6 +72,7 @@ DELEGATE_MAX_TASKS = 10
 DELEGATE_MAX_OUTPUT_CHARS = 10000
 DELEGATE_MAX_RETRIES = 2
 
+DELEGATE_CORRECTION_ROUNDS = 3
 DELEGATE_HEARTBEAT_INTERVAL = 30
 DELEGATE_ANOMALY_THRESHOLD = 0.8
 DELEGATE_JOB_ID_LEN = 8
@@ -155,6 +156,10 @@ def load_config() -> AppConfig:
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
         delegate_max_retries=_int_env("DELEGATE_MAX_RETRIES", DELEGATE_MAX_RETRIES),
+        delegate_correction_rounds=_int_env(
+            "DELEGATE_CORRECTION_ROUNDS", DELEGATE_CORRECTION_ROUNDS
+        ),
+        delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
         log_max_bytes=_int_env("LOG_MAX_BYTES", 5_000_000),
         log_backup_count=_int_env("LOG_BACKUP_COUNT", 3),
         history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),

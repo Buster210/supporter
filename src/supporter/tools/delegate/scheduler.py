@@ -28,6 +28,7 @@ from .capsule import (
     mark_task_started,
     mark_task_timed_out,
 )
+from .qa_gate import run_qa_gate
 
 BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 JOB_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -142,6 +143,7 @@ async def _execute_dag(
         )
 
         result = await run_sub_agent(enriched, semaphore, bus, job_id)
+        result = await run_qa_gate(enriched, result, semaphore, bus, job_id)
         results[task_id] = result
 
         if result["status"] == TaskStatus.COMPLETED:

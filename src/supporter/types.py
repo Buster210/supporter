@@ -71,6 +71,8 @@ class AppConfig:
     delegate_default_persona: str
     delegate_agent_roster: dict[str, dict[str, Any]]
     delegate_max_retries: int
+    delegate_correction_rounds: int = 3
+    delegate_qa_gate_enabled: bool = True
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
     history_max_turns: int = 200
