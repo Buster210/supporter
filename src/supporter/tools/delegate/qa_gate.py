@@ -21,7 +21,7 @@ from ...config import config
 from ...logger import logger
 from ...types import TaskStatus
 from .agents import run_sub_agent
-from .backends import GEMINI_BACKEND, OPENCODE_BACKEND
+from .backends import GEMINI_BACKEND, OPENCODE_BACKEND, QA_REJECTION_MARKER
 from .bus import DelegationBus
 
 _TIER1_TOKEN = "qa-tier1:"  # noqa: S105  # nosec B105 - verdict marker, not a secret
@@ -225,6 +225,6 @@ async def run_qa_gate(
     logger.warning(f"QA gate: task '{task_id}' rejected after {rounds} rounds")
     result["status"] = TaskStatus.ERROR
     result["output"] = (
-        f"QA gate rejected after {rounds} correction rounds. {last_reason}"
+        f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
     )
     return result

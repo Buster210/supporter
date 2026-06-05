@@ -11,3 +11,10 @@ GEMINI_BACKEND = "gemini"
 OPENCODE_BACKEND = "opencode"
 
 KNOWN_BACKENDS: frozenset[str] = frozenset({GEMINI_BACKEND, OPENCODE_BACKEND})
+
+# Prefix the QA gate (qa_gate.run_qa_gate) writes on a rejected task's output so a
+# rejection is distinguishable from other failures. Lives here -- the delegate
+# package's dependency-free constants leaf -- so the producer (qa_gate) and the
+# consumer (metrics, which counts qa_rejections by matching it) share one source
+# and cannot drift on a wording change.
+QA_REJECTION_MARKER = "QA gate rejected"
