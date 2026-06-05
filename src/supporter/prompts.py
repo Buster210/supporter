@@ -56,16 +56,6 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         "model": MODEL_GEMMA_31B,
         "live": False,
     },
-    "code_writer": {
-        "persona": (
-            "You are an Implementation Engineer. Write clean, production-ready "
-            "code following existing project conventions. Include docstrings. "
-            "Validate your changes compile before reporting."
-        ),
-        "tools": {"read_file", "write_file", "execute_bash"},
-        "model": MODEL_GEMMA_26B,
-        "live": False,
-    },
     "code_reviewer": {
         "persona": (
             "You are a Senior Code Reviewer. Analyze code for correctness, "
@@ -327,8 +317,6 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "4. SELECT AGENTS from the roster:\n"
     "   - security_auditor: vulnerability analysis, injection risks\n"
     "   - test_engineer: writing/running tests, reporting failures\n"
-    "   - code_writer: legacy native coder -- prefer the opencode backend "
-    "(step 3) for new coding/implementation work\n"
     "   - explorer: SPECIALIST for understanding code/files/docs -- "
     "use for any 'what/where/how does X work' question, mapping symbols, "
     "locating definitions, or external research\n"

@@ -1029,7 +1029,7 @@ class TestCacheKeyFunctions:
             _cache.offset_counter = 0
 
             result1 = _rotated_keys_for_role("security_auditor")
-            result2 = _rotated_keys_for_role("code_writer")
+            result2 = _rotated_keys_for_role("test_engineer")
 
             assert len(result1) == 2
             assert len(result2) == 2
