@@ -234,7 +234,7 @@ def test_browse_still_exclusive_to_page_pilot() -> None:
     from supporter.tools.catalog import build_tool_catalog, select_delegate_tools
 
     catalog = build_tool_catalog()
-    registry = select_delegate_tools(catalog, "all", role="code_writer")
+    registry = select_delegate_tools(catalog, "all", role="test_engineer")
     assert "browse" not in registry
     pp_registry = select_delegate_tools(catalog, "all", role="page-pilot")
     assert "browse" in pp_registry
@@ -244,7 +244,7 @@ def test_sub_agents_cannot_get_supervisor_tool() -> None:
     from supporter.tools.catalog import build_tool_catalog, select_delegate_tools
 
     catalog = build_tool_catalog()
-    for role in ("code_writer", "explorer", "page-pilot", "test_engineer", None):
+    for role in ("code_reviewer", "explorer", "page-pilot", "test_engineer", None):
         registry = select_delegate_tools(catalog, "all", role=role)
         assert "browser_supervise" not in registry, (
             f"role {role!r} should not get browser_supervise"

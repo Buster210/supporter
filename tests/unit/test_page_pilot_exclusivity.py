@@ -69,10 +69,10 @@ def test_two_gate_consistency_for_page_pilot() -> None:
     assert BROWSER_SUITE.issubset(validation_set)
 
 
-def test_two_gate_consistency_for_code_writer() -> None:
-    validation_set = delegate_allowed_tool_names(role="code_writer")
+def test_two_gate_consistency_for_test_engineer() -> None:
+    validation_set = delegate_allowed_tool_names(role="test_engineer")
     registry_set = set(
-        select_delegate_tools(build_tool_catalog(), "all", role="code_writer")
+        select_delegate_tools(build_tool_catalog(), "all", role="test_engineer")
     )
     assert validation_set == registry_set
     assert BROWSER_SUITE.isdisjoint(validation_set)
@@ -86,9 +86,9 @@ def test_validate_tasks_page_pilot_task_grants_browser_tools() -> None:
     assert BROWSER_SUITE.issubset(validated[0]["tools"])
 
 
-def test_validate_tasks_code_writer_task_excludes_browser_tools() -> None:
+def test_validate_tasks_test_engineer_task_excludes_browser_tools() -> None:
     tasks_json = json.dumps(
-        [{"id": "c1", "agent": "code_writer", "task": "implement X"}]
+        [{"id": "c1", "agent": "test_engineer", "task": "run the suite"}]
     )
     validated = validate_tasks(tasks_json)
     assert BROWSER_SUITE.isdisjoint(validated[0]["tools"])
@@ -216,12 +216,12 @@ def test_validate_tasks_page_pilot_partial_tool_request() -> None:
     assert validated[0]["tools"] == {"browse"}
 
 
-def test_validate_tasks_code_writer_explicit_browser_request_denied() -> None:
+def test_validate_tasks_test_engineer_explicit_browser_request_denied() -> None:
     tasks_json = json.dumps(
         [
             {
                 "id": "c1",
-                "agent": "code_writer",
+                "agent": "test_engineer",
                 "task": "use the browser",
                 "tools": "browse",
             }

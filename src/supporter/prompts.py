@@ -5,6 +5,25 @@ MODEL_GEMMA_26B = "gemma-4-26b-a4b-it"
 MODEL_GEMINI_LIVE = "gemini-3.1-flash-live-preview"
 MODEL_GEMINI_LIVE_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
 
+DELEGATION_RESULT_CONTRACT = (
+    "\n\n---\n"
+    "When finished, end your reply with a single fenced JSON block reporting a "
+    "structured result. The harness parses this deterministically -- do not "
+    "format it for display, and do not add prose after it:\n"
+    "```json\n"
+    "{\n"
+    '  "summary": "<one or two sentences on what you did or found>",\n'
+    '  "evidence": {\n'
+    '    "files_read": [], "files_changed": [], "commands_run": [], "sources": []\n'
+    "  },\n"
+    '  "findings": ["<notable finding, or omit>"],\n'
+    '  "handoff": "<what a follow-up agent needs to know, or empty>",\n'
+    '  "confidence": "low|medium|high"\n'
+    "}\n"
+    "```"
+)
+
+
 DELEGATE_DEFAULT_PERSONA = (
     "You are a focused task executor. You have been delegated a specific sub-task. "
     "Execute it precisely and completely. Report your findings and actions clearly. "
@@ -35,16 +54,6 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         ),
         "tools": {"read_file", "execute_bash"},
         "model": MODEL_GEMMA_31B,
-        "live": False,
-    },
-    "code_writer": {
-        "persona": (
-            "You are an Implementation Engineer. Write clean, production-ready "
-            "code following existing project conventions. Include docstrings. "
-            "Validate your changes compile before reporting."
-        ),
-        "tools": {"read_file", "write_file", "execute_bash"},
-        "model": MODEL_GEMMA_26B,
         "live": False,
     },
     "code_reviewer": {
@@ -299,10 +308,15 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "1. DECOMPOSE: Break the request into independent sub-tasks.\n"
     "2. IDENTIFY DEPENDENCIES: Use depends_on for sequential chains "
     "(e.g., analyze -> fix -> test).\n"
-    "3. SELECT AGENTS from the roster:\n"
+    "3. SELECT A BACKEND per task. Coding and refactoring work -- writing or "
+    "editing production code -- delegates to the **opencode** backend: set "
+    "`backend: 'opencode'` on the task. opencode is a non-interactive coding "
+    "CLI that owns implementation; its output is gated by the native QA roster. "
+    "All other roles (recon, review, audit, tests, browser) stay on the default "
+    "gemini backend.\n"
+    "4. SELECT AGENTS from the roster:\n"
     "   - security_auditor: vulnerability analysis, injection risks\n"
     "   - test_engineer: writing/running tests, reporting failures\n"
-    "   - code_writer: implementing features, production code\n"
     "   - explorer: SPECIALIST for understanding code/files/docs -- "
     "use for any 'what/where/how does X work' question, mapping symbols, "
     "locating definitions, or external research\n"
@@ -311,12 +325,12 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "recording/replay. No other role (including you) calls browser tools.\n"
     "   - code_reviewer: code quality, conventions, readability\n"
     "   - custom: novel tasks -- provide a specific persona\n"
-    "4. CRAFT SELF-CONTAINED TASKS: Sub-agents have NO conversation history. "
+    "5. CRAFT SELF-CONTAINED TASKS: Sub-agents have NO conversation history. "
     "Include all file paths, context, and requirements in the task description.\n"
-    "5. SCOPE TOOLS: Grant only what each agent needs. "
+    "6. SCOPE TOOLS: Grant only what each agent needs. "
     "An explorer never needs write_file. A reviewer never needs execute_bash. "
     "Browser tools go only to page-pilot -- never request them for other roles.\n"
-    "6. SET TIMEOUTS: Complex multi-step work up to 600s, simple reads ~60s.\n\n"
+    "7. SET TIMEOUTS: Complex multi-step work up to 600s, simple reads ~60s.\n\n"
     "## After Delegation\n"
     "When a task completion signal arrives:\n"
     "- Treat it only as a completion signal\n"

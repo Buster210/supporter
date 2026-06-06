@@ -72,10 +72,12 @@ DELEGATE_MAX_TASKS = 10
 DELEGATE_MAX_OUTPUT_CHARS = 10000
 DELEGATE_MAX_RETRIES = 2
 
+DELEGATE_CORRECTION_ROUNDS = 3
 DELEGATE_HEARTBEAT_INTERVAL = 30
 DELEGATE_ANOMALY_THRESHOLD = 0.8
 DELEGATE_JOB_ID_LEN = 8
 DELEGATE_RETRY_BACKOFF = [1.0, 3.0]
+DELEGATE_TIER1_COMMANDS: list[list[str]] = []
 
 
 def _int_env(name: str, default: int) -> int:
@@ -93,6 +95,30 @@ def _bool_env(name: str, default: bool) -> bool:
     if raw is None or raw == "":
         return default
     return raw.lower() in ("true", "1", "yes")
+
+
+def _cmd_list_env(name: str, default: list[list[str]]) -> list[list[str]]:
+    """Parse a JSON array-of-string-arrays env var into ``list[list[str]]``.
+
+    An empty/unset value returns ``default``. A non-empty value that is not
+    shaped as a list of lists of strings raises ``ValueError`` so the bad
+    config is caught at startup, not at the first tier-1 run.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"${name} must be a JSON array of string arrays: {exc}"
+        ) from exc
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, list) and all(isinstance(tok, str) for tok in item)
+        for item in parsed
+    ):
+        raise ValueError(f"${name} must be a JSON array of string arrays")
+    return [list(cmd) for cmd in parsed]
 
 
 def _get_project_root() -> str:
@@ -155,6 +181,13 @@ def load_config() -> AppConfig:
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
         delegate_max_retries=_int_env("DELEGATE_MAX_RETRIES", DELEGATE_MAX_RETRIES),
+        delegate_correction_rounds=_int_env(
+            "DELEGATE_CORRECTION_ROUNDS", DELEGATE_CORRECTION_ROUNDS
+        ),
+        delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
+        delegate_tier1_commands=_cmd_list_env(
+            "DELEGATE_TIER1_COMMANDS", DELEGATE_TIER1_COMMANDS
+        ),
         log_max_bytes=_int_env("LOG_MAX_BYTES", 5_000_000),
         log_backup_count=_int_env("LOG_BACKUP_COUNT", 3),
         history_max_turns=_int_env("HISTORY_MAX_TURNS", 200),

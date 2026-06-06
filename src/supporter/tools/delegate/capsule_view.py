@@ -12,6 +12,7 @@ from .capsule import (
     preview,
 )
 from .capsule_query import task_totals
+from .capsule_render import render_evidence, render_findings
 
 OUTPUT_PREVIEW_CHARS = 1200
 
@@ -108,8 +109,8 @@ def inspect_task(job_id: str, task_id: str) -> str:
         lines.append(f"- Error: {task['error']}")
     if task.get("skip_reason"):
         lines.append(f"- Skip reason: {task['skip_reason']}")
-    lines.append(f"- Evidence: `{json.dumps(evidence, ensure_ascii=False)}`")
-    lines.append(f"- Findings: `{json.dumps(findings, ensure_ascii=False)}`")
+    lines.append(render_evidence(evidence))
+    lines.append(render_findings(findings))
     if task.get("output"):
         outputpreview = preview(str(task["output"]), OUTPUT_PREVIEW_CHARS)
         lines.append(f"\nOutput preview:\n\n{outputpreview}")
