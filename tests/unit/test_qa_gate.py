@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,7 +34,13 @@ def _result() -> dict[str, Any]:
 
 
 def _run_gate(outputs_for: Any) -> tuple[dict[str, Any], list[str]]:
-    """Run the gate with run_sub_agent mocked by a per-task-id output function."""
+    """Run the gate with run_sub_agent mocked by a per-task-id output function.
+
+    Forces the LLM tier-1 path (``DELEGATE_TIER1_OBJECTIVE=0``) so the
+    existing orchestration assertions on tier-1/tier-2/correction call
+    counts keep exercising the unchanged loop body, independent of the new
+    objective tier-1 dispatch.
+    """
     calls: list[str] = []
 
     async def fake_run(task: dict[str, Any], *_a: Any, **_k: Any) -> dict[str, Any]:
@@ -41,7 +48,10 @@ def _run_gate(outputs_for: Any) -> tuple[dict[str, Any], list[str]]:
         return {"status": TaskStatus.COMPLETED, "output": outputs_for(task["id"])}
 
     bus = MagicMock(spec=DelegationBus)
-    with patch.object(qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)):
+    with (
+        patch.object(qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)),
+        patch.dict(os.environ, {"DELEGATE_TIER1_OBJECTIVE": "0"}),
+    ):
         result = asyncio.run(
             run_qa_gate(_base_task(), _result(), asyncio.Semaphore(3), bus, "job1")
         )
@@ -133,8 +143,9 @@ class TestQaGate:
             return {"status": TaskStatus.COMPLETED, "output": "QA-VERDICT: APPROVE"}
 
         bus = MagicMock(spec=DelegationBus)
-        with patch.object(
-            qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)
+        with (
+            patch.object(qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)),
+            patch.dict(os.environ, {"DELEGATE_TIER1_OBJECTIVE": "0"}),
         ):
             result = asyncio.run(
                 run_qa_gate(_base_task(), _result(), asyncio.Semaphore(3), bus, "job1")

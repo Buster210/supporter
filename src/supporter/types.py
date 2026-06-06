@@ -73,6 +73,7 @@ class AppConfig:
     delegate_max_retries: int
     delegate_correction_rounds: int = 3
     delegate_qa_gate_enabled: bool = True
+    delegate_tier1_commands: list[list[str]] = field(default_factory=list)
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
     history_max_turns: int = 200

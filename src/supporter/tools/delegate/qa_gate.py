@@ -15,6 +15,8 @@ otherwise, so existing flows are unaffected.
 """
 
 import asyncio
+import os
+from pathlib import Path
 from typing import Any
 
 from ...config import config
@@ -23,6 +25,12 @@ from ...types import TaskStatus
 from .agents import run_sub_agent
 from .backends import GEMINI_BACKEND, OPENCODE_BACKEND, QA_REJECTION_MARKER
 from .bus import DelegationBus
+from .opencode_backend import _resolve_repo
+from .tier1_checks import (
+    Tier1ToolUnavailable,
+    resolve_tier1_commands,
+    run_objective_tier1,
+)
 
 _TIER1_TOKEN = "qa-tier1:"  # noqa: S105  # nosec B105 - verdict marker, not a secret
 _TIER2_TOKEN = "qa-verdict:"  # noqa: S105  # nosec B105 - verdict marker, not a secret
@@ -86,13 +94,20 @@ async def _run(
     return ok, str(result.get("output", ""))
 
 
-async def _tier1(
+async def _tier1_llm(
     base: dict[str, Any],
     attempt: int,
     semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
 ) -> tuple[bool, str]:
+    """LLM-driven tier-1 fallback (SPEC §7, zero-regression path).
+
+    The previous behavior: a fresh opencode worker inspects the diff and
+    self-reports ``QA-TIER1: PASS|FAIL``. Preserved byte-identically so the
+    objective dispatcher below can fall back to it whenever the configured
+    commands are not runnable.
+    """
     instructions = (
         "A previous worker changed code in this repository. Verify the change is "
         "correct WITHOUT modifying any files. Run `git diff --name-only` to see "
@@ -106,6 +121,35 @@ async def _tier1(
     )
     ran, output = await _run(task, semaphore, bus, job_id)
     return ran and _verdict_passed(output, _TIER1_TOKEN, "pass"), output
+
+
+async def _tier1(
+    base: dict[str, Any],
+    attempt: int,
+    semaphore: asyncio.Semaphore,
+    bus: DelegationBus,
+    job_id: str,
+) -> tuple[bool, str]:
+    """Dispatch tier-1 to the objective harness or fall back to the LLM worker.
+
+    Honors ``DELEGATE_TIER1_OBJECTIVE=0`` to force the LLM path (used in
+    tests and for emergency rollback). Otherwise resolves a list of argv
+    from config or auto-detection, runs them in-process with REAL exit
+    codes, and falls back to the LLM worker on ``Tier1ToolUnavailable``
+    (e.g. when a required tool is outside the sandbox bind-mount).
+    """
+    if os.getenv("DELEGATE_TIER1_OBJECTIVE", "1") == "0":
+        return await _tier1_llm(base, attempt, semaphore, bus, job_id)
+
+    repo = Path(_resolve_repo())
+    commands = resolve_tier1_commands(repo)
+    if commands:
+        try:
+            return await run_objective_tier1(repo, commands, base["timeout"])
+        except Tier1ToolUnavailable as exc:
+            logger.warning(f"objective tier-1 unavailable, falling back to LLM: {exc}")
+
+    return await _tier1_llm(base, attempt, semaphore, bus, job_id)
 
 
 async def _tier2(
