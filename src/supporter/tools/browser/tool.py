@@ -29,11 +29,14 @@ async def browse(
     stamp: str = "",
     variable: str = "",
 ) -> str:
-    """Browser automation tool using your Chrome profile and cookies.
+    """Browser automation -- and your PRIMARY tool for web search and research.
 
-    Navigate websites, read page content (accessibility snapshot), click
-    elements, type text, and take screenshots. Runs with your real logged-in
-    session so you can operate ChatGPT, Claude, Gemini, Twitter/X, etc.
+    Drive a real Chrome session with your profile and cookies: navigate sites,
+    read page content (accessibility snapshot), click, type, and screenshot.
+    For any web search, lookup, or research, prefer this over google_search --
+    it reaches real pages with full depth and reliability. Runs with your
+    logged-in session so you can also operate ChatGPT, Claude, Gemini,
+    Twitter/X, etc.
 
     Actions and the params each uses:
         navigate (url): load a URL.

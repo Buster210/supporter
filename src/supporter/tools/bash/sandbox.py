@@ -74,18 +74,15 @@ def wrap_in_sandbox(tokens: list[str], cwd: Path, root: Path) -> list[str]:
 
 
 def set_bash_notification_callback(callback: Callable[[str], None] | None) -> None:
-    """Sets the callback function for security-related notifications."""
     global bash_notification_callback
     bash_notification_callback = callback
 
 
 def check_bash_availability() -> bool:
-    """Checks if a supported sandbox tool is available on the system."""
     return _SB_BIN is not None
 
 
 def notify_bash_unavailable() -> None:
-    """Triggers a notification if the bash tool is disabled due to missing sandbox."""
     if bash_notification_callback:
         bash_notification_callback("BASH TOOL DISABLED: Sandbox tool not found")
 
@@ -93,7 +90,6 @@ def notify_bash_unavailable() -> None:
 def set_bash_confirmation_callback(
     callback: Callable[[list[str], str], bool] | None,
 ) -> None:
-    """Sets the callback function for user confirmation of risky commands."""
     global bash_confirmation_callback
     bash_confirmation_callback = callback
 

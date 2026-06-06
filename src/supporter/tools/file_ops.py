@@ -118,8 +118,8 @@ async def read_file(
     """Reads file content safely within project boundaries.
     Args:
         path: File path (abs/rel).
-        offset: Start byte offset.
-        limit: Max bytes to read.
+        offset: Start character offset.
+        limit: Max characters to read.
         encoding: Text encoding (default: 'utf-8').
     Returns:
         File content as string, or error message.
@@ -133,8 +133,8 @@ async def read_file(
 
         try:
             with p.open("r", encoding=encoding) as f:
-                if offset is not None:
-                    f.seek(offset)
+                if offset and offset > 0:
+                    f.read(offset)  # text-mode: advance by characters, not bytes
                 content = f.read(limit) if limit is not None else f.read()
                 logger.debug(f"read_file content: {content!r}")
                 return content

@@ -52,14 +52,26 @@ def _redact_secrets(text: str) -> str:
 
 
 async def execute_bash(command: str, working_directory: str | None = None) -> str:
-    """Run shell command in sandbox. Avoid pipes, &&, ||, ;, $(), ``.
+    """Run a single shell binary in a locked-down sandbox (no shell interpreter).
+
+    Only the first token is the binary; the rest are literal arguments. Shell
+    operators are NOT interpreted -- pipes, `&&`, `||`, `;`, and redirects
+    (`>`, `>>`) do not chain commands. Command substitution (`$(...)`, backticks),
+    non-ASCII characters, null bytes, absolute binary paths (use `ls`, not
+    `/bin/ls`), and disallowed binaries are BLOCKED outright.
+
+    Mutating commands (writes, deletes, `sed -i`, etc.) require UI confirmation
+    before running and report the files they changed. Output is truncated past
+    100 KB, execution is killed after 30s, and known secrets are redacted from
+    the result.
 
     Args:
-        command: Safe, simple shell command.
-        working_directory: Optional cwd (default: project root).
+        command: A single command with literal arguments. No shell syntax.
+        working_directory: Optional working dir; must resolve inside the
+            project (default: project root).
 
     Returns:
-        stdout/stderr or error. Risky commands trigger UI confirmation.
+        Combined stdout/stderr (secrets redacted), or an error message.
     """
     logger.info(f"Tool: execute_bash — command='{command}'")
 
