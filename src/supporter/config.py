@@ -202,9 +202,11 @@ def load_config() -> AppConfig:
         reconnect_backoff_base=float(os.getenv("RECONNECT_BACKOFF_BASE", "0.5")),
         reconnect_backoff_cap=float(os.getenv("RECONNECT_BACKOFF_CAP", "8.0")),
         prewarm_safety_margin=float(os.getenv("PREWARM_SAFETY_MARGIN", "5.0")),
-        keepalive_interval=float(os.getenv("KEEPALIVE_INTERVAL", "20.0")),
         keepalive_enabled=_bool_env("KEEPALIVE_ENABLED", True),
-        idle_monitor_enabled=_bool_env("IDLE_MONITOR_ENABLED", True),
+        idle_monitor_enabled=_bool_env(
+            "IDLE_MONITOR_ENABLED",
+            _bool_env("KEEPALIVE_ENABLED", True),
+        ),
         empty_resume_policy=os.getenv("EMPTY_RESUME_POLICY", "trust").lower(),
     )
 

@@ -1,7 +1,7 @@
 import asyncio
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1477,37 +1477,6 @@ async def test_go_away_sets_prewarm_deadline_with_margin(provider: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_keepalive_cancelled_on_close(provider: Any) -> None:
-    async def never_finish() -> None:
-        await asyncio.sleep(3600)
-
-    provider._keepalive_task = asyncio.create_task(never_finish())
-    await provider.close()
-    assert provider._keepalive_task is None
-
-
-@pytest.mark.asyncio
-async def test_keepalive_skips_probe_during_active_turn(provider: Any) -> None:
-    provider._session = AsyncMock()
-    provider._turn_lock = asyncio.Lock()
-    provider._keepalive_task = None
-    provider._go_away_deadline = None
-    await provider._turn_lock.acquire()
-    try:
-        provider._recent_images.clear()
-        task = asyncio.create_task(provider._keepalive_loop())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        import contextlib
-
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-    finally:
-        provider._turn_lock.release()
-    provider._session.send_realtime_input.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_empty_resume_policy_trust_does_not_force_replay(
     provider: Any, monkeypatch: Any
 ) -> None:
@@ -1520,7 +1489,7 @@ async def test_empty_resume_policy_trust_does_not_force_replay(
     from supporter.config import config as live_cfg
 
     monkeypatch.setattr(live_cfg, "empty_resume_policy", "trust")
-    monkeypatch.setattr(live_cfg, "keepalive_enabled", False)
+    monkeypatch.setattr(live_cfg, "idle_monitor_enabled", False)
 
     with patch.object(provider.client.aio.live, "connect", return_value=mock_mgr):
         await provider._ensure_session()
@@ -1541,7 +1510,7 @@ async def test_empty_resume_policy_replay_forces_replay_on_reconnect(
     from supporter.config import config as live_cfg
 
     monkeypatch.setattr(live_cfg, "empty_resume_policy", "replay")
-    monkeypatch.setattr(live_cfg, "keepalive_enabled", False)
+    monkeypatch.setattr(live_cfg, "idle_monitor_enabled", False)
 
     with patch.object(provider.client.aio.live, "connect", return_value=mock_mgr):
         await provider._ensure_session()
@@ -1618,13 +1587,481 @@ async def test_keepalive_no_storm_after_reconnect(provider: Any) -> None:
     provider._go_away_deadline = None
     prewarm_call_count = 0
 
-    provider._session = new_session
-    task = asyncio.create_task(provider._keepalive_loop())
-    await asyncio.sleep(0.05)
-    task.cancel()
-    import contextlib
-
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-
+    assert not hasattr(provider, "_keepalive_loop")
     assert prewarm_call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_idle_monitor_proactive_reconnect_on_deadline(provider: Any) -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+    provider.recovery_observer = lambda e, d: events.append((e, d))
+
+    old_session = AsyncMock()
+    provider._session = old_session
+
+    async def park_receive() -> AsyncGenerator[Any, Any]:
+        await asyncio.sleep(3600)
+        yield MagicMock()  # pragma: no cover (deadline fires before any message)
+
+    old_session.receive = park_receive
+
+    reconnect_calls = 0
+
+    async def fake_reconnect() -> None:
+        nonlocal reconnect_calls
+        reconnect_calls += 1
+        provider._go_away_deadline = None  # mirror _ensure_session clearing it
+        fresh = AsyncMock()
+        fresh.receive = park_receive
+        provider._session = fresh
+
+    provider._reconnect = fake_reconnect
+    provider._go_away_deadline = time.monotonic() + 0.05
+
+    try:
+        await provider._monitor_loop()
+        assert reconnect_calls == 1, "deadline did not trigger exactly one reconnect"
+        assert ("reconnecting", {"source": "deadline"}) in events
+    finally:
+        await provider._stop_monitor()
+
+
+@pytest.mark.asyncio
+async def test_deadline_reconnect_no_double_with_prepare_turn(provider: Any) -> None:
+    old_session = AsyncMock()
+    provider._session = old_session
+
+    async def park_receive() -> AsyncGenerator[Any, Any]:
+        await asyncio.sleep(3600)
+        yield MagicMock()  # pragma: no cover (deadline fires before any message)
+
+    old_session.receive = park_receive
+
+    reconnect_calls = 0
+
+    async def fake_reconnect() -> None:
+        nonlocal reconnect_calls
+        reconnect_calls += 1
+        provider._go_away_deadline = None
+        fresh = AsyncMock()
+        fresh.receive = park_receive
+        provider._session = fresh
+
+    provider._reconnect = fake_reconnect
+    provider._go_away_deadline = time.monotonic() + 0.05
+
+    await provider._monitor_loop()
+    assert reconnect_calls == 1
+
+    # The next turn must not reconnect again: deadline cleared, no pending flag.
+    provider._last_turn_complete = True
+    try:
+        await provider._prepare_turn("hi")
+        assert reconnect_calls == 1, "prepare_turn triggered a second reconnect"
+        assert provider._reconnect_pending is False
+        assert provider._go_away_deadline is None
+    finally:
+        await provider._stop_monitor()
+
+
+async def _wait_until(predicate: Any, *, seconds: float = 1.0) -> bool:
+    deadline = asyncio.get_running_loop().time() + seconds
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.01)
+    return cast("bool", predicate())
+
+
+@pytest.mark.asyncio
+async def test_idle_monitor_catches_go_away_and_reconnects(provider: Any) -> None:
+    old_session = AsyncMock()
+    provider._session = old_session
+
+    r_go = MagicMock()
+    r_go.tool_call = None
+    r_go.session_resumption_update = None
+    r_go.go_away = MagicMock()
+    r_go.go_away.time_left = "5s"
+    r_go.server_content = None
+
+    async def old_receive() -> AsyncGenerator[Any, Any]:
+        yield r_go
+        raise RuntimeError("idle receive ended (test signal)")
+
+    old_session.receive = old_receive
+
+    async def fake_reconnect() -> None:
+        fresh = AsyncMock()
+
+        async def park() -> AsyncGenerator[Any, Any]:
+            await asyncio.sleep(3600)
+            yield MagicMock()  # pragma: no cover
+
+        fresh.receive = park
+        provider._session = fresh
+
+    provider._reconnect = fake_reconnect
+
+    try:
+        await provider._start_monitor()
+        assert provider._monitor_task is not None
+        ok = await _wait_until(lambda: provider._session is not old_session)
+        assert ok, "monitor did not swap the session via _reconnect"
+        assert provider._session is not old_session
+    finally:
+        await provider._stop_monitor()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_idle_monitor_refreshes_resumption_handle(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+    provider._session_handle = "h1"
+    provider._handle_resumed_pending = True
+
+    r_sru = MagicMock()
+    r_sru.tool_call = None
+    r_sru.session_resumption_update = MagicMock()
+    r_sru.session_resumption_update.resumable = True
+    r_sru.session_resumption_update.new_handle = "h2"
+    r_sru.go_away = None
+    r_sru.server_content = None
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        yield r_sru
+        raise RuntimeError("idle receive ended (test signal)")
+
+    mock_session.receive = mock_receive
+
+    try:
+        await provider._start_monitor()
+        ok = await _wait_until(
+            lambda: (
+                provider._session_handle == "h2"
+                and provider._handle_resumed_pending is False
+            )
+        )
+        assert ok, "monitor did not refresh resumption handle"
+        assert provider._session_handle == "h2"
+        assert provider._handle_resumed_pending is False
+    finally:
+        await provider._stop_monitor()
+
+
+@pytest.mark.asyncio
+async def test_prepare_turn_stops_monitor_before_reading(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+
+    started = asyncio.Event()
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        started.set()
+        await asyncio.sleep(3600)
+        yield MagicMock()  # pragma: no cover (never reached)
+
+    mock_session.receive = mock_receive
+
+    await provider._start_monitor()
+    ok = await _wait_until(started.is_set)
+    assert ok, "monitor did not enter receive()"
+
+    sent_via: dict[str, Any] = {}
+
+    original_send = provider._send_user_turn
+
+    async def spy_send(session: Any, prompt: Any) -> None:
+        sent_via["monitor_task"] = provider._monitor_task
+        return cast("None", await original_send(session, prompt))
+
+    provider._send_user_turn = spy_send
+
+    try:
+        await provider._prepare_turn("hi")
+        assert sent_via.get("monitor_task") is None, (
+            "_send_user_turn saw a live _monitor_task; single-reader invariant violated"
+        )
+    finally:
+        await provider._stop_monitor()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_turn_end_restarts_monitor(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+
+    r_final = _completed_turn_response()
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        yield r_final
+
+    mock_session.receive = mock_receive
+    provider._reconnect_pending = False
+    provider._prewarm_task = None
+
+    try:
+        await provider.generate("hi")
+        assert provider._monitor_task is not None
+        monitor_tasks = [t for t in asyncio.all_tasks() if t is provider._monitor_task]
+        assert len(monitor_tasks) == 1
+        assert not provider._monitor_task.done()
+    finally:
+        await provider._stop_monitor()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_monitor_recv_error_falls_back_to_inline(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+
+    async def mock_receive_crash() -> AsyncGenerator[Any, Any]:
+        raise ConnectionError("socket died")
+        yield  # pragma: no cover (generator never advances)
+
+    mock_session.receive = mock_receive_crash
+
+    async def reconnect_fails() -> None:
+        raise RuntimeError("reconnect blew up")
+
+    provider._reconnect = reconnect_fails
+
+    try:
+        await provider._start_monitor()
+        ok = await _wait_until(lambda: provider._reconnect_pending is True)
+        assert ok, "monitor did not set _reconnect_pending after reconnect failure"
+        assert provider._reconnect_pending is True
+    finally:
+        await provider._stop_monitor()
+
+
+@pytest.mark.asyncio
+async def test_monitor_cancelled_on_close(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        await asyncio.sleep(3600)
+        yield MagicMock()  # pragma: no cover
+
+    mock_session.receive = mock_receive
+    provider._session_manager = AsyncMock()
+
+    await provider._start_monitor()
+    assert provider._monitor_task is not None
+    await provider.close()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_monitor_cancelled_mid_reconnect_does_not_disrupt_turn(
+    provider: Any,
+) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+    provider._session_manager = AsyncMock()
+    provider._reconnect_pending = False
+
+    r_go = MagicMock()
+    r_go.tool_call = None
+    r_go.session_resumption_update = None
+    r_go.go_away = MagicMock()
+    r_go.go_away.time_left = "30s"
+    r_go.server_content = None
+
+    r_final = _completed_turn_response()
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        yield r_go
+        yield r_final
+
+    mock_session.receive = mock_receive
+
+    reconnect_started = asyncio.Event()
+    reconnect_was_teared_down = False
+
+    async def slow_reconnect() -> None:
+        nonlocal reconnect_was_teared_down
+        reconnect_started.set()
+        await asyncio.sleep(2.0)
+        reconnect_was_teared_down = True
+        await provider._teardown_session()
+        await provider._ensure_session()
+
+    provider._reconnect = slow_reconnect
+
+    try:
+        await provider._start_monitor()
+        assert provider._monitor_task is not None
+        await asyncio.wait_for(reconnect_started.wait(), timeout=1.0)
+        await provider._prepare_turn("hi")
+        assert reconnect_was_teared_down is False
+        assert provider._session is mock_session
+    finally:
+        await provider._stop_monitor()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_idle_monitor_disabled_does_not_start(
+    provider: Any, monkeypatch: Any
+) -> None:
+    from supporter.config import config as live_cfg
+
+    monkeypatch.setattr(live_cfg, "idle_monitor_enabled", False)
+    mock_session = AsyncMock()
+    provider._session = mock_session
+
+    r_final = _completed_turn_response()
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        yield r_final
+
+    mock_session.receive = mock_receive
+
+    result = await provider.generate("hi")
+    assert result.text == ""
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_start_monitor_no_session_noop(provider: Any) -> None:
+    provider._session = None
+    await provider._start_monitor()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_teardown_session_nulls_on_cancellation(provider: Any) -> None:
+    aexit_started = asyncio.Event()
+
+    async def slow_aexit(*_args: Any) -> None:
+        aexit_started.set()
+        await asyncio.sleep(2.0)
+
+    provider._session_manager = MagicMock()
+    provider._session_manager.__aexit__ = slow_aexit
+    provider._session = AsyncMock()
+
+    teardown_task = asyncio.create_task(provider._teardown_session())
+    await asyncio.wait_for(aexit_started.wait(), timeout=1.0)
+    teardown_task.cancel()
+    import contextlib as _cl
+
+    with _cl.suppress(asyncio.CancelledError, BaseException):
+        await teardown_task
+    assert provider._session is None
+    assert provider._session_manager is None
+
+
+@pytest.mark.asyncio
+async def test_monitor_does_not_busy_loop_when_reconnect_exhausted(
+    provider: Any,
+) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+
+    r_go = MagicMock()
+    r_go.tool_call = None
+    r_go.session_resumption_update = None
+    r_go.go_away = MagicMock()
+    r_go.go_away.time_left = "5s"
+    r_go.server_content = None
+
+    async def old_receive() -> AsyncGenerator[Any, Any]:
+        yield r_go
+        raise RuntimeError("idle receive ended (test signal)")
+
+    mock_session.receive = old_receive
+
+    provider._reconnect_attempts = provider._reconnect_attempts_max
+    original_reconnect = provider._reconnect
+    reconnect_call_count = 0
+
+    async def counting_reconnect() -> None:
+        nonlocal reconnect_call_count
+        reconnect_call_count += 1
+        await original_reconnect()
+
+    provider._reconnect = counting_reconnect
+
+    try:
+        await provider._start_monitor()
+        assert provider._monitor_task is not None
+        ok = await _wait_until(
+            lambda: (
+                provider._reconnect_pending is True and provider._monitor_task is None
+            )
+        )
+        assert ok, "monitor did not fall back to _reconnect_pending after exhaustion"
+        assert provider._reconnect_pending is True
+        await asyncio.sleep(0.2)
+        assert reconnect_call_count == 1
+    finally:
+        await provider._stop_monitor()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_clears_handle_resumed_pending_when_handleless(
+    provider: Any,
+) -> None:
+    provider._session_handle = None
+    provider._handle_resumed_pending = True
+    new_session = AsyncMock()
+    mock_mgr = MagicMock()
+    mock_mgr.__aenter__ = AsyncMock(return_value=new_session)
+    with patch.object(provider.client.aio.live, "connect", return_value=mock_mgr):
+        await provider._ensure_session()
+    assert provider._handle_resumed_pending is False
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_early_exit_starts_monitor(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._session = mock_session
+    provider._reconnect_pending = False
+    provider._prewarm_task = None
+
+    async def mock_receive() -> AsyncGenerator[Any, Any]:
+        for _i in range(5):
+            r = MagicMock()
+            r.tool_call = None
+            r.session_resumption_update = None
+            r.go_away = None
+            r.server_content = MagicMock()
+            r.server_content.model_turn = None
+            r.server_content.output_transcription = None
+            r.server_content.grounding_metadata = None
+            r.server_content.turn_complete = False
+            yield r
+
+    mock_session.receive = mock_receive
+
+    gen = provider.generate_stream("hi")
+    first = await gen.__anext__()
+    assert first is not None
+    await gen.aclose()
+
+    assert provider._monitor_task is not None
+
+    await provider._stop_monitor()
+    assert provider._monitor_task is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_turn_resets_reconnect_attempts_after_inline(
+    provider: Any,
+) -> None:
+    provider._reconnect_attempts = provider._reconnect_attempts_max
+    provider._reconnect_pending = True
+    provider._go_away_deadline = None
+    provider._session_manager = AsyncMock()
+    new_session = AsyncMock()
+    mock_mgr = MagicMock()
+    mock_mgr.__aenter__ = AsyncMock(return_value=new_session)
+    with patch.object(provider.client.aio.live, "connect", return_value=mock_mgr):
+        await provider._prepare_turn("hi")
+    assert provider._reconnect_attempts == 0
