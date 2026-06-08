@@ -77,6 +77,9 @@ class AppConfig:
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
     history_max_turns: int = 200
+    history_compaction_enabled: bool = True
+    history_compaction_trigger: int = 160
+    history_summary_keep_recent: int = 80
     browser_profile_path: str | None = None
     browser_profile_name: str | None = None
     browser_debug_overlay: bool = False

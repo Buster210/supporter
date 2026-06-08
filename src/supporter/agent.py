@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import config
+from .history_summarizer import summarize_turns
 from .logger import logger
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
 
@@ -49,6 +50,10 @@ class ChatAgent:
         self.system_instruction = system_instruction
         self._store: Any = None
         self._store_prev_len: int = 0
+        # WHY: Cache summary state so compaction survives AFC clobber.
+        # _summary covers turns [0, _summary_turn_count) of self.history.
+        self._summary: str = ""
+        self._summary_turn_count: int = 0
         if config.durable_history_enabled:
             from .session import HistoryStore, new_session_id
 
@@ -68,8 +73,9 @@ class ChatAgent:
         logger.info(f"ChatAgent initialized with provider: {provider.get_name()}")
 
     def _prepare_execution_context(self) -> LLMOptions:
+        history_for_send = self._build_compacted_history()
         return {
-            "history": self.history,
+            "history": history_for_send,
             "interaction_id": self.current_interaction_id,
             "tools": self.tools or [],
             "registry": self.registry or {},
@@ -77,6 +83,81 @@ class ChatAgent:
             "use_code_execution": self.use_code_execution,
             "system_instruction": self.system_instruction,
         }
+
+    def _build_compacted_history(self) -> list[Any]:
+        """Build compacted history view for LLM context.
+
+        WHY: Returns [summary turn] + recent turns instead of full history.
+        This is a READ-TIME view; self.history stays full for persistence.
+        The summary is cached and only regenerated when the uncovered tail grows.
+        """
+        if not config.history_compaction_enabled:
+            return self.history
+
+        keep_recent = config.history_summary_keep_recent
+
+        if len(self.history) <= keep_recent:
+            return self.history
+
+        # WHY (PITFALL-2): if history shrunk (e.g. AFC branch clobber), the
+        # cached _summary_turn_count is an offset into the old list and may
+        # exceed len(self.history), making uncovered_count negative. Invalidate
+        # the stale summary so the next call re-summarizes from the new base.
+        if self._summary and self._summary_turn_count > len(self.history):
+            self._summary = ""
+            self._summary_turn_count = 0
+        uncovered_count = len(self.history) - self._summary_turn_count
+        if uncovered_count <= keep_recent and self._summary:
+            from google.genai.types import Content, Part
+
+            summary_text = f"[PREVIOUS_CONTEXT_SUMMARY]\n{self._summary}"
+            summary_turn = Content(role="model", parts=[Part(text=summary_text)])
+            return [summary_turn, *self.history[-keep_recent:]]
+
+        return self.history
+
+    async def _maybe_summarize(self) -> bool:
+        """Summarize old turns if past trigger threshold.
+
+        WHY: Called before each execution; summary must happen BEFORE hard trim
+        at history_max_turns or context is lost.
+
+        Returns True if summarization succeeded, False if fallback to trim needed.
+        """
+        if not config.history_compaction_enabled:
+            return False
+
+        trigger = config.history_compaction_trigger
+        keep_recent = config.history_summary_keep_recent
+
+        if len(self.history) <= trigger:
+            return False
+
+        # WHY (PITFALL-2): invalidate stale summary that references a now-shrunken
+        # history so the coverage math (and resulting recent-turns slice) is correct.
+        if self._summary and self._summary_turn_count > len(self.history):
+            self._summary = ""
+            self._summary_turn_count = 0
+
+        if len(self.history) > keep_recent:
+            turns_to_summarize = self.history[:-keep_recent]
+        else:
+            turns_to_summarize = []
+
+        try:
+            summary = await summarize_turns(turns_to_summarize)
+            if summary:
+                self._summary = summary
+                self._summary_turn_count = len(self.history) - keep_recent
+                logger.info(
+                    f"Summarized {len(turns_to_summarize)} history turns "
+                    f"(kept {keep_recent} recent)"
+                )
+                return True
+        except Exception as e:
+            logger.warning(f"History summarization failed: {e}")
+
+        return False
 
     def _trim_history(self) -> None:
         cap = config.history_max_turns
@@ -87,6 +168,10 @@ class ChatAgent:
         logger.info(f"Agent: executing prompt — length={len(prompt)}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full prompt: {prompt!r}")
+
+        # WHY: Summarize before we might hit the hard trim cap.
+        if not await self._maybe_summarize():
+            self._trim_history()
 
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
@@ -140,6 +225,10 @@ class ChatAgent:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full streaming prompt: {prompt!r}")
 
+        # WHY: Summarize before we might hit the hard trim cap.
+        if not await self._maybe_summarize():
+            self._trim_history()
+
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
         options["user_content"] = user_message
@@ -163,6 +252,8 @@ class ChatAgent:
     def clear_history(self) -> None:
         logger.info("Clearing agent session history")
         self.history = []
+        self._summary = ""
+        self._summary_turn_count = 0
         self.current_interaction_id = None
         if self._store:
             self._store.rotate()
