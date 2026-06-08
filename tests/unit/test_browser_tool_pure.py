@@ -62,21 +62,23 @@ _TREE = '- document [ref=e1]:\n  - button "OK" [ref=e2]'
 
 
 def test_render_snapshot_lossless_when_not_compact() -> None:
-    out = support._render_snapshot(_TREE, _req(compact=False), "", "https://x.test/")
+    out = support._render_snapshot(
+        _TREE, _req(compact=False), "", cleaned='- button "OK" [ref=e2]'
+    )
     assert "OK" in out
     assert "interactive elements" not in out
 
 
 def test_render_snapshot_compact_counts_interactive() -> None:
     out = support._render_snapshot(
-        _TREE, _req(compact=True), " after click", "https://x.test/"
+        _TREE, _req(compact=True), " after click", cleaned=""
     )
     assert "interactive elements after click" in out
     assert "OK" in out
 
 
 def test_render_snapshot_empty_tree_reports_empty_page() -> None:
-    out = support._render_snapshot("", _req(compact=False), "", "https://x.test/")
+    out = support._render_snapshot("", _req(compact=False), "", cleaned="")
     assert out == "(empty page)"
 
 

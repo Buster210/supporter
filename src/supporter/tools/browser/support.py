@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 from weakref import WeakKeyDictionary
 
 from ...config import config
 from ...logger import logger
+from ...recovery_metrics import record_re_snapshot_survived
 from ..base import ToolError
 from ..file_ops import validate_path
 from . import guardrails, humanize, session, snapshot
@@ -15,6 +17,7 @@ from .core import BrowseRequest, _page_host
 
 __all__ = [
     "_EVAL_DETAIL_MAX",
+    "_NAV_MAX_ATTEMPTS",
     "_PAGE_IDS",
     "_PAGE_ID_SEQ",
     "_REF_VISIBLE_TIMEOUT_MS",
@@ -27,7 +30,9 @@ __all__ = [
     "_diff_header",
     "_diff_text",
     "_effective_fast",
+    "_is_transient_nav_error",
     "_live_refs_snapshot",
+    "_navigate_with_retry",
     "_page_baseline_key",
     "_page_key",
     "_page_or_error",
@@ -41,6 +46,7 @@ __all__ = [
     "_session_parts",
     "_snapshot_full",
     "_snapshot_text",
+    "_stale_ref_snapshot",
     "_validate_path_or_error",
     "_wrap_action_errors",
     "config",
@@ -51,7 +57,30 @@ _PAGE_ID_SEQ = 0
 
 _EVAL_DETAIL_MAX = 500
 _REF_VISIBLE_TIMEOUT_MS = 8_000
-_SETTLE_TIMEOUT_MS = 2000
+# WHY: networkidle returns ~500ms after the network goes quiet, so this cap is
+# only paid on pages that never idle (beacons/websockets/polling) — where a
+# longer wait never improves the post-action snapshot. Capped low to avoid
+# burning seconds per action; genuine slow settles use the `waitnetwork` action.
+_SETTLE_TIMEOUT_MS = 1000
+_NAV_MAX_ATTEMPTS = 3
+
+# Chromium net errors safe to retry: timeouts and connection/DNS flaps. Errors
+# that signal a permanent verdict (ERR_BLOCKED_BY_*, ERR_ABORTED, invalid URL)
+# are deliberately absent so a blocked or malformed navigation fails fast.
+_TRANSIENT_NAV_ERRORS = (
+    "err_connection_reset",
+    "err_connection_closed",
+    "err_connection_refused",
+    "err_connection_failed",
+    "err_connection_timed_out",
+    "err_name_not_resolved",
+    "err_internet_disconnected",
+    "err_network_changed",
+    "err_address_unreachable",
+    "err_socket_not_connected",
+    "err_empty_response",
+    "err_timed_out",
+)
 
 
 async def _page_or_error() -> Any:
@@ -91,6 +120,37 @@ def _wrap_action_errors(action: str) -> Callable[..., Any]:
     return deco
 
 
+def _is_transient_nav_error(exc: BaseException) -> bool:
+    """A navigation failure worth retrying: a Playwright timeout or a net flap."""
+    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    if isinstance(exc, PlaywrightTimeoutError):
+        return True
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_NAV_ERRORS)
+
+
+async def _navigate_with_retry(page: Any, action: Callable[[], Awaitable[Any]]) -> None:
+    """Run a navigation, retrying only transient failures with a stealthy backoff.
+
+    Permanent failures (bad URL, blocked, HTTP errors) raise on the first attempt;
+    transient ones retry up to ``_NAV_MAX_ATTEMPTS`` and then surface the last error.
+    Backoff uses humanize jitter so retries keep the human-like timing profile.
+    """
+    for attempt in range(1, _NAV_MAX_ATTEMPTS + 1):
+        try:
+            await action()
+            return
+        except Exception as exc:
+            if not _is_transient_nav_error(exc) or attempt == _NAV_MAX_ATTEMPTS:
+                raise
+            logger.debug(
+                f"transient navigation error "
+                f"(attempt {attempt}/{_NAV_MAX_ATTEMPTS}): {exc}"
+            )
+            await page.wait_for_timeout(humanize.jitter_ms(0.4, 0.4, 0.25, 1.0))
+
+
 async def _require_ref(page: Any, ref: str) -> Any:
     from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -120,8 +180,22 @@ async def _resolve_target(page: Any, req: BrowseRequest) -> tuple[Any, str | Non
         )
     locator = await _require_ref(page, req.ref)
     if locator is None:
-        return None, f"Error: ref {req.ref} not found, take a fresh snapshot"
+        return None, await _stale_ref_snapshot(page, req, req.ref)
     return locator, None
+
+
+async def _stale_ref_snapshot(page: Any, req: BrowseRequest, ref: str) -> str:
+    """Auto re-snapshot on a stale ref so fresh aria refs arrive in one turn.
+
+    The model never has to ask for a new snapshot: when an element ref no longer
+    resolves, capture a full snapshot and return it inline behind a short note.
+    """
+    snap = await _snapshot_full(page, req, label=" (re-snapshot)")
+    record_re_snapshot_survived()
+    return (
+        f"Error: ref {ref} is stale; page auto re-snapshotted. "
+        f"Use the fresh refs below:\n{snap}"
+    )
 
 
 def _record_locator(page: Any, req: BrowseRequest) -> Any:
@@ -203,14 +277,14 @@ async def _effective_fast(page: Any) -> bool:
     return guardrails.host_is_fast(await _page_host(page))
 
 
-def _render_snapshot(snap: str, req: BrowseRequest, label: str, page_url: str) -> str:
+def _render_snapshot(snap: str, req: BrowseRequest, label: str, *, cleaned: str) -> str:
     if req.compact:
         output = snapshot.filter_interactive(snap)
         if output:
             count = len(output.splitlines())
             return f"{count} interactive elements{label}:\n{output}"
     else:
-        output = snapshot.clean_snapshot(snap, page_url)
+        output = cleaned
     return output or "(empty page)"
 
 
@@ -247,10 +321,13 @@ async def _capture(
 ) -> str:
     page_url = _page_key(page)
     bkey = _page_baseline_key(page)
+    _snap_t0 = time.perf_counter()
     snap = await page.aria_snapshot(mode="ai", depth=req.depth)
     cleaned = snapshot.clean_snapshot(snap, page_url)
+    _snap_ms = (time.perf_counter() - _snap_t0) * 1000.0
+    logger.debug(f"browser snapshot action={req.action} elapsed_ms={_snap_ms:.1f}")
     if force_full or req.compact or not snapshot.has_baseline(bkey):
-        result = _render_snapshot(snap, req, label, page_url)
+        result = _render_snapshot(snap, req, label, cleaned=cleaned)
         snapshot.remember_snapshot(bkey, cleaned)
         snapshot.log_snapshot(req.action, result)
         return result
