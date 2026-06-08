@@ -70,8 +70,11 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     await asyncio.sleep(req.delay_ms / 1000.0)
     if not await _effective_fast(page):
         await humanize.reading_pause(page)
-    result = await _snapshot_full(page, req)
-    if await cloudflare.detect_turnstile_in_page(page):
+    result, has_turnstile = await asyncio.gather(
+        _snapshot_full(page, req),
+        cloudflare.detect_turnstile_in_page(page),
+    )
+    if has_turnstile:
         result = "[Turnstile detected] — call solve_cloudflare to proceed.\n\n" + result
     if not session.keep_open():
         result += (
