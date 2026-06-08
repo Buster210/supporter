@@ -3,6 +3,7 @@ import time
 from typing import Any
 
 from ...config import DELEGATE_ANOMALY_THRESHOLD, DELEGATE_HEARTBEAT_INTERVAL, config
+from ...decision_log import log_decision
 from ...logger import logger
 from ...prompts import DELEGATION_REPAIR_REQUEST, DELEGATION_RESULT_CONTRACT
 from ...types import (
@@ -98,6 +99,13 @@ async def _repair_or_rerequest(
     if validate_delegation_payload(result.get("output", "")):
         return result
 
+    log_decision(
+        site="scheduler.repair_retry",
+        chosen="re-request",
+        options=("keep_original", "re-request"),
+        reason="delegated result failed schema validation",
+        correlation_id=f"{job_id}:{task['id']}",
+    )
     truncated = result.get("output", "")[: config.delegate_max_output_chars]
     followup = task.copy()
     followup["id"] = f"{task['id']}__repair"
@@ -144,6 +152,13 @@ async def _execute_dag(
 
         skip_reason = _should_skip(task, results)
         if skip_reason:
+            log_decision(
+                site="scheduler.skip",
+                chosen="skip",
+                options=("run", "skip"),
+                reason=skip_reason,
+                correlation_id=f"{job_id}:{task_id}",
+            )
             state = {
                 "id": task_id,
                 "status": TaskStatus.SKIPPED,
@@ -375,6 +390,17 @@ async def run_heartbeat(
                     and elapsed >= DELEGATE_ANOMALY_THRESHOLD * task_timeout
                     and not state.get("anomaly_fired")
                 ):
+                    log_decision(
+                        site="scheduler.anomaly",
+                        chosen="flag_anomaly",
+                        options=("wait", "flag_anomaly"),
+                        reason=(
+                            f"elapsed {elapsed:.0f}s >= "
+                            f"{DELEGATE_ANOMALY_THRESHOLD:.0%} of "
+                            f"timeout {task_timeout:.0f}s"
+                        ),
+                        correlation_id=f"{job_id}:{task_id}",
+                    )
                     bus.publish(
                         TaskAnomaly(
                             job_id=job_id,

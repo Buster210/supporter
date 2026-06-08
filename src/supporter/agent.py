@@ -7,9 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from .config import config
+from .decision_log import log_decision
 from .history_summarizer import summarize_turns
 from .logger import logger
 from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
+
+_GOAL_PREVIEW_CHARS = 200
 
 
 def _build_message(role: str, text: str) -> Any:
@@ -180,6 +183,7 @@ class ChatAgent:
 
         self.current_interaction_id = result.interaction_id
         self._sync_history(user_message, result)
+        self._record_brain_decision(prompt, result)
 
         duration_str = (
             f"{result.duration:.3f}s" if result.duration is not None else "unknown"
@@ -189,6 +193,29 @@ class ChatAgent:
             f"history_size={len(self.history)}"
         )
         return result
+
+    def _record_brain_decision(self, prompt: str, result: LLMResult) -> None:
+        chosen = "text_response"
+        try:
+            candidate = result.candidates[0] if result.candidates else None
+            content = getattr(candidate, "content", None) if candidate else None
+            for part in getattr(content, "parts", None) or []:
+                fc = getattr(part, "function_call", None)
+                name = getattr(fc, "name", None) if fc else None
+                if name:
+                    chosen = name
+                    break
+        except Exception as exc:
+            logger.debug(f"brain decision extract failed [{type(exc).__name__}]: {exc}")
+        goal = " ".join(prompt.split())[:_GOAL_PREVIEW_CHARS]
+        rationale = (result.thoughts or "").strip()
+        reason = f"goal: {goal}" + (f" | {rationale}" if rationale else "")
+        log_decision(
+            site="brain.tool_choice",
+            chosen=chosen,
+            reason=reason,
+            correlation_id=result.interaction_id,
+        )
 
     def _sync_history(self, user_message: Any, result: LLMResult) -> None:
         if result.automatic_function_calling_history:
