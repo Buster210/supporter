@@ -136,7 +136,7 @@ class GeminiLiveProvider:
         self._reconnect_attempts = 0
         self._reconnect_attempts_max = config.reconnect_attempts_max
         self._go_away_deadline: float | None = None
-        self._keepalive_task: asyncio.Task[Any] | None = None
+        self._monitor_task: asyncio.Task[Any] | None = None
         self._handle_resumed_pending = False
 
         ensure_function_search_tool(self.model_name, self.registry)
@@ -259,13 +259,23 @@ class GeminiLiveProvider:
                     self._go_away_deadline = None
                     if self._session_handle is None:
                         self._needs_replay = True
+                        # No handle → no resumption-pending state to clear
+                        # (it's only meaningful for resumed sessions). A stale
+                        # True from a prior turn that was aborted before its
+                        # epilogue could otherwise trigger a false
+                        # empty_resume_suspected on the next turn.
+                        self._handle_resumed_pending = False
                     elif config.empty_resume_policy == "replay":
                         self._needs_replay = True
                         self._handle_resumed_pending = False
                     else:
                         self._needs_replay = False
                         self._handle_resumed_pending = True
-                    await self._start_keepalive()
+                    # Monitor is started at turn-end (or at end of an
+                    # idle-triggered reconnect), NEVER here. _ensure_session
+                    # is also called from _prepare_turn right before the turn
+                    # reads, so starting a monitor here would race the turn
+                    # for the single recv() reader.
                     return self._session
                 except Exception as error:
                     error_detail = str(error).lower()
@@ -522,29 +532,127 @@ class GeminiLiveProvider:
         with contextlib.suppress(BaseException):
             await task
 
-    async def _keepalive_loop(self) -> None:
-        while True:
-            await asyncio.sleep(config.keepalive_interval)
-            if self._turn_lock.locked():
-                continue
-            if self._session is None:
-                continue
-            if (
-                self._go_away_deadline is not None
-                and time.monotonic() >= self._go_away_deadline
-            ):
-                logger.info("Keepalive: go_away deadline passed, flagging reconnect")
-                self._reconnect_pending = True
-                self._schedule_prewarm()
-
-    async def _start_keepalive(self) -> None:
-        if not config.keepalive_enabled or self._keepalive_task is not None:
+    async def _monitor_loop(self) -> None:
+        # Runs ONLY between turns. Sole reader of session.receive().
+        # Start-discipline: started at turn-end (generate/generate_stream) and
+        # at the end of an idle-triggered reconnect. NEVER started from
+        # _ensure_session (that path is also called right before a turn reads).
+        session = self._session
+        if session is None:
             return
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        # Proactively reconnect BEFORE the server's GoAway deadline rather than
+        # waiting for a reactive go_away (which only lands on the next turn —
+        # too late for idle/long turns). asyncio.timeout(None) is a transparent
+        # no-op, so the deadline-less path keeps the original unbounded wait.
+        receive_timeout = (
+            max(self._go_away_deadline - time.monotonic(), 0)
+            if self._go_away_deadline is not None
+            else None
+        )
+        try:
+            try:
+                async with asyncio.timeout(receive_timeout):
+                    async for response in session.receive():
+                        sru = response.session_resumption_update
+                        if sru and sru.resumable and sru.new_handle:
+                            self._session_handle = sru.new_handle
+                            self._handle_resumed_pending = False
+                            continue
+                        if response.go_away:
+                            logger.info(
+                                "Idle monitor: go_away "
+                                f"(time_left={response.go_away.time_left}); "
+                                "reconnecting now"
+                            )
+                            await self._handle_idle_reconnect("idle_monitor")
+                            return
+                        # ignore stray server_content during idle
+            except TimeoutError:
+                # Deadline reached with no go_away in hand: reconnect proactively.
+                await self._handle_idle_reconnect("deadline")
+                return
+        except asyncio.CancelledError:
+            # Turn is taking the socket; clean handoff.
+            raise
+        except Exception as exc:
+            logger.info(
+                f"Idle monitor: recv failed [{type(exc).__name__}: {exc}]; reconnecting"
+            )
+            await self._handle_idle_reconnect("idle_monitor_error")
 
-    async def _cancel_keepalive(self) -> None:
-        task = self._keepalive_task
-        self._keepalive_task = None
+    async def _handle_idle_reconnect(self, source: str) -> None:
+        """Common reconnect path for the idle monitor.
+
+        On failure, sets _reconnect_pending so the next turn reconnects inline
+        (fall-back path; we never want to lose the ability to recover).
+        On cancellation (a turn started while we were reconnecting), the
+        running task remains referenceable in _monitor_task so _stop_monitor
+        can find and cancel it cleanly. The OLD session is left intact; the
+        turn will use it, and the monitor restarts on the OLD session after
+        the turn (catching any subsequent go_away).
+
+        If _reconnect() gives up (attempts exhausted), we do NOT restart the
+        monitor on the dying session — that would create a tight CPU loop as
+        the new monitor immediately sees the same go_away / error and calls
+        _reconnect() again, which gives up again. Instead, set
+        _reconnect_pending=True and let the next turn handle it.
+        """
+        self._emit("reconnecting", {"source": source})
+        # NOTE: _monitor_task is deliberately NOT nulled here. _stop_monitor
+        # must be able to find this task if a turn starts while reconnect is
+        # in progress — otherwise the background task would tear down the
+        # session while the turn is reading from it.
+        try:
+            await self._reconnect()
+            # Yield control to allow any pending cancellation to be delivered
+            # before we mutate _monitor_task. Without this, a cancellation
+            # that was queued during _reconnect() (e.g., a turn starting)
+            # could not be observed until the next event-loop iteration,
+            # racing with the new monitor task creation below.
+            await asyncio.sleep(0)
+            # _reconnect() succeeded. If it gave up (attempts exhausted),
+            # do NOT spawn a new monitor on the dying session — that would
+            # loop. Fall back to inline reconnect on the next turn.
+            if self._reconnect_attempts >= self._reconnect_attempts_max:
+                self._reconnect_pending = True
+                self._monitor_task = None
+                return
+            # Reconnect succeeded. The old session is gone, the new session
+            # is set. Replace the current monitor task with a fresh one.
+            # We CANNOT call _start_monitor() here — it would see
+            # self._monitor_task is not None (this task) and early-return.
+            # Inlining the create ensures the slot transitions atomically
+            # (no observable window with _monitor_task == None once the
+            # new task is created).
+            self._monitor_task = None
+            if config.idle_monitor_enabled and self._session is not None:
+                self._monitor_task = asyncio.create_task(self._monitor_loop())
+        except asyncio.CancelledError:
+            # Turn is taking the socket; clean handoff. When cancellation
+            # arrives during _reconnect's backoff sleep, the session is
+            # still intact. If it arrives during _reconnect's
+            # _teardown_session (after the sleep), the teardown's
+            # try/finally has already nulled the session pointers; the
+            # turn's _prepare_turn will see _session is None and create
+            # a fresh one. Either way, the turn ends up with a usable
+            # session and the monitor restarts after the turn.
+            raise
+        except Exception:
+            self._reconnect_pending = True
+            self._monitor_task = None
+
+    async def _start_monitor(self) -> None:
+        if (
+            not config.idle_monitor_enabled
+            or self._monitor_task is not None
+            or self._session is None
+        ):
+            return
+        self._monitor_task = asyncio.create_task(self._monitor_loop())
+
+    async def _stop_monitor(self) -> None:
+        task = self._monitor_task
+        self._monitor_task = None
         if task is None:
             return
         if not task.done():
@@ -552,19 +660,31 @@ class GeminiLiveProvider:
         import contextlib
 
         with contextlib.suppress(BaseException):
-            await task
+            await task  # MUST await — guarantees recv() unwound before turn reads
 
     async def _prepare_turn(
         self, prompt: str | list[Content], options: LLMOptions | None = None
     ) -> Any:
         if options and options.get("history"):
             self._history = list(options["history"])
+        # Stop the idle monitor BEFORE any socket read (single-reader invariant).
+        # The monitor owns the only recv() between turns; the turn must take
+        # over exclusively. Awaiting the monitor here guarantees recv() has
+        # fully unwound before the turn's session.receive() runs.
+        await self._stop_monitor()
         await self._consume_prewarm()
         if self._reconnect_pending:
             self._reconnect_pending = False
             self._go_away_deadline = None
             await self._teardown_session()
         session = await self._ensure_session()
+        # Reset the reconnect-attempt counter after a successful inline
+        # reconnect. _reconnect() resets it on its own success path, but
+        # the inline path (bypassing _reconnect when the monitor exhausted
+        # attempts) does not — leaving the monitor permanently degraded.
+        # If we just established a fresh session, the counter is stale.
+        if self._reconnect_attempts > 0:
+            self._reconnect_attempts = 0
         if not self._last_turn_complete:
             await self._drain_session(session)
             if self._session is None:
@@ -651,6 +771,8 @@ class GeminiLiveProvider:
                 self._handle_resumed_pending = False
 
             self._schedule_prewarm()
+            if self._prewarm_task is None and not self._reconnect_pending:
+                await self._start_monitor()
             text = "".join(full_response)
             if grounding:
                 text += _format_grounding_sources(grounding)
@@ -766,26 +888,42 @@ class GeminiLiveProvider:
                 self._last_turn_complete = True
                 self._reconnect_pending = True
                 yield LLMChunk(text="", is_last=True, model=self.model_name)
+            finally:
+                # ALWAYS run the turn-end epilogue, even if a consumer
+                # breaks early (async generator aclose() injects
+                # GeneratorExit at the last yield, bypassing the except
+                # clause). Without this, a TUI abort would leave the
+                # monitor unstarted and the next turn would catch idle
+                # go_away inline (the "jerking" the plan was designed
+                # to prevent).
+                if self._handle_resumed_pending:
+                    self._emit("empty_resume_suspected", {})
+                    self._handle_resumed_pending = False
 
-            if self._handle_resumed_pending:
-                self._emit("empty_resume_suspected", {})
-                self._handle_resumed_pending = False
-
-            self._schedule_prewarm()
+                self._schedule_prewarm()
+                if self._prewarm_task is None and not self._reconnect_pending:
+                    await self._start_monitor()
 
     async def _teardown_session(self) -> None:
         async with self._session_lock:
             if self._session_manager:
                 import contextlib
 
-                with contextlib.suppress(Exception):
-                    await self._session_manager.__aexit__(None, None, None)
-                self._session = None
-                self._session_manager = None
+                # ALWAYS null the session pointers, even on CancelledError.
+                # contextlib.suppress(Exception) does NOT catch CancelledError
+                # (BaseException in 3.9+). If a turn cancels the monitor
+                # mid-__aexit__, the session must still be torn down cleanly
+                # so the next _ensure_session does not return a zombie.
+                try:
+                    with contextlib.suppress(Exception):
+                        await self._session_manager.__aexit__(None, None, None)
+                finally:
+                    self._session = None
+                    self._session_manager = None
             self._last_turn_complete = True
 
     async def close(self) -> None:
-        await self._cancel_keepalive()
+        await self._stop_monitor()
         await self._cancel_prewarm()
         await self._teardown_session()
 

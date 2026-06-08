@@ -58,6 +58,26 @@ def query_delegation(
     status: str | None = None,
     limit: int = 10,
 ) -> str:
+    """Read delegation results: list jobs, inspect a job, or inspect one task.
+
+    Three modes, selected by which arguments are given:
+        - No job_id: list recent delegation jobs (most recent first).
+        - job_id + task_id: return the full output/findings of that one task.
+          Call this after a task's completion signal to read what it produced.
+        - job_id only: return the job's state at the requested detail level.
+
+    Args:
+        job_id: The JOB_ID from delegate_tasks. Omit to list all jobs.
+        task_id: A task's id within the job; returns that task's detail.
+        detail: For a whole-job view -- "summary" (default), "tasks", or "full"
+            (raw capsule JSON).
+        status: When listing, keep only jobs with this effective status.
+        limit: When listing, max jobs to return (1-100, default 10).
+
+    Returns:
+        Markdown (a job/task list, summary, or task detail), or an error message
+        for an unknown job/task or invalid detail.
+    """
     from .capsule_view import inspect_delegation, inspect_task, list_delegations
 
     if not job_id:

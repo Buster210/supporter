@@ -11,11 +11,20 @@ _SEARCH_SYSTEM_INSTRUCTION = (
 
 
 async def google_search(query: str) -> str:
-    """Performs a Google Search to retrieve accurate, up-to-date internet data.
+    """Degraded best-effort web lookup -- a FALLBACK, not the primary search tool.
+
+    Prefer `browse` for all web search and research: it reaches real pages with
+    far greater depth and reliability. Use google_search ONLY when browse is
+    unavailable. The answer is synthesized by a separate Live LLM sub-provider,
+    not raw search results, so it may paraphrase facts and omit or fabricate
+    source URLs. Treat its output as unverified.
+
     Args:
         query: The search query string.
+
     Returns:
-        Detailed answer compiled from search results, including source URLs.
+        An LLM-synthesized answer (best effort, unverified). Raises ToolError
+        if the lookup fails.
     """
     logger.info(f"Tool: google_search — query='{query}'")
 

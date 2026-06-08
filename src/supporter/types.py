@@ -77,6 +77,9 @@ class AppConfig:
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
     history_max_turns: int = 200
+    history_compaction_enabled: bool = True
+    history_compaction_trigger: int = 160
+    history_summary_keep_recent: int = 80
     browser_profile_path: str | None = None
     browser_profile_name: str | None = None
     browser_debug_overlay: bool = False
@@ -88,7 +91,9 @@ class AppConfig:
     reconnect_backoff_base: float = 0.5
     reconnect_backoff_cap: float = 8.0
     prewarm_safety_margin: float = 5.0
-    keepalive_interval: float = 20.0
+    # Deprecated: kept only as the fallback default for idle_monitor_enabled
+    # when IDLE_MONITOR_ENABLED env var is unset. The provider no longer
+    # reads this directly.
     keepalive_enabled: bool = True
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"

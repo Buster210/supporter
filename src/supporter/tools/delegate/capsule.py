@@ -145,7 +145,6 @@ def unavailable_capsule(job_id: str, exc: BaseException) -> dict[str, Any]:
 
 
 def effective_status(capsule: dict[str, Any]) -> str:
-    """Return stale running/pending capsules as interrupted without mutating disk."""
     raw = str(capsule.get("status", "unknown"))
     if raw not in ACTIVE_CAPSULE_STATUSES:
         return raw
