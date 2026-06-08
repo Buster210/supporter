@@ -57,7 +57,11 @@ _PAGE_ID_SEQ = 0
 
 _EVAL_DETAIL_MAX = 500
 _REF_VISIBLE_TIMEOUT_MS = 8_000
-_SETTLE_TIMEOUT_MS = 2000
+# WHY: networkidle returns ~500ms after the network goes quiet, so this cap is
+# only paid on pages that never idle (beacons/websockets/polling) — where a
+# longer wait never improves the post-action snapshot. Capped low to avoid
+# burning seconds per action; genuine slow settles use the `waitnetwork` action.
+_SETTLE_TIMEOUT_MS = 1000
 _NAV_MAX_ATTEMPTS = 3
 
 # Chromium net errors safe to retry: timeouts and connection/DNS flaps. Errors
