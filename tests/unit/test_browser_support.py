@@ -87,6 +87,56 @@ async def test_resolve_target_stale_ref_auto_resnapshots() -> None:
     monkeypatch.undo()
 
 
+async def test_navigate_with_retry_retries_transient_then_succeeds() -> None:
+    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    class FakePage:
+        async def wait_for_timeout(self, ms: float) -> None:
+            return None
+
+    attempts = {"n": 0}
+
+    async def action() -> None:
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            raise PlaywrightTimeoutError("navigation timeout")
+
+    await support._navigate_with_retry(FakePage(), action)
+    assert attempts["n"] == 2
+
+
+async def test_navigate_with_retry_does_not_retry_permanent_error() -> None:
+    class FakePage:
+        async def wait_for_timeout(self, ms: float) -> None:
+            return None
+
+    attempts = {"n": 0}
+
+    async def action() -> None:
+        attempts["n"] += 1
+        raise ValueError("Cannot navigate to invalid URL")
+
+    with pytest.raises(ValueError, match="invalid URL"):
+        await support._navigate_with_retry(FakePage(), action)
+    assert attempts["n"] == 1
+
+
+async def test_navigate_with_retry_respects_attempt_cap() -> None:
+    class FakePage:
+        async def wait_for_timeout(self, ms: float) -> None:
+            return None
+
+    attempts = {"n": 0}
+
+    async def action() -> None:
+        attempts["n"] += 1
+        raise RuntimeError("net::ERR_CONNECTION_RESET at https://x")
+
+    with pytest.raises(RuntimeError, match="ERR_CONNECTION_RESET"):
+        await support._navigate_with_retry(FakePage(), action)
+    assert attempts["n"] == support._NAV_MAX_ATTEMPTS
+
+
 async def test_stale_ref_snapshot_returns_note_and_fresh_snapshot() -> None:
     class FakePage:
         url = "https://example.test/"

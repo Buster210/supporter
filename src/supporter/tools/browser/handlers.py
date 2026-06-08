@@ -15,6 +15,7 @@ from .support import (
     _confirm_script,
     _diff_text,
     _effective_fast,
+    _navigate_with_retry,
     _page_baseline_key,
     _page_or_error,
     _post_action_snapshot,
@@ -62,7 +63,10 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     if not req.url:
         return "Error: 'url' is required for navigate action."
     page = await _page_or_error()
-    await page.goto(req.url, wait_until="domcontentloaded", timeout=30_000)
+    await _navigate_with_retry(
+        page,
+        lambda: page.goto(req.url, wait_until="domcontentloaded", timeout=30_000),
+    )
     await asyncio.sleep(req.delay_ms / 1000.0)
     if not await _effective_fast(page):
         await humanize.reading_pause(page)
@@ -80,7 +84,9 @@ async def _handle_navigate(req: BrowseRequest) -> str:
 @_wrap_action_errors("back")
 async def _handle_back(req: BrowseRequest) -> str:
     page = await _page_or_error()
-    await page.go_back(timeout=30_000, wait_until="commit")
+    await _navigate_with_retry(
+        page, lambda: page.go_back(timeout=30_000, wait_until="commit")
+    )
     await asyncio.sleep(req.delay_ms / 1000.0)
     if not await _effective_fast(page):
         await humanize.reading_pause(page)
@@ -90,7 +96,9 @@ async def _handle_back(req: BrowseRequest) -> str:
 @_wrap_action_errors("forward")
 async def _handle_forward(req: BrowseRequest) -> str:
     page = await _page_or_error()
-    await page.go_forward(timeout=30_000, wait_until="commit")
+    await _navigate_with_retry(
+        page, lambda: page.go_forward(timeout=30_000, wait_until="commit")
+    )
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _snapshot_full(page, req)
 

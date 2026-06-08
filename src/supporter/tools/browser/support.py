@@ -16,6 +16,7 @@ from .core import BrowseRequest, _page_host
 
 __all__ = [
     "_EVAL_DETAIL_MAX",
+    "_NAV_MAX_ATTEMPTS",
     "_PAGE_IDS",
     "_PAGE_ID_SEQ",
     "_REF_VISIBLE_TIMEOUT_MS",
@@ -28,7 +29,9 @@ __all__ = [
     "_diff_header",
     "_diff_text",
     "_effective_fast",
+    "_is_transient_nav_error",
     "_live_refs_snapshot",
+    "_navigate_with_retry",
     "_page_baseline_key",
     "_page_key",
     "_page_or_error",
@@ -54,6 +57,25 @@ _PAGE_ID_SEQ = 0
 _EVAL_DETAIL_MAX = 500
 _REF_VISIBLE_TIMEOUT_MS = 8_000
 _SETTLE_TIMEOUT_MS = 2000
+_NAV_MAX_ATTEMPTS = 3
+
+# Chromium net errors safe to retry: timeouts and connection/DNS flaps. Errors
+# that signal a permanent verdict (ERR_BLOCKED_BY_*, ERR_ABORTED, invalid URL)
+# are deliberately absent so a blocked or malformed navigation fails fast.
+_TRANSIENT_NAV_ERRORS = (
+    "err_connection_reset",
+    "err_connection_closed",
+    "err_connection_refused",
+    "err_connection_failed",
+    "err_connection_timed_out",
+    "err_name_not_resolved",
+    "err_internet_disconnected",
+    "err_network_changed",
+    "err_address_unreachable",
+    "err_socket_not_connected",
+    "err_empty_response",
+    "err_timed_out",
+)
 
 
 async def _page_or_error() -> Any:
@@ -91,6 +113,37 @@ def _wrap_action_errors(action: str) -> Callable[..., Any]:
         return wrapped
 
     return deco
+
+
+def _is_transient_nav_error(exc: BaseException) -> bool:
+    """A navigation failure worth retrying: a Playwright timeout or a net flap."""
+    from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    if isinstance(exc, PlaywrightTimeoutError):
+        return True
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_NAV_ERRORS)
+
+
+async def _navigate_with_retry(page: Any, action: Callable[[], Awaitable[Any]]) -> None:
+    """Run a navigation, retrying only transient failures with a stealthy backoff.
+
+    Permanent failures (bad URL, blocked, HTTP errors) raise on the first attempt;
+    transient ones retry up to ``_NAV_MAX_ATTEMPTS`` and then surface the last error.
+    Backoff uses humanize jitter so retries keep the human-like timing profile.
+    """
+    for attempt in range(1, _NAV_MAX_ATTEMPTS + 1):
+        try:
+            await action()
+            return
+        except Exception as exc:
+            if not _is_transient_nav_error(exc) or attempt == _NAV_MAX_ATTEMPTS:
+                raise
+            logger.debug(
+                f"transient navigation error "
+                f"(attempt {attempt}/{_NAV_MAX_ATTEMPTS}): {exc}"
+            )
+            await page.wait_for_timeout(humanize.jitter_ms(0.4, 0.4, 0.25, 1.0))
 
 
 async def _require_ref(page: Any, ref: str) -> Any:
