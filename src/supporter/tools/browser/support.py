@@ -42,6 +42,7 @@ __all__ = [
     "_session_parts",
     "_snapshot_full",
     "_snapshot_text",
+    "_stale_ref_snapshot",
     "_validate_path_or_error",
     "_wrap_action_errors",
     "config",
@@ -121,8 +122,21 @@ async def _resolve_target(page: Any, req: BrowseRequest) -> tuple[Any, str | Non
         )
     locator = await _require_ref(page, req.ref)
     if locator is None:
-        return None, f"Error: ref {req.ref} not found, take a fresh snapshot"
+        return None, await _stale_ref_snapshot(page, req, req.ref)
     return locator, None
+
+
+async def _stale_ref_snapshot(page: Any, req: BrowseRequest, ref: str) -> str:
+    """Auto re-snapshot on a stale ref so fresh aria refs arrive in one turn.
+
+    The model never has to ask for a new snapshot: when an element ref no longer
+    resolves, capture a full snapshot and return it inline behind a short note.
+    """
+    snap = await _snapshot_full(page, req, label=" (re-snapshot)")
+    return (
+        f"Error: ref {ref} is stale; page auto re-snapshotted. "
+        f"Use the fresh refs below:\n{snap}"
+    )
 
 
 def _record_locator(page: Any, req: BrowseRequest) -> Any:

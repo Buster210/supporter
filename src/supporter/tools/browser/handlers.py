@@ -25,6 +25,7 @@ from .support import (
     _session_parts,
     _snapshot_full,
     _snapshot_text,
+    _stale_ref_snapshot,
     _validate_path_or_error,
     _wrap_action_errors,
 )
@@ -239,7 +240,7 @@ async def _handle_extract(req: BrowseRequest) -> str:
             return "Error: inside a frame, extract needs a CSS 'selector', not a ref."
         locator = await _require_ref(page, req.ref)
         if locator is None:
-            return f"Error: ref {req.ref} not found, take a fresh snapshot"
+            return await _stale_ref_snapshot(page, req, req.ref)
     elif req.selector:
         if frame_sel is not None:
             locator = page.frame_locator(frame_sel).locator(req.selector).first
@@ -367,7 +368,7 @@ async def _handle_scroll(req: BrowseRequest) -> str:
     if req.ref:
         locator = await _require_ref(page, req.ref)
         if locator is None:
-            return f"Error: ref {req.ref} not found, take a fresh snapshot"
+            return await _stale_ref_snapshot(page, req, req.ref)
 
     fast = await _effective_fast(page)
     if not fast:
@@ -393,7 +394,7 @@ async def _handle_press(req: BrowseRequest) -> str:
     if req.ref:
         locator = await _require_ref(page, req.ref)
         if locator is None:
-            return f"Error: ref {req.ref} not found, take a fresh snapshot"
+            return await _stale_ref_snapshot(page, req, req.ref)
 
     blocked = await _confirm_or_block(page, req, locator)
     if blocked is not None:
@@ -419,7 +420,7 @@ async def _handle_select(req: BrowseRequest) -> str:
         return "Error: select needs 'value' or 'text' (the option to choose)."
     locator = await _require_ref(page, req.ref)
     if locator is None:
-        return f"Error: ref {req.ref} not found, take a fresh snapshot"
+        return await _stale_ref_snapshot(page, req, req.ref)
 
     blocked = await _confirm_or_block(page, req, locator)
     if blocked is not None:
@@ -539,7 +540,7 @@ async def _handle_upload(req: BrowseRequest) -> str:
 
     locator = await _require_ref(page, req.ref)
     if locator is None:
-        return f"Error: ref {req.ref} not found, take a fresh snapshot"
+        return await _stale_ref_snapshot(page, req, req.ref)
 
     blocked = await _confirm_or_block(page, req, locator)
     if blocked is not None:
@@ -566,7 +567,7 @@ async def _handle_download(req: BrowseRequest) -> str:
 
     locator = await _require_ref(page, req.ref)
     if locator is None:
-        return f"Error: ref {req.ref} not found, take a fresh snapshot"
+        return await _stale_ref_snapshot(page, req, req.ref)
 
     blocked = await _confirm_or_block(page, req, locator)
     if blocked is not None:

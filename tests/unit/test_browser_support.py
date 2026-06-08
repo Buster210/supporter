@@ -59,7 +59,7 @@ async def test_resolve_target_frame_with_selector_returns_locator() -> None:
         monkeypatch.undo()
 
 
-async def test_resolve_target_ref_not_found_returns_error() -> None:
+async def test_resolve_target_stale_ref_auto_resnapshots() -> None:
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(session, "active_frame_selector", lambda: None)
 
@@ -70,14 +70,34 @@ async def test_resolve_target_ref_not_found_returns_error() -> None:
             raise PlaywrightTimeoutError("not visible")
 
     class FakePage:
+        url = "https://example.test/"
+
         def locator(self, sel: str) -> object:
             return TimeoutLocator()
+
+        async def aria_snapshot(self, **kw: object) -> str:
+            return '- document [ref=e1]:\n  - button "OK" [ref=e2]'
 
     req = BrowseRequest(action="click", ref="e99")
     locator, err = await support._resolve_target(FakePage(), req)
     assert locator is None
-    assert err is not None and "ref e99 not found" in err
+    assert err is not None
+    assert "e99" in err and "stale" in err and "re-snapshot" in err
+    assert "OK" in err  # fresh snapshot body arrived inline
     monkeypatch.undo()
+
+
+async def test_stale_ref_snapshot_returns_note_and_fresh_snapshot() -> None:
+    class FakePage:
+        url = "https://example.test/"
+
+        async def aria_snapshot(self, **kw: object) -> str:
+            return '- document [ref=e1]:\n  - button "OK" [ref=e2]'
+
+    req = BrowseRequest(action="extract", ref="e5")
+    out = await support._stale_ref_snapshot(FakePage(), req, "e5")
+    assert "e5" in out and "stale" in out
+    assert "OK" in out
 
 
 async def test_record_locator_frame_with_selector_returns_locator() -> None:
