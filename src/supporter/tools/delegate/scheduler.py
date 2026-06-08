@@ -2,8 +2,9 @@ import asyncio
 import time
 from typing import Any
 
-from ...config import DELEGATE_ANOMALY_THRESHOLD, DELEGATE_HEARTBEAT_INTERVAL
+from ...config import DELEGATE_ANOMALY_THRESHOLD, DELEGATE_HEARTBEAT_INTERVAL, config
 from ...logger import logger
+from ...prompts import DELEGATION_REPAIR_REQUEST, DELEGATION_RESULT_CONTRACT
 from ...types import (
     HeartbeatTick,
     MilestoneCancelled,
@@ -27,6 +28,7 @@ from .capsule import (
     mark_task_skipped,
     mark_task_started,
     mark_task_timed_out,
+    validate_delegation_payload,
 )
 from .qa_gate import run_qa_gate
 
@@ -71,6 +73,56 @@ def _should_skip(
         if dep_result and dep_result["status"] != TaskStatus.COMPLETED:
             return f"Dependency '{dep_id}' {dep_result['status']}"
     return None
+
+
+async def _repair_or_rerequest(
+    task: dict[str, Any],
+    result: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+    bus: DelegationBus,
+    job_id: str,
+) -> dict[str, Any]:
+    """One bounded re-request when a delegated result is off-schema (SPEC §8).
+
+    A malformed structured block is repaired by asking the SAME agent to re-emit
+    just the JSON block exactly once. The re-request never turns a COMPLETED task
+    into a failure and never crashes the scheduler: on any miss the original
+    result is kept untouched.
+    """
+    if (
+        not config.delegate_result_repair
+        or result.get("status") != TaskStatus.COMPLETED
+        or not task.get("result_contract", True)
+    ):
+        return result
+    if validate_delegation_payload(result.get("output", "")):
+        return result
+
+    truncated = result.get("output", "")[: config.delegate_max_output_chars]
+    followup = task.copy()
+    followup["id"] = f"{task['id']}__repair"
+    followup["task"] = (
+        DELEGATION_REPAIR_REQUEST + truncated + DELEGATION_RESULT_CONTRACT
+    )
+    followup["max_retries"] = 0
+    followup["result_contract"] = True
+
+    try:
+        repaired = await run_sub_agent(followup, semaphore, bus, job_id)
+    except Exception as exc:
+        logger.warning(
+            f"capsule repair failed, using original for task {task['id']}: {exc}"
+        )
+        return result
+
+    if repaired.get("status") == TaskStatus.COMPLETED and validate_delegation_payload(
+        repaired.get("output", "")
+    ):
+        result["output"] = repaired.get("output", "")
+        logger.info(f"capsule repaired for task {task['id']}")
+    else:
+        logger.warning(f"capsule repair failed, using original for task {task['id']}")
+    return result
 
 
 async def _execute_dag(
@@ -144,6 +196,7 @@ async def _execute_dag(
 
         result = await run_sub_agent(enriched, semaphore, bus, job_id)
         result = await run_qa_gate(enriched, result, semaphore, bus, job_id)
+        result = await _repair_or_rerequest(enriched, result, semaphore, bus, job_id)
         results[task_id] = result
 
         if result["status"] == TaskStatus.COMPLETED:

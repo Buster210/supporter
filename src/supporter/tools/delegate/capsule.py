@@ -21,6 +21,7 @@ _PREVIEW_LIMIT = 300
 _SUMMARY_LIMIT = 500
 _EVIDENCE_KEYS = ("files_read", "files_changed", "commands_run", "sources")
 EVIDENCE_KEYS = _EVIDENCE_KEYS
+_CONFIDENCE_VALUES = frozenset({"low", "medium", "high"})
 
 _CAPSULE_LOCKS: dict[str, asyncio.Lock] = {}
 _CAPSULE_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -421,6 +422,32 @@ def extract_task_capsule_fields(output: str) -> dict[str, Any]:
     }
 
 
+def validate_delegation_payload(output: str) -> bool:
+    """Hard schema check on a delegated agent's structured result block.
+
+    True only when the JSON block parses and every contract field has the right
+    type. Empty evidence/findings lists are valid -- a correct-but-sparse result
+    must pass, so emptiness is never grounds for rejection.
+    """
+    parsed = _parse_delegation_result(output)
+    if parsed is None:
+        return False
+    summary = parsed.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return False
+    confidence = parsed.get("confidence")
+    if not isinstance(confidence, str) or confidence not in _CONFIDENCE_VALUES:
+        return False
+    evidence = parsed.get("evidence")
+    if not isinstance(evidence, dict) or any(
+        not isinstance(evidence.get(key), list) for key in EVIDENCE_KEYS
+    ):
+        return False
+    if not isinstance(parsed.get("findings"), list):
+        return False
+    return isinstance(parsed.get("handoff"), str)
+
+
 def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
     key_findings: list[Any] = []
     failed_or_skipped: list[dict[str, str]] = []
@@ -582,7 +609,7 @@ def _normalize_confidence(value: Any) -> str:
     if not isinstance(value, str):
         return "unknown"
     normalized = value.lower().strip()
-    return normalized if normalized in {"low", "medium", "high"} else "unknown"
+    return normalized if normalized in _CONFIDENCE_VALUES else "unknown"
 
 
 def _string_or_default(value: Any, default: str) -> str:

@@ -90,8 +90,9 @@ async def _run_dag(
         started.append(task["id"])
         return outcomes[task["id"]]
 
-    with patch(
-        "supporter.tools.delegate.scheduler.run_sub_agent", side_effect=fake_run
+    with (
+        patch("supporter.tools.delegate.scheduler.run_sub_agent", side_effect=fake_run),
+        patch.object(config, "delegate_result_repair", False),
     ):
         await create_capsule("job-dag", "dag", tasks, parallel_limit)
         results = await _execute_dag(

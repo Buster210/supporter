@@ -473,7 +473,10 @@ class TestDAGExecution:
         ]
         semaphore = asyncio.Semaphore(5)
 
-        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
+        with (
+            patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run,
+            patch.object(config, "delegate_result_repair", False),
+        ):
             mock_run.side_effect = [
                 {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
                 {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
@@ -515,7 +518,10 @@ class TestDAGExecution:
         ]
         semaphore = asyncio.Semaphore(5)
 
-        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
+        with (
+            patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run,
+            patch.object(config, "delegate_result_repair", False),
+        ):
             mock_run.side_effect = [
                 {"id": "a", "status": "completed", "output": "out_a", "duration": 1.0},
                 {"id": "b", "status": "completed", "output": "out_b", "duration": 1.0},
