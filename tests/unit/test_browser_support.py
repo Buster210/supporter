@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from supporter.tools.browser import guardrails, session, support
+from supporter.tools.browser import guardrails, session, snapshot, support
 from supporter.tools.browser.core import BrowseRequest
 
 
@@ -238,29 +238,93 @@ async def test_render_snapshot_compact_non_empty() -> None:
         '- document [ref=e1]:\n  - button "OK" [ref=e2]\n  - link "Learn more" [ref=e3]'
     )
     req = BrowseRequest(action="snapshot", compact=True)
-    result = support._render_snapshot(tree, req, " after click", "https://x.test/")
+    result = support._render_snapshot(tree, req, " after click", cleaned="")
     assert "interactive elements after click" in result
     assert "OK" in result
 
 
 async def test_render_snapshot_compact_empty_returns_empty_page() -> None:
     req = BrowseRequest(action="snapshot", compact=True)
-    result = support._render_snapshot(
-        "- document [ref=e1]:", req, "", "https://x.test/"
-    )
+    result = support._render_snapshot("- document [ref=e1]:", req, "", cleaned="")
     assert result == "(empty page)"
 
 
 async def test_render_snapshot_non_compact_returns_cleaned() -> None:
     req = BrowseRequest(action="snapshot", compact=False)
+    cleaned = '- button "OK" [ref=e2]'
     result = support._render_snapshot(
         '- document [ref=e1]:\n  - button "OK" [ref=e2]',
         req,
         "",
-        "https://x.test/",
+        cleaned=cleaned,
     )
     assert "OK" in result
     assert "interactive elements" not in result
+
+
+async def test_capture_calls_clean_snapshot_once_for_full_snapshot() -> None:
+    """clean_snapshot runs once (not twice) for a full non-compact snapshot."""
+    from supporter.tools.browser import snapshot as snap_mod
+
+    monkeypatch = pytest.MonkeyPatch()
+    call_count: list[int] = []
+    original_clean = snap_mod.clean_snapshot
+
+    def counting_clean(snap: str, url: str) -> str:
+        call_count.append(1)
+        return snap
+
+    monkeypatch.setattr(snap_mod, "clean_snapshot", counting_clean)
+    monkeypatch.setattr(snap_mod, "has_baseline", lambda k: False)
+    monkeypatch.setattr(snap_mod, "remember_snapshot", lambda k, v: None)
+    monkeypatch.setattr(snap_mod, "log_snapshot", lambda a, r: None)
+
+    class FakePage:
+        url = "https://x.test/"
+
+        async def aria_snapshot(self, **kw: object) -> str:
+            return '- document [ref=e1]:\n  - button "OK" [ref=e2]'
+
+    req = BrowseRequest(action="snapshot", compact=False)
+    await support._capture(FakePage(), req, force_full=True, label=" test")
+    monkeypatch.setattr(snap_mod, "clean_snapshot", original_clean)
+    monkeypatch.undo()
+
+    assert call_count == [1], "clean_snapshot should be called exactly once"
+
+
+async def test_clean_snapshot_nested_with_dedup_and_tracking_params() -> None:
+    """Nested aria fixture: sibling-dedup runs, links, headings, tracking params."""
+    # Deep tree with tracking params and duplicate siblings
+    tree = (
+        "- generic [ref=e1]:\n"
+        '  - heading "Videos" [level=2] [ref=e2]:\n'
+        "    - generic [ref=e10]:\n"
+        '      - link "Video A" [ref=e11]:\n'
+        "        - /url: https://www.youtube.com/watch?v=abc123&pp=track&si=session&list=PL1\n"
+        "        - generic [ref=e12]: A description\n"
+        '      - button "More" [ref=e13]\n'
+        "    - generic [ref=e20]:\n"
+        '      - link "Video A" [ref=e21]:\n'
+        "        - /url: https://www.youtube.com/watch?v=abc123&pp=track&si=session&list=PL1\n"
+        "        - generic [ref=e22]: A description\n"
+        '      - button "More" [ref=e23]\n'
+        "    - generic [ref=e30]:\n"
+        '      - link "Video A" [ref=e31]:\n'
+        "        - /url: https://www.youtube.com/watch?v=abc123&pp=track&si=session&list=PL1\n"
+        "        - generic [ref=e32]: A description\n"
+        '      - button "More" [ref=e33]'
+    )
+    cleaned = snapshot.clean_snapshot(tree)
+    # Dedup runs collapsed to first + summary; tracking params (pp/si/list) stripped.
+    expected = (
+        '- heading "Videos" [level=2]:\n'
+        '  - link "Video A" [ref=e11]:  /url:  https://www.youtube.com/watch?v=abc123\n'
+        "    - generic: A description\n"
+        '  - button "More" [ref=e13]\n'
+        "  - (x2 more similar e20..e30)"
+    )
+    assert cleaned == expected
 
 
 async def test_page_key_returns_url() -> None:

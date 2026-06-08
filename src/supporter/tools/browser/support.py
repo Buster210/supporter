@@ -204,14 +204,14 @@ async def _effective_fast(page: Any) -> bool:
     return guardrails.host_is_fast(await _page_host(page))
 
 
-def _render_snapshot(snap: str, req: BrowseRequest, label: str, page_url: str) -> str:
+def _render_snapshot(snap: str, req: BrowseRequest, label: str, *, cleaned: str) -> str:
     if req.compact:
         output = snapshot.filter_interactive(snap)
         if output:
             count = len(output.splitlines())
             return f"{count} interactive elements{label}:\n{output}"
     else:
-        output = snapshot.clean_snapshot(snap, page_url)
+        output = cleaned
     return output or "(empty page)"
 
 
@@ -254,7 +254,7 @@ async def _capture(
     _snap_ms = (time.perf_counter() - _snap_t0) * 1000.0
     logger.debug(f"browser snapshot action={req.action} elapsed_ms={_snap_ms:.1f}")
     if force_full or req.compact or not snapshot.has_baseline(bkey):
-        result = _render_snapshot(snap, req, label, page_url)
+        result = _render_snapshot(snap, req, label, cleaned=cleaned)
         snapshot.remember_snapshot(bkey, cleaned)
         snapshot.log_snapshot(req.action, result)
         return result
