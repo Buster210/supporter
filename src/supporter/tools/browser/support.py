@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 from weakref import WeakKeyDictionary
@@ -247,8 +248,11 @@ async def _capture(
 ) -> str:
     page_url = _page_key(page)
     bkey = _page_baseline_key(page)
+    _snap_t0 = time.perf_counter()
     snap = await page.aria_snapshot(mode="ai", depth=req.depth)
     cleaned = snapshot.clean_snapshot(snap, page_url)
+    _snap_ms = (time.perf_counter() - _snap_t0) * 1000.0
+    logger.debug(f"browser snapshot action={req.action} elapsed_ms={_snap_ms:.1f}")
     if force_full or req.compact or not snapshot.has_baseline(bkey):
         result = _render_snapshot(snap, req, label, page_url)
         snapshot.remember_snapshot(bkey, cleaned)

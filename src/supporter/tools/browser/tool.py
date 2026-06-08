@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from ...logger import logger
 from .core import BrowseRequest
 from .handlers import HANDLERS
@@ -160,6 +162,9 @@ async def browse(
         stamp=stamp,
         variable=variable,
     )
+    _t0 = time.perf_counter()
     result = await HANDLERS[action](req)
     await _record_step(req, result)
+    _elapsed_ms = (time.perf_counter() - _t0) * 1000.0
+    logger.debug(f"browse action={action} elapsed_ms={_elapsed_ms:.1f}")
     return result
