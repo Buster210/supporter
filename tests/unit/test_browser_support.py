@@ -150,6 +150,24 @@ async def test_stale_ref_snapshot_returns_note_and_fresh_snapshot() -> None:
     assert "OK" in out
 
 
+async def test_stale_ref_snapshot_counts_recovery() -> None:
+    from supporter import recovery_metrics
+
+    class FakePage:
+        url = "https://example.test/"
+
+        async def aria_snapshot(self, **kw: object) -> str:
+            return '- document [ref=e1]:\n  - button "OK" [ref=e2]'
+
+    recovery_metrics.reset_recovery_counters()
+    try:
+        req = BrowseRequest(action="extract", ref="e5")
+        await support._stale_ref_snapshot(FakePage(), req, "e5")
+        assert recovery_metrics.recovery_snapshot()["re_snapshots_survived"] == 1
+    finally:
+        recovery_metrics.reset_recovery_counters()
+
+
 async def test_record_locator_frame_with_selector_returns_locator() -> None:
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(session, "active_frame_selector", lambda: "iframe#t")

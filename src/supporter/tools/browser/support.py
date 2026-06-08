@@ -9,6 +9,7 @@ from weakref import WeakKeyDictionary
 
 from ...config import config
 from ...logger import logger
+from ...recovery_metrics import record_re_snapshot_survived
 from ..base import ToolError
 from ..file_ops import validate_path
 from . import guardrails, humanize, session, snapshot
@@ -186,6 +187,7 @@ async def _stale_ref_snapshot(page: Any, req: BrowseRequest, ref: str) -> str:
     resolves, capture a full snapshot and return it inline behind a short note.
     """
     snap = await _snapshot_full(page, req, label=" (re-snapshot)")
+    record_re_snapshot_survived()
     return (
         f"Error: ref {ref} is stale; page auto re-snapshotted. "
         f"Use the fresh refs below:\n{snap}"
