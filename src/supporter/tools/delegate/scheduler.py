@@ -79,7 +79,7 @@ def _should_skip(
 async def _repair_or_rerequest(
     task: dict[str, Any],
     result: dict[str, Any],
-    semaphore: asyncio.Semaphore,
+    global_semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
 ) -> dict[str, Any]:
@@ -116,7 +116,7 @@ async def _repair_or_rerequest(
     followup["result_contract"] = True
 
     try:
-        repaired = await run_sub_agent(followup, semaphore, bus, job_id)
+        repaired = await run_sub_agent(followup, global_semaphore, bus, job_id)
     except Exception as exc:
         logger.warning(
             f"capsule repair failed, using original for task {task['id']}: {exc}"
@@ -135,10 +135,10 @@ async def _repair_or_rerequest(
 
 async def _execute_dag(
     tasks: list[dict[str, Any]],
-    semaphore: asyncio.Semaphore,
+    job_semaphore: asyncio.Semaphore,
+    global_semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
-    parallel_limit: int,
 ) -> list[dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
@@ -209,9 +209,12 @@ async def _execute_dag(
             )
         )
 
-        result = await run_sub_agent(enriched, semaphore, bus, job_id)
-        result = await run_qa_gate(enriched, result, semaphore, bus, job_id)
-        result = await _repair_or_rerequest(enriched, result, semaphore, bus, job_id)
+        async with job_semaphore:
+            result = await run_sub_agent(enriched, global_semaphore, bus, job_id)
+            result = await run_qa_gate(enriched, result, global_semaphore, bus, job_id)
+            result = await _repair_or_rerequest(
+                enriched, result, global_semaphore, bus, job_id
+            )
         results[task_id] = result
 
         if result["status"] == TaskStatus.COMPLETED:
@@ -416,15 +419,17 @@ async def run_heartbeat(
 async def run_milestone(
     milestone: str,
     tasks: list[dict[str, Any]],
-    semaphore: asyncio.Semaphore,
+    job_semaphore: asyncio.Semaphore,
+    global_semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
-    parallel_limit: int,
     heartbeat_task: asyncio.Task[None] | None = None,
 ) -> None:
     start_wall = time.perf_counter()
     try:
-        results = await _execute_dag(tasks, semaphore, bus, job_id, parallel_limit)
+        results = await _execute_dag(
+            tasks, job_semaphore, global_semaphore, bus, job_id
+        )
         total_wall = time.perf_counter() - start_wall
         await mark_capsule_completed(job_id)
         bus.publish(MilestoneCompleted(job_id, milestone, results, total_wall))

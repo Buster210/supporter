@@ -485,7 +485,9 @@ class TestDAGExecution:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 5)
-            results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
+            results = await _execute_dag(
+                tasks, semaphore, semaphore, mock_bus, "test_job"
+            )
 
         assert len(results) == 2
         assert mock_run.call_count == 2
@@ -530,7 +532,9 @@ class TestDAGExecution:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 5)
-            results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
+            results = await _execute_dag(
+                tasks, semaphore, semaphore, mock_bus, "test_job"
+            )
 
         assert len(results) == 2
         b_call_args = mock_run.call_args_list[1]
@@ -574,7 +578,9 @@ class TestDAGExecution:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 5)
-            results = await _execute_dag(tasks, semaphore, mock_bus, "test_job", 5)
+            results = await _execute_dag(
+                tasks, semaphore, semaphore, mock_bus, "test_job"
+            )
 
         assert results[0]["status"] == TaskStatus.ERROR
         assert results[1]["status"] == TaskStatus.SKIPPED
@@ -625,7 +631,7 @@ class TestDAGExecution:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 2)
-            await _execute_dag(tasks, semaphore, mock_bus, "test_job", 2)
+            await _execute_dag(tasks, semaphore, semaphore, mock_bus, "test_job")
 
         completion_events = [
             call.args[0]
@@ -827,7 +833,7 @@ async def test_execute_dag_timeout_branch_publishes_timeout() -> None:
 
         mock_bus = MagicMock(spec=DelegationBus)
         await create_capsule("job", "test", tasks, 1)
-        results = await _execute_dag(tasks, semaphore, mock_bus, "job", 1)
+        results = await _execute_dag(tasks, semaphore, semaphore, mock_bus, "job")
 
     assert results[0]["status"] == TaskStatus.TIMEOUT
     published = [
@@ -966,9 +972,9 @@ async def test_run_milestone_propagates_terminal_capsule_failure() -> None:
             "m",
             [],
             asyncio.Semaphore(1),
+            asyncio.Semaphore(1),
             bus,
             "milestone_fail",
-            parallel_limit=1,
         )
 
 
