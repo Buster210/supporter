@@ -75,6 +75,8 @@ class SupporterApp(App[None]):
     async def on_mount(self) -> None:
         from ..tools.bash.sandbox import register_bash_callbacks
         from ..tools.browser.guardrails import register_browse_callback
+        from ..tools.delegate.api import set_delegation_start_callback
+        from ..tools.delegate.scheduler import resume_interrupted_jobs
         from ..tools.file_ops import register_confirmation_callback
 
         init_logger()
@@ -88,8 +90,6 @@ class SupporterApp(App[None]):
             profile_select=self._select_profile,
         )
 
-        from ..tools.delegate.api import set_delegation_start_callback
-
         set_delegation_start_callback(self._start_delegation_listener)
 
         from ..tools.browser.session import prewarm_clone
@@ -97,6 +97,11 @@ class SupporterApp(App[None]):
         logger.info("Supporter TUI dashboard active")
         self._mode_manager.start_warmup()
         try:
+            # Auto-resume interrupted milestones on startup. Own group so the
+            # exclusive _setup_agent worker (default group) does not cancel it.
+            self.run_worker(
+                resume_interrupted_jobs(), name="resume-jobs", group="resume-jobs"
+            )
             self.run_worker(self._setup_agent(use_live=True), exclusive=True)
             self.run_worker(self._mode_manager.trigger_live_greeting())
             self.run_worker(prewarm_clone())

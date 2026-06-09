@@ -10,6 +10,7 @@ from ...types import (
     HeartbeatTick,
     MilestoneCancelled,
     MilestoneCompleted,
+    MilestoneStarted,
     TaskAnomaly,
     TaskCompleted,
     TaskFailed,
@@ -18,8 +19,8 @@ from ...types import (
     TaskStatus,
     TaskTimedOut,
 )
-from .agents import run_sub_agent
-from .bus import DelegationBus, bus_exists, remove_bus
+from .agents import delegate_allowed_tool_names, run_sub_agent
+from .bus import DelegationBus, bus_exists, get_bus, remove_bus
 from .capsule import (
     extract_task_capsule_fields,
     mark_capsule_cancelled,
@@ -29,6 +30,7 @@ from .capsule import (
     mark_task_skipped,
     mark_task_started,
     mark_task_timed_out,
+    status_value,
     validate_delegation_payload,
 )
 from .qa_gate import run_qa_gate
@@ -139,15 +141,26 @@ async def _execute_dag(
     global_semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
+    seed_results: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    results: dict[str, dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = dict(seed_results) if seed_results else {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
+    # Seeded (already-settled) tasks resolve immediately so dependents' gates open
+    # and the settled output is available as context -- even when only unfinished
+    # tasks are passed in `tasks` (the resume path) and a dep lives only in seeds.
+    for seeded_id in results:
+        task_done.setdefault(seeded_id, asyncio.Event()).set()
 
     async def _run_with_gate(task: dict[str, Any]) -> None:
+        task_id = task["id"]
+        if task_id in results:
+            # Settled in a prior run (seeded on resume) -- never re-execute.
+            task_done[task_id].set()
+            return
+
         for dep_id in task["depends_on"]:
             await task_done[dep_id].wait()
 
-        task_id = task["id"]
         agent_label = task.get("agent") or "custom"
 
         skip_reason = _should_skip(task, results)
@@ -314,7 +327,10 @@ async def _execute_dag(
         task_done[task_id].set()
 
     await asyncio.gather(*[_run_with_gate(t) for t in tasks])
-    return [results[t["id"]] for t in tasks if t["id"] in results]
+    ordered = [results[t["id"]] for t in tasks if t["id"] in results]
+    seen = {t["id"] for t in tasks}
+    ordered.extend(v for k, v in results.items() if k not in seen)
+    return ordered
 
 
 def serialize_results(
@@ -424,11 +440,12 @@ async def run_milestone(
     bus: DelegationBus,
     job_id: str,
     heartbeat_task: asyncio.Task[None] | None = None,
+    seed_results: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     start_wall = time.perf_counter()
     try:
         results = await _execute_dag(
-            tasks, job_semaphore, global_semaphore, bus, job_id
+            tasks, job_semaphore, global_semaphore, bus, job_id, seed_results
         )
         total_wall = time.perf_counter() - start_wall
         await mark_capsule_completed(job_id)
@@ -446,3 +463,245 @@ async def run_milestone(
         bus.close()
         remove_bus(job_id)
         JOB_TASKS.pop(job_id, None)
+
+
+def _task_to_seed_result(task: dict[str, Any]) -> dict[str, Any]:
+    """Convert a capsule task record to a result record for seeding."""
+    status = task.get("status", TaskStatus.PENDING.value)
+    return {
+        "id": task["id"],
+        "status": status,
+        "output": task.get("output", ""),
+        "duration": float(task.get("duration", 0.0)),
+        "model": task.get("model", ""),
+        "tokens": task.get("tokens", {}),
+        "step_count": int(task.get("step_count", 0)),
+    }
+
+
+_BUS_STATUS_BY_TERMINAL = {
+    TaskStatus.COMPLETED.value: "DONE",
+    TaskStatus.TIMEOUT.value: "TIMEOUT",
+    TaskStatus.ERROR.value: "FAILED",
+    TaskStatus.SKIPPED.value: "SKIPPED",
+}
+
+
+def _register_capsule_tasks_on_bus(
+    bus: DelegationBus,
+    tasks_by_id: dict[str, dict[str, Any]],
+    terminal_statuses: set[str],
+) -> None:
+    """Seed the bus snapshot with each capsule task's last-known state."""
+    for task_id, task_record in tasks_by_id.items():
+        if not isinstance(task_record, dict):
+            continue
+        task_status = status_value(task_record.get("status", ""))
+        if task_status in terminal_statuses:
+            bus.update_task_state(
+                task_id,
+                {
+                    "status": _BUS_STATUS_BY_TERMINAL[task_status],
+                    "agent_label": task_record.get("agent", "custom"),
+                    "task_goal": task_record.get("goal", ""),
+                    "duration": float(task_record.get("duration", 0.0)),
+                    "summary": str(task_record.get("summary", "")),
+                },
+            )
+        else:
+            bus.update_task_state(
+                task_id,
+                {
+                    "status": "PENDING",
+                    "agent_label": task_record.get("agent", "custom"),
+                    "task_goal": task_record.get("goal", ""),
+                    "duration": 0.0,
+                },
+            )
+
+
+async def find_resumable_jobs() -> list[str]:
+    """Find job IDs for interrupted milestones that can be auto-resumed.
+
+    Scans capsule files and returns job_ids whose effective_status is
+    "interrupted_by_restart".
+    """
+    from .capsule import effective_status, load_capsule_safe
+    from .capsule_query import capsule_files
+
+    job_ids: list[str] = []
+    for path in capsule_files():
+        try:
+            capsule = load_capsule_safe(path.stem)
+            if effective_status(capsule) == "interrupted_by_restart":
+                job_ids.append(str(capsule.get("job_id", "")))
+        except Exception as exc:
+            logger.debug(
+                f"Skipping corrupted capsule during resume scan "
+                f"[path={path}, error={type(exc).__name__}]"
+            )
+    return [jid for jid in job_ids if jid]
+
+
+async def resume_milestone(job_id: str) -> bool:
+    """Resume an interrupted milestone from its persisted capsule.
+
+    Loads the capsule, identifies unfinished tasks, rebuilds seed_results
+    from settled tasks, and runs only the unfinished tasks through the
+    existing gate/QA/repair pipeline.
+
+    Returns True if the milestone was resumed, False if it was skipped
+    (e.g., already has a live entry in JOB_TASKS).
+    """
+    from .capsule import load_capsule
+
+    # Skip if already running -- a live in-process task or a registered bus.
+    existing = JOB_TASKS.get(job_id)
+    if existing is not None and not existing.done():
+        logger.info(f"Job {job_id} already running, skipping resume")
+        return False
+    if bus_exists(job_id):
+        logger.info(f"Job {job_id} already has live bus, skipping resume")
+        return False
+
+    capsule = load_capsule(job_id)
+    milestone = str(capsule.get("milestone", ""))
+    parallel_cap = int(capsule.get("parallel_cap", config.delegate_max_hard_cap))
+    tasks_by_id: dict[str, dict[str, Any]] = capsule.get("tasks", {})
+
+    if not tasks_by_id:
+        logger.warning(f"Job {job_id} has no tasks in capsule, skipping")
+        return False
+
+    # Classify tasks by status
+    terminal_statuses = {
+        TaskStatus.COMPLETED.value,
+        TaskStatus.TIMEOUT.value,
+        TaskStatus.ERROR.value,
+        TaskStatus.SKIPPED.value,
+    }
+    settled: dict[str, dict[str, Any]] = {}
+    unfinished: list[dict[str, Any]] = []
+
+    for task_id, task_record in tasks_by_id.items():
+        if not isinstance(task_record, dict):
+            continue
+        task_status = status_value(task_record.get("status", ""))
+        if task_status in terminal_statuses:
+            settled[task_id] = _task_to_seed_result(task_record)
+        else:
+            # Reconstruct unfinished task dict
+            unfinished.append(
+                {
+                    "id": task_id,
+                    "task": task_record.get("goal", ""),
+                    "agent": task_record.get("agent") or "custom",
+                    "backend": "gemini",
+                    "tools": set(delegate_allowed_tool_names(task_record.get("agent"))),
+                    "model": task_record.get("model", config.gemini_model),
+                    "persona": config.delegate_default_persona,
+                    "context": "",
+                    "timeout": (
+                        task_record.get("timeout") or config.delegate_default_timeout
+                    ),
+                    "max_retries": 0,
+                    "depends_on": list(task_record.get("depends_on", [])),
+                    "tolerate_failures": bool(
+                        task_record.get("tolerate_failures", False)
+                    ),
+                }
+            )
+
+    # Build seed_results from settled records
+    seed_results = settled.copy()
+
+    # The capsule on disk already holds correct per-task terminal state; do not
+    # recreate it -- that would reset settled tasks to pending and lose their
+    # outputs. The first resumed task's status write refreshes `updated_at`,
+    # clearing the interrupted-by-restart flag.
+    log_decision(
+        site="scheduler.resume_milestone",
+        chosen="resume",
+        options=("resume", "skip"),
+        reason=f"auto-resume interrupted milestone {job_id}",
+        correlation_id=job_id,
+    )
+
+    # Run only unfinished tasks
+    if unfinished:
+        # Create the bus only when there is live work; seed its snapshot with
+        # every task's last-known state so the resumed run renders in full.
+        bus = get_bus(job_id, milestone)
+        bus.notify_per_task = True
+        _register_capsule_tasks_on_bus(bus, tasks_by_id, terminal_statuses)
+
+        job_semaphore = asyncio.Semaphore(parallel_cap)
+        hb_task = asyncio.create_task(run_heartbeat(bus, job_id))
+        BACKGROUND_TASKS.add(hb_task)
+        hb_task.add_done_callback(BACKGROUND_TASKS.discard)
+
+        milestone_task = asyncio.create_task(
+            run_milestone(
+                milestone,
+                unfinished,
+                job_semaphore,
+                _get_global_semaphore(),
+                bus,
+                job_id,
+                hb_task,
+                seed_results,
+            )
+        )
+        JOB_TASKS[job_id] = milestone_task
+        BACKGROUND_TASKS.add(milestone_task)
+        milestone_task.add_done_callback(BACKGROUND_TASKS.discard)
+
+        # Publish MilestoneStarted for the resumed job
+        bus.publish(
+            MilestoneStarted(
+                job_id=job_id,
+                milestone=milestone,
+                task_ids=[t["id"] for t in unfinished],
+                parallel_cap=parallel_cap,
+            )
+        )
+    else:
+        # All tasks already settled - just mark completed
+        await mark_capsule_completed(job_id)
+
+    return True
+
+
+async def resume_interrupted_jobs() -> list[str]:
+    """Find and resume all interrupted jobs.
+
+    Auto-resume entry point - finds resumable jobs and resumes each.
+    Logs the decision via decision_log.log_decision.
+
+    Returns list of job_ids that were resumed.
+    """
+    resumed: list[str] = []
+    for job_id in await find_resumable_jobs():
+        if await resume_milestone(job_id):
+            resumed.append(job_id)
+    if resumed:
+        log_decision(
+            site="scheduler.resume_interrupted_jobs",
+            chosen="resume",
+            options=("resume", "skip"),
+            reason=f"auto-resumed {len(resumed)} interrupted milestone(s)",
+            correlation_id="startup",
+        )
+    return resumed
+
+
+# Module-level global semaphore for concurrency control
+_GLOBAL_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_global_semaphore() -> asyncio.Semaphore:
+    """Get or create the global semaphore for delegation concurrency control."""
+    global _GLOBAL_SEMAPHORE
+    if _GLOBAL_SEMAPHORE is None:
+        _GLOBAL_SEMAPHORE = asyncio.Semaphore(config.delegate_max_hard_cap)
+    return _GLOBAL_SEMAPHORE
