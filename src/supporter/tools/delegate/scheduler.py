@@ -23,6 +23,7 @@ from .agents import delegate_allowed_tool_names, run_sub_agent
 from .bus import DelegationBus, bus_exists, get_bus, remove_bus
 from .capsule import (
     extract_task_capsule_fields,
+    load_capsule,
     mark_capsule_cancelled,
     mark_capsule_completed,
     mark_task_completed,
@@ -33,6 +34,8 @@ from .capsule import (
     status_value,
     validate_delegation_payload,
 )
+from .metrics import subscribe_metrics
+from .project_memory import load_project_memory, memory_context_block, record_learnings
 from .qa_gate import run_qa_gate
 
 BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
@@ -64,6 +67,35 @@ def _inject_dependency_context(
         f"{enriched['context']}\n\n{extra}" if enriched["context"] else extra
     )
     return enriched
+
+
+def _inject_memory_context(task: dict[str, Any], memory_block: str) -> dict[str, Any]:
+    """Inject project memory block into task context. No-op when block is empty."""
+    if not memory_block:
+        return task
+    enriched = task.copy()
+    base = enriched["context"]
+    enriched["context"] = f"{base}\n\n{memory_block}" if base else memory_block
+    return enriched
+
+
+async def _record_milestone_learnings(job_id: str) -> None:
+    """Extract a completed capsule's key_findings into project memory.
+
+    Never raises: a memory failure must not break milestone completion.
+    """
+    try:
+        capsule = load_capsule(job_id)
+        synthesis = capsule.get("synthesis", {})
+        if not isinstance(synthesis, dict):
+            return
+        key_findings = synthesis.get("key_findings", [])
+        if not isinstance(key_findings, list):
+            return
+        insights = [str(kf) for kf in key_findings if isinstance(kf, str)]
+        await record_learnings(insights, job_id)
+    except Exception as exc:
+        logger.warning(f"Failed to record project memory for job {job_id}: {exc}")
 
 
 def _should_skip(
@@ -145,6 +177,9 @@ async def _execute_dag(
 ) -> list[dict[str, Any]]:
     results: dict[str, dict[str, Any]] = dict(seed_results) if seed_results else {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
+    # Load project memory once for all tasks
+    memory = await load_project_memory()
+    memory_block = memory_context_block(memory)
     # Seeded (already-settled) tasks resolve immediately so dependents' gates open
     # and the settled output is available as context -- even when only unfinished
     # tasks are passed in `tasks` (the resume path) and a dep lives only in seeds.
@@ -207,6 +242,7 @@ async def _execute_dag(
             },
         )
         enriched = _inject_dependency_context(task, results)
+        enriched = _inject_memory_context(enriched, memory_block)
         await mark_task_started(
             job_id,
             task_id,
@@ -273,6 +309,8 @@ async def _execute_dag(
                     findings_count=findings_count,
                     evidence_counts=evidence_counts,
                     handoff=str(parsed_fields.get("handoff", "")),
+                    tokens=result.get("tokens") or {},
+                    step_count=int(result.get("step_count", 0)),
                 )
             )
         elif result["status"] == TaskStatus.TIMEOUT:
@@ -443,12 +481,14 @@ async def run_milestone(
     seed_results: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     start_wall = time.perf_counter()
+    metrics_task = subscribe_metrics(bus, job_id)
     try:
         results = await _execute_dag(
             tasks, job_semaphore, global_semaphore, bus, job_id, seed_results
         )
         total_wall = time.perf_counter() - start_wall
         await mark_capsule_completed(job_id)
+        await _record_milestone_learnings(job_id)
         bus.publish(MilestoneCompleted(job_id, milestone, results, total_wall))
     except asyncio.CancelledError:
         total_wall = time.perf_counter() - start_wall
@@ -461,6 +501,7 @@ async def run_milestone(
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
         bus.close()
+        await asyncio.gather(metrics_task, return_exceptions=True)
         remove_bus(job_id)
         JOB_TASKS.pop(job_id, None)
 
@@ -668,6 +709,7 @@ async def resume_milestone(job_id: str) -> bool:
     else:
         # All tasks already settled - just mark completed
         await mark_capsule_completed(job_id)
+        await _record_milestone_learnings(job_id)
 
     return True
 

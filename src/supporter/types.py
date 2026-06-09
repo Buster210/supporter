@@ -187,6 +187,8 @@ class TaskCompleted(DelegationEvent):
     findings_count: int = 0
     evidence_counts: dict[str, int] = field(default_factory=dict)
     handoff: str = ""
+    tokens: dict[str, Any] = field(default_factory=dict)
+    step_count: int = 0
 
 
 @dataclass(frozen=True)
