@@ -14,14 +14,13 @@ from .capsule_query import serialize_capsule_result as _serialize_capsule_result
 from .scheduler import (
     BACKGROUND_TASKS,
     JOB_TASKS,
+    _get_global_semaphore,
     run_heartbeat,
     run_milestone,
 )
 from .validation import validate_tasks
 
 _on_delegation_start: Callable[[str], None] | None = None
-
-_GLOBAL_SEMAPHORE: asyncio.Semaphore = asyncio.Semaphore(config.delegate_max_hard_cap)
 
 
 def set_delegation_start_callback(cb: Callable[[str], None] | None) -> None:
@@ -76,7 +75,7 @@ async def delegate_tasks(
     try:
         validated_tasks = validate_tasks(tasks)
         parallel_cap = max(1, min(max_parallel, config.delegate_max_hard_cap))
-        semaphore = _GLOBAL_SEMAPHORE
+        job_semaphore = asyncio.Semaphore(parallel_cap)
         job_id = str(uuid.uuid4())[:DELEGATE_JOB_ID_LEN]
 
         bus = get_bus(job_id, milestone)
@@ -112,10 +111,10 @@ async def delegate_tasks(
             run_milestone(
                 milestone,
                 validated_tasks,
-                semaphore,
+                job_semaphore,
+                _get_global_semaphore(),
                 bus,
                 job_id,
-                parallel_cap,
                 hb_task,
             )
         )

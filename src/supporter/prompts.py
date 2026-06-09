@@ -24,6 +24,13 @@ DELEGATION_RESULT_CONTRACT = (
 )
 
 
+DELEGATION_REPAIR_REQUEST = (
+    "Your previous reply did not include a valid structured result block. "
+    "Re-emit ONLY the structured result block for the work you already did -- "
+    "no other prose, no explanation. Your previous reply was:\n\n"
+)
+
+
 DELEGATE_DEFAULT_PERSONA = (
     "You are a focused task executor. You have been delegated a specific sub-task. "
     "Execute it precisely and completely. Report your findings and actions clearly. "

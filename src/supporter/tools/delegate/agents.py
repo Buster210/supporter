@@ -2,13 +2,14 @@ import asyncio
 import contextlib
 import functools
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ...agent import ChatAgent
 from ...config import DELEGATE_RETRY_BACKOFF, config
 from ...logger import logger
 from ...prompts import DELEGATION_RESULT_CONTRACT
-from ...types import LLMProvider, TaskRetrying, TaskStatus
+from ...types import LLMProvider, TaskOutputChunk, TaskRetrying, TaskStatus
 from ..catalog import build_tool_catalog, select_delegate_tools
 from .backends import OPENCODE_BACKEND
 from .bus import DelegationBus
@@ -168,9 +169,35 @@ async def run_sub_agent(
 
             agent: ChatAgent | None = None
             cache_key = _cache_key(task)
+            # Sequence counter for TaskOutputChunk events (per-task, monotonically
+            # increasing)
+            seq_counter: list[int] = [0]
             try:
                 if task.get("backend") == OPENCODE_BACKEND:
-                    text, model_name, tokens = await run_opencode(task)
+
+                    def _make_chunk_publisher(
+                        job_id: str, task_id: str, seq: list[int], bus: Any
+                    ) -> Callable[[str], None]:
+                        def _on_chunk(chunk: str) -> None:
+                            seq[0] += 1
+                            bus.publish(
+                                TaskOutputChunk(
+                                    job_id=job_id,
+                                    task_id=task_id,
+                                    chunk=chunk,
+                                    seq=seq[0],
+                                )
+                            )
+
+                        return _on_chunk
+
+                    text, model_name, tokens = await run_opencode(
+                        task,
+                        on_chunk=_make_chunk_publisher(
+                            job_id, task_id, seq_counter, bus
+                        ),
+                    )
+                    step_count = 0
                 else:
                     agent, prompt = _create_sub_agent(
                         task,
@@ -182,6 +209,7 @@ async def run_sub_agent(
                             agent.execute(prompt), timeout=task["timeout"]
                         )
                     text, model_name, tokens = result.text, result.model, result.usage
+                    step_count = len(result.automatic_function_calling_history or [])
                 duration = time.perf_counter() - start_time
                 logger.info(
                     f"Sub-agent '{task_id}' completed in {duration:.2f}s "
@@ -197,6 +225,7 @@ async def run_sub_agent(
                     "model": model_name,
                     "duration": duration,
                     "tokens": tokens,
+                    "step_count": step_count,
                 }
             except TimeoutError:
                 logger.warning(

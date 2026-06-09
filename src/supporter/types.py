@@ -73,6 +73,7 @@ class AppConfig:
     delegate_max_retries: int
     delegate_correction_rounds: int = 3
     delegate_qa_gate_enabled: bool = True
+    delegate_result_repair: bool = True
     delegate_tier1_commands: list[list[str]] = field(default_factory=list)
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
@@ -186,6 +187,8 @@ class TaskCompleted(DelegationEvent):
     findings_count: int = 0
     evidence_counts: dict[str, int] = field(default_factory=dict)
     handoff: str = ""
+    tokens: dict[str, Any] = field(default_factory=dict)
+    step_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,13 @@ class TaskFailed(DelegationEvent):
 class TaskTimedOut(DelegationEvent):
     task_id: str
     duration: float
+
+
+@dataclass(frozen=True)
+class TaskOutputChunk(DelegationEvent):
+    task_id: str
+    chunk: str
+    seq: int
 
 
 @dataclass(frozen=True)

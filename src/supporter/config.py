@@ -72,6 +72,7 @@ DELEGATE_MAX_TASKS = 10
 DELEGATE_MAX_OUTPUT_CHARS = 10000
 DELEGATE_MAX_RETRIES = 2
 
+DELEGATE_RESULT_REPAIR = True
 DELEGATE_CORRECTION_ROUNDS = 3
 DELEGATE_HEARTBEAT_INTERVAL = 30
 DELEGATE_ANOMALY_THRESHOLD = 0.8
@@ -185,6 +186,9 @@ def load_config() -> AppConfig:
             "DELEGATE_CORRECTION_ROUNDS", DELEGATE_CORRECTION_ROUNDS
         ),
         delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
+        delegate_result_repair=_bool_env(
+            "DELEGATE_RESULT_REPAIR", DELEGATE_RESULT_REPAIR
+        ),
         delegate_tier1_commands=_cmd_list_env(
             "DELEGATE_TIER1_COMMANDS", DELEGATE_TIER1_COMMANDS
         ),

@@ -691,3 +691,119 @@ async def test_load_all_capsules_sorts_by_updated_at_despite_mtime(
     result = capsule_query.load_all_capsules(limit=1)
     assert len(result) == 1
     assert result[0]["job_id"] == "new00001"
+
+
+@pytest.mark.asyncio
+async def test_backend_persisted_through_capsule_round_trip() -> None:
+    """Regression: opencode tasks must survive create→load with their backend."""
+    task = _task("t1")
+    task["backend"] = "opencode"
+    await create_capsule("be000001", "Backend round-trip", [task], 1)
+    loaded = load_capsule("be000001")
+    assert loaded["tasks"]["t1"]["backend"] == "opencode"
+
+
+def test_initial_task_record_preserves_backend() -> None:
+    """Regression: _initial_task_record must persist the given backend."""
+    task = _task("t1")
+    task["backend"] = "opencode"
+    record = dc._initial_task_record(task)
+    assert record["backend"] == "opencode"
+
+
+def test_initial_task_record_defaults_backend_to_gemini() -> None:
+    """Legacy fallback: no backend field → gemini."""
+    task = _task("t1")
+    task.pop("backend", None)
+    record = dc._initial_task_record(task)
+    assert record["backend"] == "gemini"
+
+
+def test_initial_task_record_persists_live_and_pre_approved() -> None:
+    task = _task("t1")
+    task["live"] = True
+    task["pre_approved_commands"] = ["ls", "git status"]
+    record = dc._initial_task_record(task)
+    assert record["live"] is True
+    assert record["pre_approved_commands"] == ["ls", "git status"]
+
+
+def test_initial_task_record_defaults_live_and_pre_approved() -> None:
+    record = dc._initial_task_record(_task("t1"))
+    assert record["live"] is False
+    assert record["pre_approved_commands"] == []
+
+
+@pytest.mark.asyncio
+async def test_live_and_pre_approved_survive_capsule_roundtrip() -> None:
+    task = _task("t1")
+    task["live"] = True
+    task["pre_approved_commands"] = ["pwd"]
+    await create_capsule("rf-roundtrip", "RF", [task], 1)
+    loaded = load_capsule("rf-roundtrip")["tasks"]["t1"]
+    assert loaded["live"] is True
+    assert loaded["pre_approved_commands"] == ["pwd"]
+
+
+def _decision(
+    site: str, chosen: str, *, reason: str = "", job: str | None = None
+) -> Any:
+    from supporter.decision_log import DecisionEntry
+
+    return DecisionEntry(
+        timestamp="2026-06-07T00:00:00.000",
+        site=site,
+        chosen=chosen,
+        reason=reason,
+        correlation_id=job,
+    )
+
+
+def test_format_recent_decisions_renders_entries() -> None:
+    from supporter.tools.delegate.capsule_view import format_recent_decisions
+
+    out = format_recent_decisions(
+        [_decision("scheduler.resume_milestone", "resume", reason="interrupted job1")]
+    )
+    assert "Recent decisions" in out
+    assert "scheduler.resume_milestone → resume" in out
+    assert "interrupted job1" in out
+
+
+def test_format_recent_decisions_filters_by_job_id() -> None:
+    from supporter.tools.delegate.capsule_view import format_recent_decisions
+
+    entries = [
+        _decision("s1", "a", job="job1"),
+        _decision("s2", "b", job="job2"),
+    ]
+    out = format_recent_decisions(entries, job_id="job1")
+    assert "s1 → a" in out
+    assert "s2 → b" not in out
+
+
+def test_format_recent_decisions_empty_for_unknown_job() -> None:
+    from supporter.tools.delegate.capsule_view import format_recent_decisions
+
+    out = format_recent_decisions([_decision("s1", "a", job="job1")], job_id="other")
+    assert out == "No recorded decisions for `other`."
+
+
+@pytest.mark.asyncio
+async def test_inspect_delegation_decisions_consumes_ring() -> None:
+    from supporter import decision_log
+    from supporter.decision_log import log_decision
+    from supporter.tools.delegate.capsule_view import inspect_delegation
+
+    decision_log._RING.clear()
+    await create_capsule("declog-job", "M", [_task("t1")], 1)
+    log_decision(
+        "scheduler.resume_milestone",
+        "resume",
+        reason="auto-resume",
+        correlation_id="declog-job",
+    )
+    out = inspect_delegation("declog-job", "decisions")
+    assert "scheduler.resume_milestone → resume" in out
+    assert "auto-resume" in out
+    decision_log._RING.clear()

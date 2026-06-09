@@ -90,17 +90,13 @@ async def _run_dag(
         started.append(task["id"])
         return outcomes[task["id"]]
 
-    with patch(
-        "supporter.tools.delegate.scheduler.run_sub_agent", side_effect=fake_run
+    with (
+        patch("supporter.tools.delegate.scheduler.run_sub_agent", side_effect=fake_run),
+        patch.object(config, "delegate_result_repair", False),
     ):
         await create_capsule("job-dag", "dag", tasks, parallel_limit)
-        results = await _execute_dag(
-            tasks,
-            asyncio.Semaphore(parallel_limit),
-            bus,
-            "job-dag",
-            parallel_limit,
-        )
+        sem = asyncio.Semaphore(parallel_limit)
+        results = await _execute_dag(tasks, sem, sem, bus, "job-dag")
     events = []
     while not queue.empty():
         events.append(queue.get_nowait())
@@ -292,3 +288,62 @@ async def test_heartbeat_anomaly_event_marks_state_once() -> None:
     assert len(anomalies) == 1
     assert anomalies[0].task_id == "slow"
     assert bus.get_snapshot()["slow"]["anomaly_fired"] is True
+
+
+@pytest.mark.asyncio
+async def test_per_milestone_cap_is_effective_even_with_higher_global_cap() -> None:
+    """SPEC §10: the per-milestone parallel_cap is the actual effective
+    concurrency bound; the global hard cap is only an outer ceiling.
+
+    With five independent tasks, a configured max_parallel=2 must mean no
+    more than two sub-agents ever run concurrently even though the global
+    hard cap is 5.
+    """
+    tasks = [_task(f"t{i}") for i in range(5)]
+    bus = DelegationBus("cap-test")
+
+    in_flight = 0
+    peak = 0
+    release = asyncio.Event()
+
+    async def slow_run(
+        task: dict[str, Any], *_args: Any, **_kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await release.wait()
+            return _result(task["id"], TaskStatus.COMPLETED)
+        finally:
+            in_flight -= 1
+
+    # Per-milestone cap (configured max_parallel) is the inner bound.
+    # Global hard cap is the outer bound and is intentionally higher.
+    job_sem = asyncio.Semaphore(2)
+    global_sem = asyncio.Semaphore(5)
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler.run_sub_agent",
+            side_effect=slow_run,
+        ),
+        patch.object(config, "delegate_result_repair", False),
+    ):
+        await create_capsule("cap-job", "cap-test", tasks, 2)
+        milestone_task = asyncio.create_task(
+            _execute_dag(tasks, job_sem, global_sem, bus, "cap-job")
+        )
+        # Let asyncio dispatch all 5 task coroutines and let the per-job
+        # semaphore settle to its steady state (2 in flight, 3 blocked).
+        for _ in range(1000):
+            if peak >= 2:
+                break
+            await asyncio.sleep(0.001)
+        release.set()
+        results = await milestone_task
+
+    assert peak == 2, f"Expected peak concurrency 2, observed {peak}"
+    assert len(results) == 5
+    for result in results:
+        assert result["status"] == TaskStatus.COMPLETED

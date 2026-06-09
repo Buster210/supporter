@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ...decision_log import DecisionEntry, recent_decisions
 from .capsule import (
     capsule_relative_path,
     default_evidence,
@@ -15,6 +16,7 @@ from .capsule_query import task_totals
 from .capsule_render import render_evidence, render_findings
 
 OUTPUT_PREVIEW_CHARS = 1200
+RECENT_DECISIONS_LIMIT = 20
 
 
 def list_delegations(status: str | None = None, limit: int = 10) -> str:
@@ -69,7 +71,9 @@ def inspect_delegation(job_id: str, detail: str = "summary") -> str:
         return format_capsule_tasks(capsule)
     if detail == "full":
         return "```json\n" + json.dumps(display_capsule(capsule), indent=2) + "\n```"
-    return "Unknown detail. Use `summary`, `tasks`, or `full`."
+    if detail == "decisions":
+        return format_recent_decisions(recent_decisions(), job_id=job_id)
+    return "Unknown detail. Use `summary`, `tasks`, `decisions`, or `full`."
 
 
 def inspect_task(job_id: str, task_id: str) -> str:
@@ -127,6 +131,48 @@ def format_capsule_load_error(job_id: str, exc: BaseException) -> str:
     )
 
 
+def format_metrics_line(metrics: dict[str, Any]) -> str:
+    """One-line reliability summary: success rate + autonomy duration."""
+    success_pct = round(float(metrics.get("success_rate", 0.0)) * 100)
+    steps = int(metrics.get("total_steps", 0))
+    duration = float(metrics.get("milestone_duration", 0.0))
+    completed = int(metrics.get("completed", 0))
+    attempted = (
+        completed + int(metrics.get("failed", 0)) + int(metrics.get("timed_out", 0))
+    )
+    parts = [
+        f"Success {success_pct}% ({completed}/{attempted})",
+        f"{steps} steps",
+        f"{duration:.1f}s",
+    ]
+    cost = metrics.get("cost_usd")
+    if cost is not None:
+        parts.append(f"${float(cost):.4f}")
+    return " · ".join(parts)
+
+
+def format_recent_decisions(
+    entries: list[DecisionEntry], *, job_id: str | None = None
+) -> str:
+    """Render the autonomous decision ring (site/chosen/reason) for inspection.
+
+    When ``job_id`` is given, only decisions whose correlation_id matches are
+    shown so a user can audit what the agent decided for that delegation.
+    """
+    if job_id:
+        entries = [e for e in entries if e.correlation_id == job_id]
+    if not entries:
+        scope = f" for `{job_id}`" if job_id else ""
+        return f"No recorded decisions{scope}."
+    shown = entries[-RECENT_DECISIONS_LIMIT:]
+    header = f"**Recent decisions** ({len(shown)} of {len(entries)})"
+    rows = [header]
+    for entry in shown:
+        reason = f" — {entry.reason}" if entry.reason else ""
+        rows.append(f"- [{entry.timestamp}] {entry.site} → {entry.chosen}{reason}")
+    return "\n".join(rows)
+
+
 def format_capsule_summary(capsule: dict[str, Any]) -> str:
     job_id = str(capsule.get("job_id", ""))
     tasks = capsule.get("tasks", {})
@@ -134,13 +180,24 @@ def format_capsule_summary(capsule: dict[str, Any]) -> str:
     synthesis = capsule.get("synthesis", {})
     if not isinstance(synthesis, dict):
         synthesis = {}
+    metrics = capsule.get("metrics")
+    metrics_line = (
+        f"- Metrics: {format_metrics_line(metrics)}"
+        if isinstance(metrics, dict)
+        else None
+    )
+    lines = [
+        f"**Delegation `{job_id}`**",
+        f"- Milestone: {capsule.get('milestone', '')}",
+        f"- Status: {effective_status(capsule)}",
+        f"- Capsule: {capsule_relative_path(job_id)}",
+        f"- Totals: {json.dumps(totals)}",
+    ]
+    if metrics_line is not None:
+        lines.append(metrics_line)
     return "\n".join(
         [
-            f"**Delegation `{job_id}`**",
-            f"- Milestone: {capsule.get('milestone', '')}",
-            f"- Status: {effective_status(capsule)}",
-            f"- Capsule: {capsule_relative_path(job_id)}",
-            f"- Totals: {json.dumps(totals)}",
+            *lines,
             f"- Answer: {synthesis.get('answer', '') or 'none'}",
             format_section("Key findings", synthesis.get("key_findings", [])),
             format_section(

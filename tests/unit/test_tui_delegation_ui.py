@@ -19,6 +19,7 @@ from supporter.types import (
     TaskAnomaly,
     TaskCompleted,
     TaskFailed,
+    TaskOutputChunk,
     TaskSkipped,
     TaskStarted,
     TaskTimedOut,
@@ -39,6 +40,9 @@ class FakeDelegationBus:
 
     def get_snapshot(self) -> dict[str, dict[str, Any]]:
         return self._snapshot
+
+    def update_task_state(self, task_id: str, state: dict[str, Any]) -> None:
+        self._snapshot[task_id] = state
 
     def subscribe(self) -> asyncio.Queue[Any]:
         queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -135,6 +139,22 @@ def test_delegation_progress_formats_default_status_and_agent() -> None:
     output = format_delegation_progress("job123", bus)
 
     assert "| pending | ? | pending |  |" in output
+
+
+def test_delegation_progress_shows_streamed_output_tail() -> None:
+    bus = MagicMock()
+    bus.get_snapshot.return_value = {
+        "build": {
+            "status": "running",
+            "agent_label": "agent-a",
+            "duration": 0.5,
+            "output_tail": "compiling sources\nlinking\n",
+        }
+    }
+
+    output = format_delegation_progress("job123", bus)
+
+    assert "[compiling sources]" in output
 
 
 @pytest.mark.asyncio
@@ -236,6 +256,74 @@ async def test_listener_suppresses_per_task_messages_when_disabled(
 
     upsert_progress.assert_awaited_once_with("job123", bus)
     inject_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_listener_merges_output_tail_without_wiping_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bus = FakeDelegationBus(
+        [TaskOutputChunk("job123", "task1", "building module\n", 1)],
+        snapshot={
+            "task1": {
+                "agent_label": "agent-a",
+                "task_goal": "Build it",
+                "status": "running",
+                "duration": 0.5,
+            }
+        },
+    )
+    monkeypatch.setattr("supporter.tools.delegate.bus.get_bus", lambda job_id: bus)
+    upsert_progress = AsyncMock()
+    listener = DelegationListener(
+        inject_message=MagicMock(),
+        upsert_progress=upsert_progress,
+        drop_progress=MagicMock(),
+    )
+
+    await listener.listen("job123")
+
+    state = bus.get_snapshot()["task1"]
+    assert state["output_tail"] == "building module\n"
+    # scheduler-owned fields survive the chunk merge
+    assert state["status"] == "running"
+    assert state["agent_label"] == "agent-a"
+    assert state["duration"] == 0.5
+    # newline boundary triggers a coalesced re-render
+    upsert_progress.assert_awaited_once_with("job123", bus)
+
+
+@pytest.mark.asyncio
+async def test_listener_clears_tail_on_terminal_keeps_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bus = FakeDelegationBus(
+        [
+            TaskOutputChunk("job123", "task1", "working\n", 1),
+            TaskCompleted("job123", "task1", 1.0, "ok", "model-a"),
+        ],
+        snapshot={
+            "task1": {
+                "agent_label": "agent-a",
+                "task_goal": "Build it",
+                "status": "done",
+                "duration": 1.0,
+            }
+        },
+    )
+    monkeypatch.setattr("supporter.tools.delegate.bus.get_bus", lambda job_id: bus)
+    listener = DelegationListener(
+        inject_message=MagicMock(),
+        upsert_progress=AsyncMock(),
+        drop_progress=MagicMock(),
+    )
+
+    await listener.listen("job123")
+
+    state = bus.get_snapshot()["task1"]
+    assert "output_tail" not in state
+    assert state["status"] == "done"
+    assert state["agent_label"] == "agent-a"
 
 
 @pytest.mark.asyncio
