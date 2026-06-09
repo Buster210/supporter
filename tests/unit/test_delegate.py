@@ -17,6 +17,7 @@ from supporter.tools.delegate.agents import (
     run_sub_agent,
 )
 from supporter.tools.delegate.capsule import create_capsule
+from supporter.tools.delegate.opencode_backend import run_opencode
 from supporter.tools.delegate.scheduler import (
     _execute_dag,
     _inject_dependency_context,
@@ -26,7 +27,7 @@ from supporter.tools.delegate.scheduler import (
     serialize_results,
 )
 from supporter.tools.delegate.validation import _resolve_agent_profile, validate_tasks
-from supporter.types import LLMResult, TaskCompleted, TaskStatus
+from supporter.types import LLMResult, TaskCompleted, TaskOutputChunk, TaskStatus
 
 
 @pytest.fixture(autouse=True)
@@ -446,7 +447,237 @@ class TestSubAgentRunner:
         assert '"confidence"' not in spec
 
 
-class TestDAGExecution:
+class TestOpenCodeStreaming:
+    @pytest.mark.asyncio
+    async def test_on_chunk_invoked_multiple_times(self) -> None:
+        """Test that on_chunk is invoked multiple times for incremental output."""
+        task = {
+            "id": "t1",
+            "task": "task",
+            "timeout": 10,
+        }
+
+        chunks_received: list[str] = []
+
+        # Create a fake process with mock stdout that returns data in chunks
+        fake_proc = MagicMock()
+        fake_proc.stdout = MagicMock()
+        fake_proc.stdout.read = AsyncMock(
+            side_effect=[
+                b"Line 1\n",
+                b"Line 2\n",
+                b"Line 3\n",
+                b"",
+            ]
+        )
+        fake_proc.returncode = 0
+        fake_proc.wait = AsyncMock(return_value=None)
+        fake_proc.kill = MagicMock()
+
+        with (
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_binary",
+                return_value="/fake/opencode",
+            ),
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_repo",
+                return_value="/repo",
+            ),
+            patch("asyncio.create_subprocess_exec", return_value=fake_proc),
+        ):
+            output, _model, _tokens = await run_opencode(
+                task, on_chunk=chunks_received.append
+            )
+
+        assert len(chunks_received) == 3
+        assert chunks_received[0] == "Line 1\n"
+        assert chunks_received[1] == "Line 2\n"
+        assert chunks_received[2] == "Line 3\n"
+        assert output == "Line 1\nLine 2\nLine 3"
+
+    @pytest.mark.asyncio
+    async def test_no_callback_path_lossless(self) -> None:
+        """Test that without on_chunk, output matches communicate() behavior."""
+        task = {
+            "id": "t1",
+            "task": "task",
+            "timeout": 10,
+        }
+
+        # Create a fake process with single output (simulating communicate)
+        fake_proc = MagicMock()
+        fake_proc.stdout = MagicMock()
+        fake_proc.stdout.read = AsyncMock(side_effect=[b"Single output line\n", b""])
+        fake_proc.returncode = 0
+        fake_proc.wait = AsyncMock(return_value=None)
+        fake_proc.kill = MagicMock()
+
+        with (
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_binary",
+                return_value="/fake/opencode",
+            ),
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_repo",
+                return_value="/repo",
+            ),
+            patch("asyncio.create_subprocess_exec", return_value=fake_proc),
+        ):
+            _output, _model, _tokens = await run_opencode(task, on_chunk=None)
+
+        assert _output == "Single output line"
+
+    @pytest.mark.asyncio
+    async def test_timeout_kills_process(self) -> None:
+        """Test that timeout kills and reaps the process."""
+        task = {
+            "id": "t1",
+            "task": "task",
+            "timeout": 0.01,
+        }
+
+        fake_proc = MagicMock()
+        fake_proc.stdout = MagicMock()
+
+        # Make read block forever so the timeout watchdog fires
+        async def _hang(*_args: Any, **_kwargs: Any) -> bytes:
+            await asyncio.sleep(10)
+            return b""
+
+        fake_proc.stdout.read = _hang
+        fake_proc.kill = MagicMock()
+        fake_proc.wait = AsyncMock(return_value=1)
+
+        with (
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_binary",
+                return_value="/fake/opencode",
+            ),
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_repo",
+                return_value="/repo",
+            ),
+            patch("asyncio.create_subprocess_exec", return_value=fake_proc),
+            pytest.raises(TimeoutError),
+        ):
+            await run_opencode(task, on_chunk=None)
+
+        fake_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_raises_runtime_error(self) -> None:
+        """Test that non-zero exit raises RuntimeError."""
+        task = {
+            "id": "t1",
+            "task": "task",
+            "timeout": 10,
+        }
+
+        fake_proc = MagicMock()
+        fake_proc.stdout = MagicMock()
+        fake_proc.stdout.read = AsyncMock(side_effect=[b"Error output\n", b""])
+        fake_proc.kill = MagicMock()
+        fake_proc.returncode = 1
+        fake_proc.wait = AsyncMock(return_value=1)
+
+        with (
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_binary",
+                return_value="/fake/opencode",
+            ),
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_repo",
+                return_value="/repo",
+            ),
+            patch("asyncio.create_subprocess_exec", return_value=fake_proc),
+            pytest.raises(RuntimeError, match="opencode exited 1"),
+        ):
+            await run_opencode(task, on_chunk=None)
+
+    @pytest.mark.asyncio
+    async def test_run_sub_agent_publishes_chunks_for_opencode(self) -> None:
+        """Test that run_sub_agent publishes TaskOutputChunk for opencode backend."""
+        task = {
+            "id": "t1",
+            "task": "task",
+            "backend": "opencode",
+            "tools": {"read_file"},
+            "model": "m",
+            "persona": "p",
+            "context": "c",
+            "timeout": 10,
+            "max_retries": 0,
+            "depends_on": [],
+        }
+        semaphore = asyncio.Semaphore(1)
+
+        from supporter.tools.delegate.bus import DelegationBus
+
+        mock_bus = MagicMock(spec=DelegationBus)
+        mock_bus.publish = MagicMock()
+
+        # Create a fake process that emits multiple chunks
+        fake_proc = MagicMock()
+        fake_proc.stdout = MagicMock()
+        fake_proc.stdout.read = AsyncMock(
+            side_effect=[b"Chunk1\n", b"Chunk2\n", b"Chunk3\n", b""]
+        )
+        fake_proc.returncode = 0
+        fake_proc.kill = MagicMock()
+        fake_proc.wait = AsyncMock(return_value=0)
+
+        with (
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_binary",
+                return_value="/fake/opencode",
+            ),
+            patch(
+                "supporter.tools.delegate.opencode_backend._resolve_repo",
+                return_value="/repo",
+            ),
+            patch("asyncio.create_subprocess_exec", return_value=fake_proc),
+        ):
+            result = await run_sub_agent(task, semaphore, mock_bus, "job1")
+
+        assert result["status"] == TaskStatus.COMPLETED
+
+        # Verify TaskOutputChunk events were published (3 chunks)
+        chunk_events = [
+            call.args[0]
+            for call in mock_bus.publish.call_args_list
+            if isinstance(call.args[0], TaskOutputChunk)
+        ]
+        assert len(chunk_events) == 3  # 3 chunks
+        # Verify seq ordering
+        seqs = [e.seq for e in chunk_events]
+        assert seqs == [1, 2, 3]
+
+
+class TestOutputTailTruncation:
+    def test_truncate_output_tail_short_text(self) -> None:
+        from supporter.tui.delegation_listener import _truncate_output_tail
+
+        text = "Short text"
+        assert _truncate_output_tail(text) == text
+
+    def test_truncate_output_tail_many_lines(self) -> None:
+        from supporter.tui.delegation_listener import _truncate_output_tail
+
+        # Lines long enough that the total exceeds the char budget, so the
+        # last-N-lines tail genuinely kicks in.
+        lines = [f"Line {i}: " + "x" * 100 for i in range(10)]
+        text = "\n".join(lines)
+        result = _truncate_output_tail(text)
+        assert "Line 9" in result
+        assert "Line 0" not in result
+
+    def test_truncate_output_tail_long_single_line(self) -> None:
+        from supporter.tui.delegation_listener import _truncate_output_tail
+
+        text = "x" * 600
+        result = _truncate_output_tail(text)
+        assert len(result) <= 503  # Some buffer for the truncation logic
+
     @pytest.mark.asyncio
     async def test_parallel_no_deps(self) -> None:
         tasks = [

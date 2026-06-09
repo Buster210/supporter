@@ -205,6 +205,13 @@ class TaskTimedOut(DelegationEvent):
 
 
 @dataclass(frozen=True)
+class TaskOutputChunk(DelegationEvent):
+    task_id: str
+    chunk: str
+    seq: int
+
+
+@dataclass(frozen=True)
 class TaskSkipped(DelegationEvent):
     task_id: str
     reason: str
