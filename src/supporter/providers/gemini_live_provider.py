@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
@@ -250,10 +251,19 @@ class GeminiLiveProvider:
                         f"model={self.model_name}, "
                         f"key_index={self._current_key_index}"
                     )
-                    self._session_manager = self.client.aio.live.connect(
+                    session_manager = self.client.aio.live.connect(
                         model=self.model_name, config=session_config
                     )
-                    self._session = await self._session_manager.__aenter__()
+                    try:
+                        self._session_manager = session_manager
+                        self._session = await session_manager.__aenter__()
+                    except Exception:
+                        # Clean up the un-entered session manager to prevent leak.
+                        self._session_manager = None
+                        self._session = None
+                        with contextlib.suppress(Exception):
+                            await session_manager.__aexit__(None, None, None)
+                        raise
                     logger.info(
                         f"Live session established: model={self.model_name}, "
                         f"key_index={self._current_key_index}"
@@ -442,7 +452,7 @@ class GeminiLiveProvider:
         from google.genai import types
 
         await self._session.send_realtime_input(
-            media=types.Blob(data=data, mime_type=mime_type)
+            video=types.Blob(data=data, mime_type=mime_type)
         )
 
     async def _reinject_recent_images(self, session: Any) -> None:
@@ -451,7 +461,7 @@ class GeminiLiveProvider:
                 from google.genai import types
 
                 await session.send_realtime_input(
-                    media=types.Blob(data=data, mime_type=mime_type)
+                    video=types.Blob(data=data, mime_type=mime_type)
                 )
             except Exception as exc:
                 logger.warning(
@@ -909,8 +919,6 @@ class GeminiLiveProvider:
     async def _teardown_session(self) -> None:
         async with self._session_lock:
             if self._session_manager:
-                import contextlib
-
                 # ALWAYS null the session pointers, even on CancelledError.
                 # contextlib.suppress(Exception) does NOT catch CancelledError
                 # (BaseException in 3.9+). If a turn cancels the monitor
