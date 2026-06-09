@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from ..config import config
 from ..logger import logger
+from ..recovery_metrics import record_key_rotation
 from ..tools.resolver import (
     ensure_function_search_tool,
     resolve_live_provider_tools,
@@ -156,6 +157,7 @@ class GeminiLiveProvider:
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
         self._client = None
+        record_key_rotation()
 
     def _emit(self, event: str, data: dict[str, Any] | None = None) -> None:
         if self.recovery_observer is None:

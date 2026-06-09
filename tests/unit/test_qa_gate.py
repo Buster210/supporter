@@ -8,7 +8,11 @@ import pytest
 from supporter.config import config
 from supporter.tools.delegate import qa_gate
 from supporter.tools.delegate.bus import DelegationBus
-from supporter.tools.delegate.qa_gate import _verdict_passed, run_qa_gate
+from supporter.tools.delegate.qa_gate import (
+    _gemini_predicate_passed,
+    _verdict_passed,
+    run_qa_gate,
+)
 from supporter.types import TaskStatus
 
 
@@ -72,12 +76,308 @@ class TestVerdictParsing:
         assert _verdict_passed("done\nQA-VERDICT: APPROVE", "qa-verdict:", "approve")
 
 
+class TestGeminiPredicate:
+    def test_valid_payload_high_confidence_passes(self) -> None:
+        output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Found it",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": ["url"]},\n'
+            '  "findings": ["fact"],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "high"\n'
+            "}\n"
+            "```"
+        )
+        assert _gemini_predicate_passed(output, "explorer")
+
+    def test_valid_payload_medium_confidence_passes(self) -> None:
+        output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Found it",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": ["fact"],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "medium"\n'
+            "}\n"
+            "```"
+        )
+        assert _gemini_predicate_passed(output, "explorer")
+
+    def test_invalid_payload_fails(self) -> None:
+        assert not _gemini_predicate_passed("no json here", "explorer")
+
+    def test_low_confidence_fails_when_min_is_medium(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(config, "delegate_min_confidence", "medium")
+        output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Found it",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": [],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "low"\n'
+            "}\n"
+            "```"
+        )
+        assert not _gemini_predicate_passed(output, "explorer")
+
+    def test_finding_role_needs_findings_or_sources(self) -> None:
+        # Explorer with no findings and no sources fails
+        output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Explored",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": [],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "high"\n'
+            "}\n"
+            "```"
+        )
+        assert not _gemini_predicate_passed(output, "explorer")
+
+        # Explorer with sources passes
+        output_with_sources = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Explored",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": ["https://x.com"]},\n'
+            '  "findings": [],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "high"\n'
+            "}\n"
+            "```"
+        )
+        assert _gemini_predicate_passed(output_with_sources, "explorer")
+
+        # Explorer with findings passes
+        output_with_findings = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Explored",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": ["found it"],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "high"\n'
+            "}\n"
+            "```"
+        )
+        assert _gemini_predicate_passed(output_with_findings, "explorer")
+
+    def test_non_finding_role_passes_with_empty_findings(self) -> None:
+        # Non-finding role (like 'test_engineer' - not in _FINDING_ROLES) should pass
+        # when payload is valid and confidence is sufficient, even with empty findings
+        output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Tests written",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": [],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "medium"\n'
+            "}\n"
+            "```"
+        )
+        # test_engineer is in _TIER2_ROLES but NOT in _FINDING_ROLES
+        assert _gemini_predicate_passed(output, "test_engineer")
+
+
 class TestQaGate:
-    def test_skips_non_opencode_task(self) -> None:
+    def test_gemini_runs_predicate_path(self) -> None:
+        """Gemini task runs the predicate check; good output passes immediately."""
         task = _base_task()
         task["backend"] = "gemini"
+        task["agent"] = "explorer"
         bus = MagicMock(spec=DelegationBus)
+        good_output = (
+            "found what you need\n"
+            "```json\n"
+            "{\n"
+            '  "summary": "Found the answer",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": ["https://example.com"]},\n'
+            '  "findings": [],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "high"\n'
+            "}\n"
+            "```"
+        )
         with patch.object(qa_gate, "run_sub_agent", new=AsyncMock()) as mock:
+            result = asyncio.run(
+                run_qa_gate(
+                    task,
+                    {**_result(), "output": good_output},
+                    asyncio.Semaphore(1),
+                    bus,
+                    "job1",
+                )
+            )
+        mock.assert_not_awaited()
+        assert result["status"] == TaskStatus.COMPLETED
+        assert "gemini predicate PASSED" in result["output"]
+
+    def test_gemini_high_confidence_passes_no_rerun(self) -> None:
+        """High-confidence well-formed output passes without correction."""
+        task = _base_task()
+        task["backend"] = "gemini"
+        task["agent"] = "explorer"
+        bus = MagicMock(spec=DelegationBus)
+        good_output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Explored and found the module",\n'
+            '  "evidence": {"files_read": ["src/main.py"],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": ["Module implements X"],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "high"\n'
+            "}\n"
+            "```"
+        )
+        with patch.object(qa_gate, "run_sub_agent", new=AsyncMock()) as mock:
+            result = asyncio.run(
+                run_qa_gate(
+                    task,
+                    {**_result(), "output": good_output},
+                    asyncio.Semaphore(1),
+                    bus,
+                    "job1",
+                )
+            )
+        mock.assert_not_awaited()
+        assert result["status"] == TaskStatus.COMPLETED
+
+    def test_gemini_unknown_confidence_triggers_correction(
+        self, monkeypatch: Any
+    ) -> None:
+        """Unknown/low confidence triggers correction round, then escalates to ERROR."""
+        monkeypatch.setattr(config, "delegate_correction_rounds", 1)
+        task = _base_task()
+        task["backend"] = "gemini"
+        task["agent"] = "explorer"
+        calls: list[str] = []
+
+        async def fake_run(
+            task_arg: dict[str, Any], *_a: Any, **_k: Any
+        ) -> dict[str, Any]:
+            calls.append(task_arg["id"])
+            if "fix_0" in task_arg["id"]:
+                return {
+                    "status": TaskStatus.COMPLETED,
+                    "output": "still unknown output",
+                }
+            # Original task - return unknown confidence
+            return {"status": TaskStatus.COMPLETED, "output": "no json at all"}
+
+        bus = MagicMock(spec=DelegationBus)
+        with patch.object(
+            qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)
+        ):
+            result = asyncio.run(
+                run_qa_gate(task, _result(), asyncio.Semaphore(1), bus, "job1")
+            )
+        assert result["status"] == TaskStatus.ERROR
+        assert "QA gate rejected" in result["output"]
+        assert sum(1 for c in calls if "fix_" in c) == 1  # One correction round
+
+    def test_gemini_low_confidence_finding_role_fails(self, monkeypatch: Any) -> None:
+        """Low confidence + finding role with empty findings + no sources
+        fails predicate."""
+        monkeypatch.setattr(config, "delegate_min_confidence", "medium")
+        monkeypatch.setattr(config, "delegate_correction_rounds", 1)
+        task = _base_task()
+        task["backend"] = "gemini"
+        task["agent"] = "explorer"
+        calls: list[str] = []
+
+        async def fake_run(
+            task_arg: dict[str, Any], *_a: Any, **_k: Any
+        ) -> dict[str, Any]:
+            calls.append(task_arg["id"])
+            # Low confidence with no findings or sources
+            return {
+                "status": TaskStatus.COMPLETED,
+                "output": '```json\n{"summary": "Explored",'
+                ' "evidence": {"files_read": [],'
+                ' "files_changed": [],'
+                ' "commands_run": [],'
+                ' "sources": []},'
+                ' "findings": [], "handoff": "",'
+                ' "confidence": "low"}\n```',
+            }
+
+        bus = MagicMock(spec=DelegationBus)
+        with patch.object(
+            qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)
+        ):
+            result = asyncio.run(
+                run_qa_gate(task, _result(), asyncio.Semaphore(1), bus, "job1")
+            )
+        assert result["status"] == TaskStatus.ERROR
+        assert sum(1 for c in calls if "fix_" in c) == 1
+
+    def test_gemini_non_finding_role_passes_with_empty_findings(self) -> None:
+        """Non-finding roles (like test_engineer) pass with valid payload
+        and empty findings."""
+        task = _base_task()
+        task["backend"] = "gemini"
+        task["agent"] = "test_engineer"  # NOT in _FINDING_ROLES
+        bus = MagicMock(spec=DelegationBus)
+        good_output = (
+            "```json\n"
+            "{\n"
+            '  "summary": "Tests written",\n'
+            '  "evidence": {"files_read": [],'
+            ' "files_changed": [], "commands_run": [],'
+            ' "sources": []},\n'
+            '  "findings": [],\n'
+            '  "handoff": "",\n'
+            '  "confidence": "medium"\n'
+            "}\n"
+            "```"
+        )
+        with patch.object(qa_gate, "run_sub_agent", new=AsyncMock()) as mock:
+            result = asyncio.run(
+                run_qa_gate(
+                    task,
+                    {**_result(), "output": good_output},
+                    asyncio.Semaphore(1),
+                    bus,
+                    "job1",
+                )
+            )
+        mock.assert_not_awaited()
+        assert result["status"] == TaskStatus.COMPLETED
+        assert "gemini predicate PASSED" in result["output"]
+
+    def test_gemini_persist_noncode_disabled_skips(self) -> None:
+        """When delegate_persist_noncode is False, gemini tasks are skipped."""
+        task = _base_task()
+        task["backend"] = "gemini"
+        task["agent"] = "explorer"
+        bus = MagicMock(spec=DelegationBus)
+        with (
+            patch.object(qa_gate, "run_sub_agent", new=AsyncMock()) as mock,
+            patch.object(config, "delegate_persist_noncode", False),
+        ):
             result = asyncio.run(
                 run_qa_gate(task, _result(), asyncio.Semaphore(1), bus, "job1")
             )
@@ -163,6 +463,86 @@ class TestQaGate:
             )
         mock.assert_not_awaited()
         assert result["status"] == TaskStatus.COMPLETED
+
+    def test_gemini_corrects_then_passes(self, monkeypatch: Any) -> None:
+        """Gemini correction converges: initial fails, correction passes."""
+        monkeypatch.setattr(config, "delegate_correction_rounds", 3)
+
+        async def fake_run(
+            task_arg: dict[str, Any], *_a: Any, **_k: Any
+        ) -> dict[str, Any]:
+            if "t1__fix_0" in task_arg["id"]:
+                # Correction returns high-confidence valid payload
+                return {
+                    "status": TaskStatus.COMPLETED,
+                    "output": (
+                        "```json\n"
+                        "{\n"
+                        '  "summary": "Found the answer after correction",\n'
+                        '  "evidence": {"files_read": [], "files_changed": [], '
+                        '"commands_run": [], "sources": ["https://example.com"]},\n'
+                        '  "findings": ["found it"],\n'
+                        '  "handoff": "",\n'
+                        '  "confidence": "high"\n'
+                        "}\n"
+                        "```"
+                    ),
+                }
+            # Initial output has no findings/sources and low confidence
+            return {
+                "status": TaskStatus.COMPLETED,
+                "output": (
+                    '```json\n{"summary": "Explored", '
+                    '"evidence": {"files_read": [], "files_changed": [], '
+                    '"commands_run": [], "sources": []}, '
+                    '"findings": [], "handoff": "", "confidence": "low"}\n```'
+                ),
+            }
+
+        bus = MagicMock(spec=DelegationBus)
+        task = {**_base_task(), "backend": "gemini", "agent": "explorer"}
+        with patch.object(
+            qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)
+        ):
+            result = asyncio.run(
+                run_qa_gate(task, _result(), asyncio.Semaphore(1), bus, "job1")
+            )
+        assert result["status"] == TaskStatus.COMPLETED
+        assert "gemini predicate PASSED" in result["output"]
+        # Output should be the correction output + QA note
+        assert "Found the answer after correction" in result["output"]
+
+    def test_gemini_correction_worker_fails(self, monkeypatch: Any) -> None:
+        """Gemini correction returns non-COMPLETED -> status ERROR."""
+        monkeypatch.setattr(config, "delegate_correction_rounds", 3)
+        calls: list[str] = []
+
+        async def fake_run(task: dict[str, Any], *_a: Any, **_k: Any) -> dict[str, Any]:
+            calls.append(task["id"])
+            if "t1__fix_0" in task["id"]:
+                return {"status": TaskStatus.ERROR, "output": "gemini crashed"}
+            # Initial output has no findings/sources and low confidence
+            return {
+                "status": TaskStatus.COMPLETED,
+                "output": (
+                    '```json\n{"summary": "Explored", '
+                    '"evidence": {"files_read": [], "files_changed": [], '
+                    '"commands_run": [], "sources": []}, '
+                    '"findings": [], "handoff": "", "confidence": "low"}\n```'
+                ),
+            }
+
+        bus = MagicMock(spec=DelegationBus)
+        task = {**_base_task(), "backend": "gemini", "agent": "explorer"}
+        with patch.object(
+            qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)
+        ):
+            result = asyncio.run(
+                run_qa_gate(task, _result(), asyncio.Semaphore(1), bus, "job1")
+            )
+        assert result["status"] == TaskStatus.ERROR
+        assert "did not complete" in result["output"]
+        assert sum(1 for c in calls if "__fix_" in c) == 1
 
 
 @pytest.mark.asyncio

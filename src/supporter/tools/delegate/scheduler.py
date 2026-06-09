@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 from typing import Any
 
@@ -27,6 +28,7 @@ from .capsule import (
     load_capsule,
     mark_capsule_cancelled,
     mark_capsule_completed,
+    mark_capsule_metrics,
     mark_task_completed,
     mark_task_failed,
     mark_task_skipped,
@@ -35,7 +37,7 @@ from .capsule import (
     status_value,
     validate_delegation_payload,
 )
-from .metrics import subscribe_metrics
+from .metrics import JobMetrics, subscribe_metrics
 from .project_memory import load_project_memory, memory_context_block, record_learnings
 from .qa_gate import run_qa_gate
 
@@ -365,7 +367,18 @@ async def _execute_dag(
 
         task_done[task_id].set()
 
-    await asyncio.gather(*[_run_with_gate(t) for t in tasks])
+    child_tasks = [asyncio.create_task(_run_with_gate(t)) for t in tasks]
+    try:
+        await asyncio.gather(*child_tasks)
+    except asyncio.CancelledError:
+        # Cancel all running child tasks to prevent orphaning.
+        for t in child_tasks:
+            if not t.done():
+                t.cancel()
+        # Await the cancellation to let tasks unwind cleanly.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.gather(*child_tasks, return_exceptions=True)
+        raise
     ordered = [results[t["id"]] for t in tasks if t["id"] in results]
     seen = {t["id"] for t in tasks}
     ordered.extend(v for k, v in results.items() if k not in seen)
@@ -502,7 +515,10 @@ async def run_milestone(
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
         bus.close()
-        await asyncio.gather(metrics_task, return_exceptions=True)
+        metrics_results = await asyncio.gather(metrics_task, return_exceptions=True)
+        job_metrics = metrics_results[0]
+        if isinstance(job_metrics, JobMetrics):
+            await mark_capsule_metrics(job_id, job_metrics.summary())
         remove_bus(job_id)
         JOB_TASKS.pop(job_id, None)
 

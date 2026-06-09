@@ -74,6 +74,8 @@ DELEGATE_MAX_RETRIES = 2
 
 DELEGATE_RESULT_REPAIR = True
 DELEGATE_CORRECTION_ROUNDS = 3
+DELEGATE_MIN_CONFIDENCE = "medium"
+DELEGATE_PERSIST_NONCODE = True
 DELEGATE_HEARTBEAT_INTERVAL = 30
 DELEGATE_ANOMALY_THRESHOLD = 0.8
 DELEGATE_JOB_ID_LEN = 8
@@ -89,6 +91,24 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ValueError(f"${name} must be an integer, got: {raw!r}") from exc
+
+
+def _str_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw
+
+
+def _confidence_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    value = raw.lower()
+    allowed = {"low", "medium", "high"}
+    if value not in allowed:
+        raise ValueError(f"${name} must be one of {allowed}, got: {raw!r}")
+    return value
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -184,6 +204,12 @@ def load_config() -> AppConfig:
         delegate_max_retries=_int_env("DELEGATE_MAX_RETRIES", DELEGATE_MAX_RETRIES),
         delegate_correction_rounds=_int_env(
             "DELEGATE_CORRECTION_ROUNDS", DELEGATE_CORRECTION_ROUNDS
+        ),
+        delegate_min_confidence=_confidence_env(
+            "DELEGATE_MIN_CONFIDENCE", DELEGATE_MIN_CONFIDENCE
+        ),
+        delegate_persist_noncode=_bool_env(
+            "DELEGATE_PERSIST_NONCODE", DELEGATE_PERSIST_NONCODE
         ),
         delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
         delegate_result_repair=_bool_env(

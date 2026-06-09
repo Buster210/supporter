@@ -72,6 +72,8 @@ class AppConfig:
     delegate_agent_roster: dict[str, dict[str, Any]]
     delegate_max_retries: int
     delegate_correction_rounds: int = 3
+    delegate_min_confidence: str = "medium"
+    delegate_persist_noncode: bool = True
     delegate_qa_gate_enabled: bool = True
     delegate_result_repair: bool = True
     delegate_tier1_commands: list[list[str]] = field(default_factory=list)

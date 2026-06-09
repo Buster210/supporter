@@ -25,6 +25,33 @@ from ...types import (
 from .backends import QA_REJECTION_MARKER
 from .bus import DelegationBus
 
+# Approximate USD pricing per 1M tokens, as (input, output), matched by the
+# model-name family substring. Rates are published approximations centralized
+# here so they can be updated in one place as pricing changes.
+_PRICE_PER_1M_TOKENS: dict[str, tuple[float, float]] = {
+    "pro": (1.25, 5.00),
+    "flash": (0.30, 2.50),
+    "gemma": (0.05, 0.15),
+}
+_FALLBACK_PRICE_PER_1M_TOKENS: tuple[float, float] = (0.30, 2.50)
+_TOKENS_PER_PRICE_UNIT = 1_000_000
+
+
+def _price_for_model(model: str) -> tuple[float, float]:
+    name = model.lower()
+    for family, price in _PRICE_PER_1M_TOKENS.items():
+        if family in name:
+            return price
+    return _FALLBACK_PRICE_PER_1M_TOKENS
+
+
+def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Estimate USD cost for one model call from its token counts."""
+    input_rate, output_rate = _price_for_model(model)
+    return (
+        prompt_tokens * input_rate + completion_tokens * output_rate
+    ) / _TOKENS_PER_PRICE_UNIT
+
 
 @dataclass
 class JobMetrics:
@@ -39,11 +66,26 @@ class JobMetrics:
     qa_rejections: int = 0
     task_duration: float = 0.0
     milestone_duration: float = 0.0
+    prompt_tokens_total: int = 0
+    completion_tokens_total: int = 0
+    total_tokens_total: int = 0
+    total_steps: int = 0
+    cost_usd: float = 0.0
 
     def record(self, event: DelegationEvent) -> None:
         if isinstance(event, TaskCompleted):
             self.completed += 1
             self.task_duration += event.duration
+            tokens = event.tokens or {}
+            prompt_tokens = int(tokens.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(tokens.get("completion_tokens", 0) or 0)
+            self.prompt_tokens_total += prompt_tokens
+            self.completion_tokens_total += completion_tokens
+            self.total_tokens_total += int(tokens.get("total_tokens", 0) or 0)
+            self.total_steps += int(event.step_count or 0)
+            self.cost_usd += estimate_cost_usd(
+                event.model, prompt_tokens, completion_tokens
+            )
         elif isinstance(event, TaskFailed):
             self.failed += 1
             self.task_duration += event.duration
@@ -73,6 +115,11 @@ class JobMetrics:
             "success_rate": round(success_rate, 3),
             "task_duration": round(self.task_duration, 2),
             "milestone_duration": round(self.milestone_duration, 2),
+            "prompt_tokens_total": self.prompt_tokens_total,
+            "completion_tokens_total": self.completion_tokens_total,
+            "total_tokens_total": self.total_tokens_total,
+            "total_steps": self.total_steps,
+            "cost_usd": round(self.cost_usd, 6),
         }
 
 

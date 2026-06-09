@@ -97,6 +97,18 @@ async def test_ensure_session_with_rotation(api_keys: Any) -> None:
         assert mock_connect.call_count == 2
 
 
+def test_rotate_key_counts_recovery(provider: Any) -> None:
+    from supporter import recovery_metrics
+
+    recovery_metrics.reset_recovery_counters()
+    try:
+        provider._rotate_key()
+        provider._rotate_key()
+        assert recovery_metrics.recovery_snapshot()["key_rotations"] == 2
+    finally:
+        recovery_metrics.reset_recovery_counters()
+
+
 @pytest.mark.asyncio
 async def test_ensure_session_fatal_error(api_keys: Any) -> None:
     p = GeminiLiveProvider(api_keys=api_keys)

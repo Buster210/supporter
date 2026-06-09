@@ -19,6 +19,7 @@ from supporter.tools.delegate.capsule import (
     load_capsule,
     mark_capsule_cancelled,
     mark_capsule_completed,
+    mark_capsule_metrics,
     mark_task_completed,
     mark_task_failed,
     mark_task_skipped,
@@ -289,8 +290,9 @@ async def test_delegate_tasks_creates_capsule_at_start() -> None:
         }
 
     tasks_json = json.dumps([{"id": "t1", "task": "slow task"}])
-    with patch(
-        "supporter.tools.delegate.scheduler.run_sub_agent", side_effect=slow_run
+    with (
+        patch("supporter.tools.delegate.scheduler.run_sub_agent", side_effect=slow_run),
+        patch.object(config, "delegate_qa_gate_enabled", False),
     ):
         plan = await delegate_tasks("Capsule start", tasks_json, max_parallel=1)
         job_id = next(line for line in plan.splitlines() if "Job ID:" in line).split(
@@ -743,6 +745,86 @@ async def test_live_and_pre_approved_survive_capsule_roundtrip() -> None:
     loaded = load_capsule("rf-roundtrip")["tasks"]["t1"]
     assert loaded["live"] is True
     assert loaded["pre_approved_commands"] == ["pwd"]
+
+
+@pytest.mark.asyncio
+async def test_mark_capsule_metrics_persists_and_roundtrips() -> None:
+    await create_capsule("metrics1", "Measure", [_task("a")], 1)
+    await mark_capsule_completed("metrics1")
+    summary = {
+        "success_rate": 0.8,
+        "total_steps": 42,
+        "milestone_duration": 12.34,
+        "completed": 4,
+        "failed": 1,
+        "timed_out": 0,
+        "retries": 2,
+    }
+    await mark_capsule_metrics("metrics1", summary)
+
+    loaded = load_capsule("metrics1")
+    assert loaded["metrics"]["success_rate"] == 0.8
+    assert loaded["metrics"]["total_steps"] == 42
+    assert loaded["metrics"]["milestone_duration"] == 12.34
+    assert loaded["metrics"]["retries"] == 2
+
+
+def test_format_metrics_line_renders_rate_and_autonomy() -> None:
+    from supporter.tools.delegate.capsule_view import format_metrics_line
+
+    line = format_metrics_line(
+        {
+            "success_rate": 0.8,
+            "total_steps": 42,
+            "milestone_duration": 12.34,
+            "completed": 4,
+            "failed": 1,
+            "timed_out": 0,
+        }
+    )
+    assert "Success 80% (4/5)" in line
+    assert "42 steps" in line
+    assert "12.3s" in line
+
+
+def test_format_metrics_line_shows_cost_when_present() -> None:
+    from supporter.tools.delegate.capsule_view import format_metrics_line
+
+    line = format_metrics_line({"success_rate": 1.0, "cost_usd": 0.1234})
+    assert "$0.1234" in line
+
+
+def test_format_capsule_summary_includes_metrics_when_present() -> None:
+    from supporter.tools.delegate.capsule_view import format_capsule_summary
+
+    summary = format_capsule_summary(
+        {
+            "job_id": "j1",
+            "milestone": "M",
+            "status": "completed",
+            "tasks": {},
+            "synthesis": {},
+            "metrics": {
+                "success_rate": 1.0,
+                "total_steps": 3,
+                "milestone_duration": 5.0,
+                "completed": 1,
+                "failed": 0,
+                "timed_out": 0,
+            },
+        }
+    )
+    assert "- Metrics:" in summary
+    assert "Success 100%" in summary
+
+
+def test_format_capsule_summary_omits_metrics_when_absent() -> None:
+    from supporter.tools.delegate.capsule_view import format_capsule_summary
+
+    summary = format_capsule_summary(
+        {"job_id": "j2", "milestone": "M", "status": "running", "tasks": {}}
+    )
+    assert "- Metrics:" not in summary
 
 
 def _decision(
