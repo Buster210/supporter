@@ -1453,3 +1453,20 @@ class TestRunSubAgentFinallyBlock:
             assert result["status"] == "completed"
 
             mock_agent.provider.close.assert_not_called()
+
+
+def test_global_semaphore_is_single_shared_object() -> None:
+    """Regression: delegate and resume paths must share one global semaphore.
+
+    Previously api.py held its own module-level _GLOBAL_SEMAPHORE while
+    scheduler.py used a separate lazy singleton, letting concurrent
+    resume + new-delegation reach 2x the global hard cap (SPEC §10).
+    """
+    from supporter.tools.delegate import api
+    from supporter.tools.delegate.scheduler import _get_global_semaphore
+
+    # __dict__ access avoids ruff B009 rewriting getattr and mypy's
+    # no-implicit-reexport attr check on the re-imported private name.
+    assert api.__dict__["_get_global_semaphore"] is _get_global_semaphore
+    assert _get_global_semaphore() is _get_global_semaphore()
+    assert getattr(api, "_GLOBAL_SEMAPHORE", None) is None

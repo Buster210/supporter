@@ -12,6 +12,7 @@ from typing import Any, cast
 from ...logger import logger
 from ...types import TaskStatus
 from .. import resolved_project_root
+from .backends import GEMINI_BACKEND
 
 _JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -523,6 +524,7 @@ def _initial_task_record(task: dict[str, Any]) -> dict[str, Any]:
         "id": task["id"],
         "goal": task["task"],
         "agent": task.get("agent") or "custom",
+        "backend": task.get("backend") or GEMINI_BACKEND,
         "status": TaskStatus.PENDING.value,
         "depends_on": list(task.get("depends_on", [])),
         "dependency_context": "",

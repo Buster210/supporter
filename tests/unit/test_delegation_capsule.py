@@ -691,3 +691,29 @@ async def test_load_all_capsules_sorts_by_updated_at_despite_mtime(
     result = capsule_query.load_all_capsules(limit=1)
     assert len(result) == 1
     assert result[0]["job_id"] == "new00001"
+
+
+@pytest.mark.asyncio
+async def test_backend_persisted_through_capsule_round_trip() -> None:
+    """Regression: opencode tasks must survive create→load with their backend."""
+    task = _task("t1")
+    task["backend"] = "opencode"
+    await create_capsule("be000001", "Backend round-trip", [task], 1)
+    loaded = load_capsule("be000001")
+    assert loaded["tasks"]["t1"]["backend"] == "opencode"
+
+
+def test_initial_task_record_preserves_backend() -> None:
+    """Regression: _initial_task_record must persist the given backend."""
+    task = _task("t1")
+    task["backend"] = "opencode"
+    record = dc._initial_task_record(task)
+    assert record["backend"] == "opencode"
+
+
+def test_initial_task_record_defaults_backend_to_gemini() -> None:
+    """Legacy fallback: no backend field → gemini."""
+    task = _task("t1")
+    task.pop("backend", None)
+    record = dc._initial_task_record(task)
+    assert record["backend"] == "gemini"

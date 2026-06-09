@@ -20,6 +20,7 @@ from ...types import (
     TaskTimedOut,
 )
 from .agents import delegate_allowed_tool_names, run_sub_agent
+from .backends import GEMINI_BACKEND
 from .bus import DelegationBus, bus_exists, get_bus, remove_bus
 from .capsule import (
     extract_task_capsule_fields,
@@ -637,7 +638,7 @@ async def resume_milestone(job_id: str) -> bool:
                     "id": task_id,
                     "task": task_record.get("goal", ""),
                     "agent": task_record.get("agent") or "custom",
-                    "backend": "gemini",
+                    "backend": task_record.get("backend") or GEMINI_BACKEND,
                     "tools": set(delegate_allowed_tool_names(task_record.get("agent"))),
                     "model": task_record.get("model", config.gemini_model),
                     "persona": config.delegate_default_persona,
