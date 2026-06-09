@@ -236,6 +236,48 @@ async def test_find_resumable_jobs_finds_interrupted_capsules(
 
 
 @pytest.mark.asyncio
+async def test_resume_restores_live_and_pre_approved_commands(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resume reconstructs unfinished tasks with live + pre_approved_commands."""
+    captured: dict[str, Any] = {}
+
+    async def fake_run_milestone(
+        _milestone: str, unfinished: list[dict[str, Any]], *_args: Any, **_kwargs: Any
+    ) -> None:
+        captured["unfinished"] = unfinished
+
+    async def fake_heartbeat(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    task = _task("t1")
+    task["live"] = True
+    task["pre_approved_commands"] = ["pwd", "ls"]
+    await create_capsule("resume-live", "resume-test", [task], 4)
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler.run_milestone",
+            side_effect=fake_run_milestone,
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.run_heartbeat",
+            side_effect=fake_heartbeat,
+        ),
+    ):
+        try:
+            result = await resume_milestone("resume-live")
+            await JOB_TASKS["resume-live"]
+        finally:
+            remove_bus("resume-live")
+
+    assert result is True
+    recon = {t["id"]: t for t in captured["unfinished"]}["t1"]
+    assert recon["live"] is True
+    assert recon["pre_approved_commands"] == ["pwd", "ls"]
+
+
+@pytest.mark.asyncio
 async def test_resume_milestone_skips_if_bus_already_exists(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

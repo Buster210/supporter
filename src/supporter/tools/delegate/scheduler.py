@@ -639,6 +639,10 @@ async def resume_milestone(job_id: str) -> bool:
                     "task": task_record.get("goal", ""),
                     "agent": task_record.get("agent") or "custom",
                     "backend": task_record.get("backend") or GEMINI_BACKEND,
+                    "live": bool(task_record.get("live", False)),
+                    "pre_approved_commands": list(
+                        task_record.get("pre_approved_commands", [])
+                    ),
                     "tools": set(delegate_allowed_tool_names(task_record.get("agent"))),
                     "model": task_record.get("model", config.gemini_model),
                     "persona": config.delegate_default_persona,

@@ -525,6 +525,8 @@ def _initial_task_record(task: dict[str, Any]) -> dict[str, Any]:
         "goal": task["task"],
         "agent": task.get("agent") or "custom",
         "backend": task.get("backend") or GEMINI_BACKEND,
+        "live": bool(task.get("live", False)),
+        "pre_approved_commands": list(task.get("pre_approved_commands", [])),
         "status": TaskStatus.PENDING.value,
         "depends_on": list(task.get("depends_on", [])),
         "dependency_context": "",

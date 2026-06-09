@@ -717,3 +717,29 @@ def test_initial_task_record_defaults_backend_to_gemini() -> None:
     task.pop("backend", None)
     record = dc._initial_task_record(task)
     assert record["backend"] == "gemini"
+
+
+def test_initial_task_record_persists_live_and_pre_approved() -> None:
+    task = _task("t1")
+    task["live"] = True
+    task["pre_approved_commands"] = ["ls", "git status"]
+    record = dc._initial_task_record(task)
+    assert record["live"] is True
+    assert record["pre_approved_commands"] == ["ls", "git status"]
+
+
+def test_initial_task_record_defaults_live_and_pre_approved() -> None:
+    record = dc._initial_task_record(_task("t1"))
+    assert record["live"] is False
+    assert record["pre_approved_commands"] == []
+
+
+@pytest.mark.asyncio
+async def test_live_and_pre_approved_survive_capsule_roundtrip() -> None:
+    task = _task("t1")
+    task["live"] = True
+    task["pre_approved_commands"] = ["pwd"]
+    await create_capsule("rf-roundtrip", "RF", [task], 1)
+    loaded = load_capsule("rf-roundtrip")["tasks"]["t1"]
+    assert loaded["live"] is True
+    assert loaded["pre_approved_commands"] == ["pwd"]
