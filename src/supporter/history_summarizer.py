@@ -100,7 +100,7 @@ async def summarize_turns(turns: list[Message]) -> str:
     from .pool import get_provider
 
     summarizer = get_provider(
-        shared=False,
+        shared=True,
         model_name=config.gemini_model,
     )
 

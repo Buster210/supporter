@@ -152,7 +152,7 @@ class TestSummarizeTurns:
             assert result == "Summary text"
             mock_provider.generate.assert_called_once()
             assert mock_get.call_args.kwargs["model_name"] == "test-model"
-            assert mock_get.call_args.kwargs["shared"] is False
+            assert mock_get.call_args.kwargs["shared"] is True
 
     @pytest.mark.asyncio
     async def test_summarize_uses_low_temperature(self) -> None:

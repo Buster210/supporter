@@ -163,6 +163,18 @@ class HistoryStore:
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(line)
             f.flush()
+
+    def sync(self) -> None:
+        """Flush the history file to durable storage once per turn.
+
+        WHY: Per-append fsync is 1-100 ms blocking on the event loop; batching
+        to per-turn preserves the same durability granularity (a mid-turn crash
+        already discards the incomplete turn regardless).
+        """
+        if not self._path.exists():
+            return
+        with open(self._path, "a", encoding="utf-8") as f:
+            f.flush()
             os.fsync(f.fileno())
 
     def load(self, limit: int | None = None) -> list[Any]:

@@ -293,12 +293,15 @@ async def _execute_dag(
                     result = await run_sub_agent(
                         enriched, global_semaphore, bus, job_id
                     )
-                    result = await run_qa_gate(
-                        enriched, result, global_semaphore, bus, job_id
-                    )
-                    result = await _repair_or_rerequest(
-                        enriched, result, global_semaphore, bus, job_id
-                    )
+                # Release job_semaphore before QA/repair: they use global_semaphore
+                # independently, so holding job_semaphore across them needlessly
+                # throttles sub-agent concurrency below the configured budget.
+                result = await run_qa_gate(
+                    enriched, result, global_semaphore, bus, job_id
+                )
+                result = await _repair_or_rerequest(
+                    enriched, result, global_semaphore, bus, job_id
+                )
             finally:
                 if browser_session is not None:
                     with contextlib.suppress(Exception):

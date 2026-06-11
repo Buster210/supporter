@@ -192,6 +192,8 @@ class ChatAgent:
 
         self.current_interaction_id = result.interaction_id
         self._sync_history(user_message, result)
+        if self._store:
+            self._store.sync()
         self._record_brain_decision(prompt, result)
 
         duration_str = (
@@ -307,6 +309,7 @@ class ChatAgent:
                 self._store.append(user_message)
                 self._store.append(model_msg)
                 self._store_prev_len = len(self.history)
+                self._store.sync()
             self._trim_history()
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
