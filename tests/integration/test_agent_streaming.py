@@ -28,7 +28,9 @@ async def test_chat_agent_execute_stream() -> None:
     assert len(history) == 2
     assert history[0].role == "user"
     assert history[1].role == "model"
-    assert history[1].parts and history[1].parts[0].text == "Hello world"
+    assert history[1].parts and "".join(
+        p.text for p in history[1].parts
+    ) == "Hello world"
 
 
 @pytest.mark.asyncio

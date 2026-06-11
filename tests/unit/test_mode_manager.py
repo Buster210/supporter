@@ -71,6 +71,7 @@ async def test_handle_command_unknown() -> None:
 async def test_toggle_mode_live_set() -> None:
     app = MagicMock()
     app.live_mode = False
+    app._is_processing = False
     app.start_thinking = MagicMock()
     app.stop_thinking = MagicMock()
     app.is_activating_mode = False
@@ -89,6 +90,7 @@ async def test_toggle_mode_live_set() -> None:
 async def test_toggle_mode_agent_set() -> None:
     app = MagicMock()
     app.live_mode = True
+    app._is_processing = False
     app.start_thinking = MagicMock()
     app.stop_thinking = MagicMock()
     app.is_activating_mode = False
@@ -264,6 +266,7 @@ async def test_trigger_live_greeting_shows_loading_then_replaces() -> None:
 async def test_toggle_mode_already_in_same_mode() -> None:
     app = MagicMock()
     app.live_mode = True
+    app._is_processing = False
     active_turn = AsyncMock()
     app.active_turn = active_turn
     manager = _make_manager(app)
@@ -275,6 +278,7 @@ async def test_toggle_mode_already_in_same_mode() -> None:
 async def test_toggle_mode_already_in_agent_mode() -> None:
     app = MagicMock()
     app.live_mode = False
+    app._is_processing = False
     app.active_turn = None
     chat_view = AsyncMock()
     app.query_one = MagicMock(return_value=chat_view)
@@ -287,6 +291,7 @@ async def test_toggle_mode_already_in_agent_mode() -> None:
 async def test_toggle_mode_live_greeting_failure() -> None:
     app = MagicMock()
     app.live_mode = False
+    app._is_processing = False
     app.start_thinking = MagicMock()
     app.stop_thinking = MagicMock()
     app.is_activating_mode = False

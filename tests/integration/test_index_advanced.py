@@ -22,7 +22,7 @@ from supporter.pool import (
 async def pool_cleanup() -> Any:
     yield
     await DynamicPool.shutdown_all()
-    clear_providers()
+    await clear_providers()
 
 
 @pytest.mark.asyncio
@@ -132,7 +132,7 @@ async def test_lazy_fallback_streaming() -> None:
 @pytest.mark.asyncio
 async def test_get_provider_live_and_registry() -> None:
     with patch.object(supporter.pool.config, "gemini_api_keys", ["key1"]):
-        clear_providers()
+        await clear_providers()
         p1 = get_provider(live=True, registry={"tool": lambda: "test"})
         new_registry = {"other": lambda: "val"}
         p2 = get_provider(live=True, registry=new_registry)
@@ -144,7 +144,7 @@ async def test_get_provider_live_and_registry() -> None:
 @pytest.mark.asyncio
 async def test_get_provider_missing_keys() -> None:
     with patch.object(supporter.pool.config, "gemini_api_keys", []):
-        clear_providers()
+        await clear_providers()
         with pytest.raises(ValueError, match="GEMINI_API_KEYS is missing"):
             get_provider()
 
@@ -200,12 +200,12 @@ async def test_get_provider_factories() -> None:
             supporter.pool.config, "gemini_live_fallback_model", "fallback-live"
         ),
     ):
-        clear_providers()
+        await clear_providers()
         p = get_provider(live=True)
         name = p.get_name()
         assert "Live" in name
         assert "Fallback" in name
-        clear_providers()
+        await clear_providers()
         with patch.object(
             supporter.pool.config, "gemini_fallback_model", "fallback-model"
         ):
@@ -281,7 +281,7 @@ async def test_get_provider_live_without_fallback_model() -> None:
         patch.object(supporter.pool.config, "gemini_api_keys", ["key1"]),
         patch.object(supporter.pool.config, "gemini_live_fallback_model", None),
     ):
-        clear_providers()
+        await clear_providers()
         p = get_provider(live=True)
         assert "Fallback" not in p.get_name()
 

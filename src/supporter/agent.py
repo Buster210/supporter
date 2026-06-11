@@ -106,7 +106,7 @@ class ChatAgent:
         # cached _summary_turn_count is an offset into the old list and may
         # exceed len(self.history), making uncovered_count negative. Invalidate
         # the stale summary so the next call re-summarizes from the new base.
-        if self._summary and self._summary_turn_count > len(self.history):
+        if self._summary and self._summary_turn_count >= len(self.history):
             self._summary = ""
             self._summary_turn_count = 0
         uncovered_count = len(self.history) - self._summary_turn_count
@@ -138,7 +138,7 @@ class ChatAgent:
 
         # WHY (PITFALL-2): invalidate stale summary that references a now-shrunken
         # history so the coverage math (and resulting recent-turns slice) is correct.
-        if self._summary and self._summary_turn_count > len(self.history):
+        if self._summary and self._summary_turn_count >= len(self.history):
             self._summary = ""
             self._summary_turn_count = 0
 
@@ -157,6 +157,10 @@ class ChatAgent:
                     f"(kept {keep_recent} recent)"
                 )
                 return True
+        except RuntimeError as e:
+            logger.error(
+                f"History summarization impossible (turns will be hard-dropped): {e}"
+            )
         except Exception as e:
             logger.warning(f"History summarization failed: {e}")
 
@@ -224,9 +228,10 @@ class ChatAgent:
             if self._store and len(new_list) > self._store_prev_len:
                 for msg in new_list[self._store_prev_len :]:
                     self._store.append(msg)
-                self._store_prev_len = len(new_list)
             self.history = new_list
             self._trim_history()
+            if self._store:
+                self._store_prev_len = len(self.history)
             return
 
         self.history.append(user_message)
@@ -259,15 +264,28 @@ class ChatAgent:
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
         options["user_content"] = user_message
-        text_parts: list[str] = []
+        collected_parts: list[Any] = []
 
         async for chunk in self.provider.generate_stream(prompt, options):
-            text_parts.append(chunk.text)
+            if chunk.raw is not None:
+                raw_content = getattr(chunk.raw, "content", None)
+                if raw_content is not None:
+                    for p in getattr(raw_content, "parts", None) or []:
+                        collected_parts.append(p)
+            elif chunk.text:
+                from google.genai.types import Part
+
+                collected_parts.append(Part(text=chunk.text))
             yield chunk
 
         if not exclude_from_history:
             self.history.append(user_message)
-            model_msg = _build_message("model", "".join(text_parts))
+            if collected_parts:
+                from google.genai.types import Content
+
+                model_msg = Content(role="model", parts=collected_parts)
+            else:
+                model_msg = _build_message("model", "")
             self.history.append(model_msg)
             if self._store:
                 self._store.append(user_message)

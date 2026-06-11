@@ -106,7 +106,15 @@ def validate_path(path: str) -> Path:
             f"File '{relative_path}' is ignored by .gitignore and cannot be accessed."
         )
 
-    return target_path
+    # Re-resolve to mitigate symlink TOCTOU: re-check containment before returning
+    re_resolved = target_path.resolve()
+    if not (re_resolved == project_root or project_root in re_resolved.parents):
+        raise PermissionError(
+            f"Path '{re_resolved}' symlink target escapes project root. "
+            "Only files within the project directory are allowed."
+        )
+
+    return re_resolved
 
 
 async def read_file(

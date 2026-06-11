@@ -901,7 +901,7 @@ class GeminiLiveProvider:
                 logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
                 self._last_turn_complete = True
                 self._reconnect_pending = True
-                yield LLMChunk(text="", is_last=True, model=self.model_name)
+                raise
             finally:
                 # ALWAYS run the turn-end epilogue, even if a consumer
                 # breaks early (async generator aclose() injects

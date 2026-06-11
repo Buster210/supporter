@@ -117,6 +117,8 @@ class SupporterApp(App[None]):
         from ..tools.browser.session import close_session
         from ..tools.file_ops import register_confirmation_callback
 
+        self.workers.cancel_all()
+
         register_confirmation_callback(None)
         register_bash_callbacks(confirmation=None, notification=None)
         register_browse_callback(
@@ -312,18 +314,21 @@ class SupporterApp(App[None]):
             await self._flush_queued_messages()
 
     async def _flush_queued_messages(self) -> None:
-        from .chat import QueuedMessagesDisplay
-
+        # Only mark busy once we know there is work; setting it before the
+        # empty-queue check wedged the app permanently after the first turn
+        # (flag stuck True with nothing draining).
         if not self._user_message_queue:
             return
 
+        from .chat import QueuedMessagesDisplay
+
+        self._is_processing = True
         items = list(self._user_message_queue)
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
         combined_text = "\n\n".join(msg for msg, _ in items)
         has_user_message = any(not is_sys for _, is_sys in items)
-        self._is_processing = True
 
         if has_user_message:
             self.run_worker(self._process_message_cycle(combined_text, mount_user=True))

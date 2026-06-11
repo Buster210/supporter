@@ -63,6 +63,7 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     if not req.url:
         return "Error: 'url' is required for navigate action."
     page = await _page_or_error()
+    session.set_frame(None)
     await _navigate_with_retry(
         page,
         lambda: page.goto(req.url, wait_until="domcontentloaded", timeout=30_000),
@@ -87,6 +88,7 @@ async def _handle_navigate(req: BrowseRequest) -> str:
 @_wrap_action_errors("back")
 async def _handle_back(req: BrowseRequest) -> str:
     page = await _page_or_error()
+    session.set_frame(None)
     await _navigate_with_retry(
         page, lambda: page.go_back(timeout=30_000, wait_until="commit")
     )
@@ -96,9 +98,9 @@ async def _handle_back(req: BrowseRequest) -> str:
     return await _snapshot_full(page, req)
 
 
-@_wrap_action_errors("forward")
 async def _handle_forward(req: BrowseRequest) -> str:
     page = await _page_or_error()
+    session.set_frame(None)
     await _navigate_with_retry(
         page, lambda: page.go_forward(timeout=30_000, wait_until="commit")
     )
@@ -155,12 +157,13 @@ async def _handle_tab(req: BrowseRequest) -> str:
 @_wrap_action_errors("newtab")
 async def _handle_newtab(req: BrowseRequest) -> str:
     _pws, context, _page = await _session_parts()
-    pages = session.list_pages()
-    if len(pages) == 1 and session.is_blank(pages[0]):
-        target = pages[0]
-    else:
-        target = await context.new_page()
-    session.set_active(target)
+    async with session._get_alloc_lock():
+        pages = session.list_pages()
+        if len(pages) == 1 and session.is_blank(pages[0]):
+            target = pages[0]
+        else:
+            target = await context.new_page()
+        session.set_active(target)
     await target.bring_to_front()
     if config.browser_debug_overlay:
         await debug_overlay.inject_overlay(target)

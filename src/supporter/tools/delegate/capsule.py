@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from collections import OrderedDict
 from collections.abc import Callable
@@ -174,6 +175,8 @@ def _save_capsule_sync(capsule: dict[str, Any]) -> None:
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(capsule, f, ensure_ascii=False)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
     tmp_path.replace(path)
 
 
@@ -365,10 +368,10 @@ async def mark_capsule_completed(job_id: str) -> dict[str, Any] | None:
         capsule["completed_at"] = utc_now()
         capsule["synthesis"] = build_synthesis(capsule)
 
-    capsule = await update_capsule(job_id, mutate)
-    if capsule is not None:
+    try:
+        return await update_capsule(job_id, mutate)
+    finally:
         _release_capsule_lock(job_id)
-    return capsule
 
 
 async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
@@ -391,11 +394,10 @@ async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
                     }
                 )
         capsule["synthesis"] = build_synthesis(capsule)
-
-    capsule = await update_capsule(job_id, mutate)
-    if capsule is not None:
+    try:
+        return await update_capsule(job_id, mutate)
+    finally:
         _release_capsule_lock(job_id)
-    return capsule
 
 
 async def mark_capsule_metrics(
@@ -411,10 +413,10 @@ async def mark_capsule_metrics(
     def mutate(capsule: dict[str, Any]) -> None:
         capsule["metrics"] = dict(metrics_summary)
 
-    capsule = await update_capsule(job_id, mutate)
-    if capsule is not None:
+    try:
+        return await update_capsule(job_id, mutate)
+    finally:
         _release_capsule_lock(job_id)
-    return capsule
 
 
 def extract_task_capsule_fields(output: str) -> dict[str, Any]:

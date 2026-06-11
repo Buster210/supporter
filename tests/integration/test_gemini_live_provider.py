@@ -282,9 +282,10 @@ async def test_generate_exception_handling(provider: Any) -> None:
     result = await provider.generate("test")
     assert result.text == ""
     chunks = []
-    async for chunk in provider.generate_stream("test"):
-        chunks.append(chunk)
-    assert chunks[-1].is_last is True
+    with pytest.raises(Exception, match="Crash"):
+        async for chunk in provider.generate_stream("test"):
+            chunks.append(chunk)
+    assert provider._prewarm_task is not None
 
 
 @pytest.mark.asyncio
@@ -1217,9 +1218,9 @@ async def test_generate_stream_transport_drop_sets_reconnect_pending(
 
     mock_session.receive = mock_receive_crash
     chunks = []
-    async for chunk in provider.generate_stream("hi"):
-        chunks.append(chunk)
-    assert chunks[-1].is_last is True
+    with pytest.raises(ConnectionError, match="network lost"):
+        async for chunk in provider.generate_stream("hi"):
+            chunks.append(chunk)
     assert provider._last_turn_complete is True
     assert provider._prewarm_task is not None
 

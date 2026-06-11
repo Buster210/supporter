@@ -322,6 +322,7 @@ class GeminiProvider:
                         )
         except Exception as e:
             logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
+            raise
 
         yield LLMChunk(text="", is_last=True, model=self.model_name)
 
