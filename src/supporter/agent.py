@@ -9,27 +9,33 @@ from typing import Any
 from .config import config
 from .decision_log import log_decision
 from .history_summarizer import summarize_turns
+from .llm.types import GenOptions, Message, TextPart
 from .logger import logger
-from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
+from .providers.gemini_codec import content_to_message
+from .types import LLMChunk, LLMProvider, LLMResult
 
 _GOAL_PREVIEW_CHARS = 200
 
 
-def _build_message(role: str, text: str) -> Any:
-    from google.genai.types import Content, Part
-
-    return Content(role=role, parts=[Part(text=text)])
+def _build_message(role: str, text: str) -> Message:
+    return Message(role=role, parts=[TextPart(text=text)])
 
 
 def _extract_assistant_message(result: LLMResult) -> Any | None:
-    if not result.candidates or not result.candidates[0].content:
-        return None
-    content = result.candidates[0].content
-    if getattr(content, "role", None) == "model":
-        return content
-    from google.genai.types import Content
+    # Prefer neutral result.history (last model message).
+    history = getattr(result, "history", None) or []
+    for msg in reversed(history):
+        if getattr(msg, "role", None) == "model":
+            return msg
 
-    return Content(role="model", parts=content.parts)
+    # Fall back to candidates using duck-typing + codec.
+    candidates = getattr(result, "candidates", None) or []
+    if not candidates:
+        return None
+    content = getattr(candidates[0], "content", None)
+    if content is None:
+        return None
+    return content_to_message(content)
 
 
 class ChatAgent:
@@ -75,17 +81,81 @@ class ChatAgent:
                 )
         logger.info(f"ChatAgent initialized with provider: {provider.get_name()}")
 
-    def _prepare_execution_context(self) -> LLMOptions:
+    def _prepare_execution_context(self) -> GenOptions:
         history_for_send = self._build_compacted_history()
-        return {
-            "history": history_for_send,
-            "interaction_id": self.current_interaction_id,
-            "tools": self.tools or [],
-            "registry": self.registry or {},
-            "use_search": self.use_search,
-            "use_code_execution": self.use_code_execution,
-            "system_instruction": self.system_instruction,
-        }
+        system_instruction = self.system_instruction
+        # WHY: inject recent working memory + a "known automations" hint
+        # into the system prompt so the assistant's context is never
+        # blank after a restart. This is the wire that turns the memory
+        # + recipe stores into knowledge the model actually sees.
+        if system_instruction is not None:
+            injected = self._build_context_injection()
+            if injected:
+                system_instruction = f"{system_instruction}\n\n{injected}"
+        return GenOptions(
+            system_instruction=system_instruction,
+            use_search=self.use_search,
+            extras={
+                "history": history_for_send,
+                "interaction_id": self.current_interaction_id,
+                "tools": self.tools or [],
+                "registry": self.registry or {},
+                "use_code_execution": self.use_code_execution,
+            },
+        )
+
+    @staticmethod
+    def _build_context_injection(limit: int = 5) -> str:
+        """Compose the working-memory + recipe digest that gets prepended
+        to the system prompt on every turn.
+
+        Each source is independently best-effort: a corrupt store
+        should not prevent the agent from running. Failures are logged
+        at debug level.
+        """
+        from .logger import logger
+        from .memory import memory_snapshot
+        from .recipes import recipes_snapshot
+        from .tools.memory_tools import memory_render_block
+
+        def _memory_block() -> str:
+            block = memory_render_block(limit=limit)
+            return block or ""
+
+        def _recipes_block() -> str:
+            snap = recipes_snapshot()
+            total = snap.get("total", 0) if isinstance(snap, dict) else 0
+            if not total:
+                return ""
+            return (
+                f"KNOWN AUTOMATIONS ({total} recipes available): "
+                "use the recipe_list / recipe_run / recipe_find tools "
+                "to replay any saved multi-step workflow without LLM tokens."
+            )
+
+        def _kinds_block() -> str:
+            snap = memory_snapshot()
+            kinds = snap.get("kinds", {}) if isinstance(snap, dict) else {}
+            if not kinds:
+                return ""
+            kinds_repr = ", ".join(
+                f"{k}={v}"
+                for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
+            )
+            return f"WORKING MEMORY TOTALS: {kinds_repr}"
+
+        parts: list[str] = []
+        for render in (_memory_block, _recipes_block, _kinds_block):
+            try:
+                rendered = render()
+            except Exception as exc:
+                logger.debug(
+                    f"ChatAgent: injection failed [{type(exc).__name__}]: {exc}"
+                )
+                continue
+            if rendered:
+                parts.append(rendered)
+        return "\n\n".join(parts)
 
     def _build_compacted_history(self) -> list[Any]:
         """Build compacted history view for LLM context.
@@ -111,10 +181,8 @@ class ChatAgent:
             self._summary_turn_count = 0
         uncovered_count = len(self.history) - self._summary_turn_count
         if uncovered_count <= keep_recent and self._summary:
-            from google.genai.types import Content, Part
-
             summary_text = f"[PREVIOUS_CONTEXT_SUMMARY]\n{self._summary}"
-            summary_turn = Content(role="model", parts=[Part(text=summary_text)])
+            summary_turn = Message(role="model", parts=[TextPart(text=summary_text)])
             return [summary_turn, *self.history[-keep_recent:]]
 
         return self.history
@@ -182,11 +250,12 @@ class ChatAgent:
 
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
-        options["user_content"] = user_message
         result = await self.provider.generate(prompt, options)
 
         self.current_interaction_id = result.interaction_id
         self._sync_history(user_message, result)
+        if self._store:
+            self._store.sync()
         self._record_brain_decision(prompt, result)
 
         duration_str = (
@@ -197,6 +266,63 @@ class ChatAgent:
             f"history_size={len(self.history)}"
         )
         return result
+
+    async def execute_with_verification(
+        self,
+        prompt: str,
+        checks: list[Any] | None = None,
+        config: Any | None = None,
+        recover: Any | None = None,
+    ) -> Any:
+        """Run the prompt through a verification loop.
+
+        On every retry the LLM receives the *original* prompt plus a
+        structured "your previous response failed verification" follow-up
+        that names each failing check and its captured detail. History is
+        synced only with the *final* result so the user-visible transcript
+        shows the chosen answer, not the rejected intermediate ones.
+
+        If ``recover`` is an :class:`supporter.recover.AutoRecover` it
+        wraps every provider call so transient 5xx / network failures
+        rotate the keypool and retry without LLM involvement.
+        """
+        from .verify import VerificationConfig, VerificationLoop
+
+        if not await self._maybe_summarize():
+            self._trim_history()
+
+        cfg = config or VerificationConfig()
+        loop = VerificationLoop(cfg, checks or [])
+
+        async def _caller(text: str) -> LLMResult:
+            options = self._prepare_execution_context()
+            if recover is not None:
+                result: LLMResult = await recover.call(
+                    self.provider.generate, text, options
+                )
+                return result
+            return await self.provider.generate(text, options)
+
+        outcome = await loop.run(_caller, prompt)
+        last = outcome.last_result
+        if last is None:
+            # Should not happen — at least one attempt always runs.
+            return outcome
+
+        # Sync history with the *final* result only; intermediate attempts
+        # are not user-visible.
+        user_message = _build_message("user", prompt)
+        self.current_interaction_id = last.interaction_id
+        self._sync_history(user_message, last)
+        if self._store:
+            self._store.sync()
+        self._record_brain_decision(prompt, last)
+
+        logger.info(
+            f"Agent: verification complete — ok={outcome.ok} "
+            f"attempts={outcome.attempts} history_size={len(self.history)}"
+        )
+        return outcome
 
     def _record_brain_decision(self, prompt: str, result: LLMResult) -> None:
         chosen = "text_response"
@@ -222,16 +348,20 @@ class ChatAgent:
         )
 
     def _sync_history(self, user_message: Any, result: LLMResult) -> None:
+        # Prefer neutral result.history if available.
+        history = getattr(result, "history", None)
+        if history:
+            logger.info("Agent: syncing history from result.history")
+            new_list = list(history)
+            self._commit_synced_history(new_list)
+            return
+
+        # Fall back to AFC history (convert google Content → neutral Message).
         if result.automatic_function_calling_history:
             logger.info("Agent: syncing history from automatic function calling")
-            new_list = result.automatic_function_calling_history
-            if self._store and len(new_list) > self._store_prev_len:
-                for msg in new_list[self._store_prev_len :]:
-                    self._store.append(msg)
-            self.history = new_list
-            self._trim_history()
-            if self._store:
-                self._store_prev_len = len(self.history)
+            new_list_raw = result.automatic_function_calling_history
+            new_list = [content_to_message(c) for c in new_list_raw]
+            self._commit_synced_history(new_list)
             return
 
         self.history.append(user_message)
@@ -244,11 +374,28 @@ class ChatAgent:
             return
 
         self.history.append(assistant_message)
+        self._commit_synced_history(None)
+        logger.info(f"Agent: history synced — new size={len(self.history)}")
+
+    def _commit_synced_history(self, new_list: list[Any] | None) -> None:
+        if new_list is not None:
+            if self._store and len(new_list) > self._store_prev_len:
+                for msg in new_list[self._store_prev_len :]:
+                    self._store.append(msg)
+            self.history = new_list
+            # _store_prev_len reflects the POST-trim length for the
+            # replace-history branches (matches the original ordering).
+            self._trim_history()
+            if self._store:
+                self._store_prev_len = len(self.history)
+            return
+        # Branch 3: user + assistant already appended to self.history; mirror
+        # the assistant append to the store and bookkeep the PRE-trim length,
+        # then trim (matches the original ordering for this branch).
         if self._store:
-            self._store.append(assistant_message)
+            self._store.append(self.history[-1])
             self._store_prev_len = len(self.history)
         self._trim_history()
-        logger.info(f"Agent: history synced — new size={len(self.history)}")
 
     async def execute_stream(
         self, prompt: str, exclude_from_history: bool = False
@@ -263,27 +410,22 @@ class ChatAgent:
 
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
-        options["user_content"] = user_message
         collected_parts: list[Any] = []
 
         async for chunk in self.provider.generate_stream(prompt, options):
             if chunk.raw is not None:
                 raw_content = getattr(chunk.raw, "content", None)
                 if raw_content is not None:
-                    for p in getattr(raw_content, "parts", None) or []:
-                        collected_parts.append(p)
+                    msg = content_to_message(raw_content)
+                    collected_parts.extend(msg.parts)
             elif chunk.text:
-                from google.genai.types import Part
-
-                collected_parts.append(Part(text=chunk.text))
+                collected_parts.append(TextPart(text=chunk.text))
             yield chunk
 
         if not exclude_from_history:
             self.history.append(user_message)
             if collected_parts:
-                from google.genai.types import Content
-
-                model_msg = Content(role="model", parts=collected_parts)
+                model_msg = Message(role="model", parts=collected_parts)
             else:
                 model_msg = _build_message("model", "")
             self.history.append(model_msg)
@@ -291,6 +433,7 @@ class ChatAgent:
                 self._store.append(user_message)
                 self._store.append(model_msg)
                 self._store_prev_len = len(self.history)
+                self._store.sync()
             self._trim_history()
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
