@@ -209,7 +209,11 @@ async def run_sub_agent(
                             agent.execute(prompt), timeout=task["timeout"]
                         )
                     text, model_name, tokens = result.text, result.model, result.usage
-                    step_count = len(result.automatic_function_calling_history or [])
+                    step_count = (
+                        len(result.history)
+                        if result.history
+                        else len(result.automatic_function_calling_history or [])
+                    )
                 duration = time.perf_counter() - start_time
                 logger.info(
                     f"Sub-agent '{task_id}' completed in {duration:.2f}s "

@@ -7,6 +7,7 @@ from google.genai.types import Content, Part
 
 from supporter.agent import ChatAgent
 from supporter.pool import LLMChunk, LLMResult
+from supporter.providers.gemini_codec import content_to_message
 
 
 @pytest.mark.asyncio
@@ -33,6 +34,7 @@ async def test_tool_dispatch_to_registry() -> None:
         ),
         types.Content(role="model", parts=[types.Part(text="It is 12:00 PM.")]),
     ]
+    neutral_history = [content_to_message(c) for c in mock_history]
     mock_provider = MagicMock()
     mock_provider.get_name.return_value = "mock"
     mock_provider.generate = AsyncMock(
@@ -53,7 +55,7 @@ async def test_tool_dispatch_to_registry() -> None:
     )
     response = await agent.execute("What time is it?")
     assert response.text == "It is 12:00 PM."
-    assert agent.history == mock_history
+    assert agent.history == neutral_history
 
 
 @pytest.mark.asyncio

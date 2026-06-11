@@ -135,40 +135,38 @@ class TestSummarizeTurns:
     async def test_summarize_calls_gemini_provider(self) -> None:
         mock_result = MagicMock()
         mock_result.text = "Summary text"
+        mock_provider = MagicMock()
+        mock_provider.generate = AsyncMock(return_value=mock_result)
 
         with (
             patch("supporter.history_summarizer.config") as mock_config,
             patch(
-                "supporter.providers.gemini_provider.GeminiProvider"
-            ) as mock_provider_cls,
+                "supporter.pool.get_provider", return_value=mock_provider
+            ) as mock_get,
         ):
             mock_config.gemini_api_keys = ["test-key"]
             mock_config.gemini_model = "test-model"
-            mock_provider = MagicMock()
-            mock_provider.generate = AsyncMock(return_value=mock_result)
-            mock_provider_cls.return_value = mock_provider
 
             result = await summarize_turns([_make_content("user", "Hello")])
 
             assert result == "Summary text"
             mock_provider.generate.assert_called_once()
+            assert mock_get.call_args.kwargs["model_name"] == "test-model"
+            assert mock_get.call_args.kwargs["shared"] is False
 
     @pytest.mark.asyncio
     async def test_summarize_uses_low_temperature(self) -> None:
         mock_result = MagicMock()
         mock_result.text = "Summary"
+        mock_provider = MagicMock()
+        mock_provider.generate = AsyncMock(return_value=mock_result)
 
         with (
             patch("supporter.history_summarizer.config") as mock_config,
-            patch(
-                "supporter.providers.gemini_provider.GeminiProvider"
-            ) as mock_provider_cls,
+            patch("supporter.pool.get_provider", return_value=mock_provider),
         ):
             mock_config.gemini_api_keys = ["test-key"]
             mock_config.gemini_model = "test-model"
-            mock_provider = MagicMock()
-            mock_provider.generate = AsyncMock(return_value=mock_result)
-            mock_provider_cls.return_value = mock_provider
 
             await summarize_turns([_make_content("user", "Test")])
 

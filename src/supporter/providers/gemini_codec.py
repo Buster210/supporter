@@ -228,3 +228,13 @@ def tooldefs_to_gemini(
         ]
 
     return final_tools
+
+
+def gemini_error_classes() -> tuple[type[BaseException], ...]:
+    """Return Gemini error classes for error detection in pool.py."""
+    try:
+        from google.genai import errors as genai_errors
+
+        return (genai_errors.ClientError, genai_errors.ServerError)
+    except ImportError:
+        return ()

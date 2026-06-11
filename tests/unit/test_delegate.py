@@ -370,6 +370,7 @@ class TestSubAgentRunner:
             "total_tokens": 15,
         }
         mock_result.automatic_function_calling_history = [object(), object(), object()]
+        mock_result.history = []
         mock_agent = MagicMock()
         mock_agent.execute = AsyncMock(return_value=mock_result)
 

@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from google.genai.types import Content
 
 from ..config import config
+from ..llm.types import GenOptions
+from ..llm.types import Message as NeutralMessage
 from ..logger import logger
 from ..recovery_metrics import record_key_rotation
 from ..tools.resolver import (
@@ -22,9 +24,9 @@ from ..tools.resolver import (
 )
 from ..types import (
     LLMChunk,
-    LLMOptions,
     LLMResult,
 )
+from .gemini_codec import message_to_content
 
 _STALE_HANDLE_ERRORS = ("session not found", "invalid session handle")
 
@@ -379,8 +381,17 @@ class GeminiLiveProvider:
             turns.append(Content(role="user", parts=[Part(text=text)]))
         return turns
 
-    async def _send_user_turn(self, session: Any, prompt: str | list[Content]) -> None:
-        text = prompt if isinstance(prompt, str) else str(prompt)
+    async def _send_user_turn(
+        self, session: Any, prompt: str | list[NeutralMessage]
+    ) -> None:
+        gemini_prompt = (
+            [message_to_content(m) for m in prompt]
+            if isinstance(prompt, list)
+            and prompt
+            and isinstance(prompt[0], NeutralMessage)
+            else prompt
+        )
+        text = gemini_prompt if isinstance(gemini_prompt, str) else str(gemini_prompt)
         if self._needs_replay:
             self._needs_replay = False
             if self._history:
@@ -676,10 +687,19 @@ class GeminiLiveProvider:
             await task  # MUST await — guarantees recv() unwound before turn reads
 
     async def _prepare_turn(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Content], options: GenOptions | None = None
     ) -> Any:
-        if options and options.get("history"):
-            self._history = list(options["history"])
+        if options:
+            raw_history = (
+                options.extras.get("history")
+                if isinstance(options, GenOptions)
+                else options.get("history")
+            )
+            if raw_history:
+                if raw_history and isinstance(raw_history[0], NeutralMessage):
+                    self._history = [message_to_content(m) for m in raw_history]
+                else:
+                    self._history = list(raw_history)
         # Stop the idle monitor BEFORE any socket read (single-reader invariant).
         # The monitor owns the only recv() between turns; the turn must take
         # over exclusively. Awaiting the monitor here guarantees recv() has
@@ -708,10 +728,19 @@ class GeminiLiveProvider:
         return session
 
     async def generate(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self,
+        prompt: str | list[NeutralMessage],
+        options: GenOptions | None = None,
     ) -> LLMResult:
+        gemini_prompt = (
+            [message_to_content(m) for m in prompt]
+            if isinstance(prompt, list)
+            and prompt
+            and isinstance(prompt[0], NeutralMessage)
+            else prompt
+        )
         async with self._turn_lock:
-            session = await self._prepare_turn(prompt, options)
+            session = await self._prepare_turn(gemini_prompt, options)
             start_time = time.perf_counter()
             full_response, thoughts, grounding = [], [], None
 
@@ -797,13 +826,23 @@ class GeminiLiveProvider:
                 thoughts="".join(thoughts),
                 usage={},
                 raw=grounding,
+                history=[],
             )
 
     async def generate_stream(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self,
+        prompt: str | list[NeutralMessage],
+        options: GenOptions | None = None,
     ) -> AsyncIterator[LLMChunk]:
+        gemini_prompt = (
+            [message_to_content(m) for m in prompt]
+            if isinstance(prompt, list)
+            and prompt
+            and isinstance(prompt[0], NeutralMessage)
+            else prompt
+        )
         async with self._turn_lock:
-            session = await self._prepare_turn(prompt, options)
+            session = await self._prepare_turn(gemini_prompt, options)
             grounding: Any = None
 
             try:

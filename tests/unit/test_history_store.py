@@ -80,22 +80,21 @@ def test_tool_call_and_response_parts_survive_roundtrip(store: HistoryStore) -> 
     loaded = store.load()
     assert len(loaded) == 2
     fc_part = loaded[0].parts[0]
-    assert fc_part.function_call.name == "search"
-    assert fc_part.function_call.args == {"query": "test"}
+    assert fc_part.name == "search"
+    assert fc_part.args == {"query": "test"}
     fr_part = loaded[1].parts[0]
-    assert fr_part.function_response.name == "search"
-    assert fr_part.function_response.response == {"results": [1, 2]}
+    assert fr_part.name == "search"
+    assert fr_part.response == {"results": [1, 2]}
 
 
 def test_unsupported_part_degrades_not_crashes(store: HistoryStore) -> None:
     content = MagicMock()
     content.role = "model"
-    bad_part = MagicMock()
-    bad_part.text = None
-    bad_part.function_call = None
-    bad_part.function_response = None
-    bad_part.inline_data = None
-    content.parts = [bad_part]
+
+    class _Unsupported:
+        pass
+
+    content.parts = [_Unsupported()]
     store.append(content)
 
     loaded = store.load()
