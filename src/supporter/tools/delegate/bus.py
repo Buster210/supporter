@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from typing import Any
 
 from ...types import DelegationEvent, MilestoneCompleted
@@ -28,6 +29,10 @@ class DelegationBus:
         else:
             self._subscribers.append(q)
         return q
+
+    def unsubscribe(self, queue: asyncio.Queue[DelegationEvent | None]) -> None:
+        with contextlib.suppress(ValueError):
+            self._subscribers.remove(queue)
 
     def close(self) -> None:
         for q in self._subscribers:

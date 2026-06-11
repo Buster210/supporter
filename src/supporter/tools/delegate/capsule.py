@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from collections import OrderedDict
 from collections.abc import Callable
@@ -174,6 +175,8 @@ def _save_capsule_sync(capsule: dict[str, Any]) -> None:
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(capsule, f, ensure_ascii=False)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
     tmp_path.replace(path)
 
 
@@ -365,10 +368,10 @@ async def mark_capsule_completed(job_id: str) -> dict[str, Any] | None:
         capsule["completed_at"] = utc_now()
         capsule["synthesis"] = build_synthesis(capsule)
 
-    capsule = await update_capsule(job_id, mutate)
-    if capsule is not None:
+    try:
+        return await update_capsule(job_id, mutate)
+    finally:
         _release_capsule_lock(job_id)
-    return capsule
 
 
 async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
@@ -391,11 +394,29 @@ async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
                     }
                 )
         capsule["synthesis"] = build_synthesis(capsule)
-
-    capsule = await update_capsule(job_id, mutate)
-    if capsule is not None:
+    try:
+        return await update_capsule(job_id, mutate)
+    finally:
         _release_capsule_lock(job_id)
-    return capsule
+
+
+async def mark_capsule_metrics(
+    job_id: str, metrics_summary: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Persist a job's reliability-metrics summary into its capsule.
+
+    Called after the milestone settles, so the metrics aggregate (success rate,
+    autonomy duration, token totals) survives in the capsule instead of being
+    logged once and discarded.
+    """
+
+    def mutate(capsule: dict[str, Any]) -> None:
+        capsule["metrics"] = dict(metrics_summary)
+
+    try:
+        return await update_capsule(job_id, mutate)
+    finally:
+        _release_capsule_lock(job_id)
 
 
 def extract_task_capsule_fields(output: str) -> dict[str, Any]:
@@ -498,7 +519,28 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _reap_stale_locks() -> None:
+    """Remove locks for jobs that no longer exist or are terminated.
+
+    Called before acquiring a new lock to prevent unbounded growth when
+    processes crash before releasing locks or when capsules are manually
+    cleaned up. Only checks cache status to avoid blocking I/O.
+    """
+    for job_id in list(_CAPSULE_LOCKS.keys()):
+        lock_path = capsule_path(job_id)
+        if not lock_path.exists():
+            _CAPSULE_LOCKS.pop(job_id, None)
+            continue
+        # Check cache first (no I/O) - if cached and terminal, release lock.
+        cached = _CAPSULE_CACHE.get(job_id)
+        if cached is not None and isinstance(cached, dict):
+            status = str(cached.get("status", ""))
+            if status in TERMINAL_CAPSULE_STATUSES:
+                _CAPSULE_LOCKS.pop(job_id, None)
+
+
 def _capsule_lock(job_id: str) -> asyncio.Lock:
+    _reap_stale_locks()
     safe_job_id = _safe_job_id(job_id)
     lock = _CAPSULE_LOCKS.get(safe_job_id)
     if lock is None:

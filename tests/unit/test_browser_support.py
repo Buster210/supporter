@@ -415,7 +415,7 @@ async def test_clean_snapshot_nested_with_dedup_and_tracking_params() -> None:
     assert cleaned == expected
 
 
-async def test_page_key_returns_url() -> None:
+def test_page_key_returns_url() -> None:
     class P:
         url = "https://x.test/p"
 

@@ -53,12 +53,6 @@ class MockApp:
     def stop_thinking(self) -> None:
         self.active_queries = max(0, self.active_queries - 1)
 
-    def _start_thinking(self) -> None:
-        self.start_thinking()
-
-    def _stop_thinking(self) -> None:
-        self.stop_thinking()
-
     def exit(self) -> None:
         self.exited = True
 

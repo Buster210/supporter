@@ -97,6 +97,18 @@ async def test_ensure_session_with_rotation(api_keys: Any) -> None:
         assert mock_connect.call_count == 2
 
 
+def test_rotate_key_counts_recovery(provider: Any) -> None:
+    from supporter import recovery_metrics
+
+    recovery_metrics.reset_recovery_counters()
+    try:
+        provider._rotate_key()
+        provider._rotate_key()
+        assert recovery_metrics.recovery_snapshot()["key_rotations"] == 2
+    finally:
+        recovery_metrics.reset_recovery_counters()
+
+
 @pytest.mark.asyncio
 async def test_ensure_session_fatal_error(api_keys: Any) -> None:
     p = GeminiLiveProvider(api_keys=api_keys)
@@ -146,6 +158,30 @@ async def test_handle_tool_call_variations(provider: Any) -> None:
     responses = kwargs["function_responses"]
     assert len(responses) == 4
     assert responses[0].response == {"result": "hello world"}
+
+
+@pytest.mark.asyncio
+async def test_inject_image_uses_video_not_deprecated_media(provider: Any) -> None:
+    # media= serializes to the deprecated realtime_input.media_chunks wire field,
+    # which the live API rejects with APIError 1007; video= is the image-frame slot.
+    mock_session = AsyncMock()
+    provider._session = mock_session
+    await provider._inject_image(b"png-bytes", "image/png")
+    _, kwargs = mock_session.send_realtime_input.call_args
+    assert "media" not in kwargs
+    assert kwargs["video"].data == b"png-bytes"
+    assert kwargs["video"].mime_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_reinject_recent_images_uses_video(provider: Any) -> None:
+    mock_session = AsyncMock()
+    provider._recent_images.append((b"jpg-bytes", "image/jpeg"))
+    await provider._reinject_recent_images(mock_session)
+    _, kwargs = mock_session.send_realtime_input.call_args
+    assert "media" not in kwargs
+    assert kwargs["video"].data == b"jpg-bytes"
+    assert kwargs["video"].mime_type == "image/jpeg"
 
 
 @pytest.mark.asyncio
@@ -246,9 +282,10 @@ async def test_generate_exception_handling(provider: Any) -> None:
     result = await provider.generate("test")
     assert result.text == ""
     chunks = []
-    async for chunk in provider.generate_stream("test"):
-        chunks.append(chunk)
-    assert chunks[-1].is_last is True
+    with pytest.raises(Exception, match="Crash"):
+        async for chunk in provider.generate_stream("test"):
+            chunks.append(chunk)
+    assert provider._prewarm_task is not None
 
 
 @pytest.mark.asyncio
@@ -1181,9 +1218,9 @@ async def test_generate_stream_transport_drop_sets_reconnect_pending(
 
     mock_session.receive = mock_receive_crash
     chunks = []
-    async for chunk in provider.generate_stream("hi"):
-        chunks.append(chunk)
-    assert chunks[-1].is_last is True
+    with pytest.raises(ConnectionError, match="network lost"):
+        async for chunk in provider.generate_stream("hi"):
+            chunks.append(chunk)
     assert provider._last_turn_complete is True
     assert provider._prewarm_task is not None
 
@@ -1303,10 +1340,10 @@ async def test_send_user_turn_reinjects_images_after_replay(
     await provider._send_user_turn(session, "go")
     session.send_client_content.assert_called_once()
     assert session.send_realtime_input.call_count == 2
-    media_calls = [
-        c for c in session.send_realtime_input.call_args_list if c.kwargs.get("media")
+    video_calls = [
+        c for c in session.send_realtime_input.call_args_list if c.kwargs.get("video")
     ]
-    assert len(media_calls) == 2
+    assert len(video_calls) == 2
 
 
 @pytest.mark.asyncio

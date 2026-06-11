@@ -46,8 +46,10 @@ async def delegate_tasks(
             are required; every other field is optional:
             - id: A unique string identifier (e.g., "t1", "analyze_file").
             - task: Detailed instructions for the sub-agent.
-            - agent: Role from the roster (e.g., "explorer", "code_writer").
+            - agent: Role from the roster (e.g., "explorer", "test_engineer").
               Omitted -> a generic "custom" agent.
+            - backend: Executor backend for the task ("gemini" default). Selects
+              who runs it; unknown backends are rejected.
             - context: Extra context string passed to the sub-agent.
             - tools: "all" (default) or a comma-separated subset; intersected
               with the tools delegation permits.

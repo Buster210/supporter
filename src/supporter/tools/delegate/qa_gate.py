@@ -1,21 +1,24 @@
-"""Two-tier QA gate over delegated opencode coding work (SPEC §7).
+"""Two-tier QA gate over delegated tasks (SPEC §7).
 
-After opencode writes code, the harness does not trust it blindly:
+After a task completes, the harness does not trust it blindly:
 
 - **Tier 1** — a *fresh* opencode worker builds/tests/lints the change and
   reports a pass/fail verdict (ground-truth signals, not LLM judgment alone).
 - **Tier 2** — native Gemini roster sub-agents (test, review, security) verify
   the change in parallel and each return an approve/reject verdict.
 
-On any failure the gate feeds the diagnosis back to a fresh opencode worker and
-re-runs, up to ``delegate_correction_rounds`` correction rounds. Work that never
-passes both tiers is returned as ERROR with a diagnosis — never as COMPLETED.
-The gate fires only for ``backend == "opencode"`` tasks and is a no-op
-otherwise, so existing flows are unaffected.
+On any failure the gate feeds the diagnosis back and re-runs, up to
+``delegate_correction_rounds`` correction rounds. Work that never passes both
+tiers is returned as ERROR with a diagnosis — never as COMPLETED.
+
+For gemini backend tasks, the gate validates the structured payload output
+with confidence requirements instead of tier-1/tier-2 verification.
 """
 
 import asyncio
+import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +28,7 @@ from ...types import TaskStatus
 from .agents import run_sub_agent
 from .backends import GEMINI_BACKEND, OPENCODE_BACKEND, QA_REJECTION_MARKER
 from .bus import DelegationBus
+from .capsule import validate_delegation_payload
 from .opencode_backend import _resolve_repo
 from .tier1_checks import (
     Tier1ToolUnavailable,
@@ -36,6 +40,79 @@ _TIER1_TOKEN = "qa-tier1:"  # noqa: S105  # nosec B105 - verdict marker, not a s
 _TIER2_TOKEN = "qa-verdict:"  # noqa: S105  # nosec B105 - verdict marker, not a secret
 
 _TIER2_ROLES = ("test_engineer", "code_reviewer", "security_auditor")
+
+_FINDING_ROLES = ("explorer", "security_auditor", "code_reviewer")
+
+_JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _gemini_predicate_failure(output: str, agent: str | None) -> str | None:
+    """Check gemini output quality; return failure reason or None.
+
+    Validates:
+    - Structured payload is valid (validate_delegation_payload)
+    - Confidence >= delegate_min_confidence
+    - For finding-roles: non-empty findings OR evidence.sources
+
+    Note: emptiness is never grounds for rejection -- this only checks
+    structural validity, not whether the answer is correct.
+    """
+    if not validate_delegation_payload(output):
+        return "invalid payload"
+
+    parsed = _parse_delegation_result(output)
+    if parsed is None:
+        return "unparseable result"
+
+    confidence = parsed.get("confidence", "unknown")
+    confidence_rank = {"low": 1, "medium": 2, "high": 3, "unknown": 0}
+    min_rank = confidence_rank.get(config.delegate_min_confidence, 2)
+    output_rank = confidence_rank.get(confidence, 0)
+    if output_rank < min_rank:
+        return (
+            f"confidence '{confidence}' below minimum "
+            f"'{config.delegate_min_confidence}'"
+        )
+
+    if agent in _FINDING_ROLES:
+        findings = parsed.get("findings", [])
+        evidence = parsed.get("evidence", {})
+        sources = evidence.get("sources", [])
+        if not findings and not sources:
+            return f"role '{agent}' requires non-empty findings or evidence.sources"
+
+    return None
+
+
+def _gemini_predicate_passed(output: str, agent: str | None) -> bool:
+    """Check if gemini output meets the quality predicate."""
+    return _gemini_predicate_failure(output, agent) is None
+
+
+def _parse_delegation_result(output: str) -> dict[str, Any] | None:
+    """Parse the structured delegation result from output text."""
+    match = _JSON_FENCE_RE.search(output)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    marker = "DELEGATION_RESULT:"
+    idx = output.rfind(marker)
+    if idx >= 0:
+        tail = output[idx + len(marker) :]
+        start = tail.find("{")
+        end = tail.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(tail[start : end + 1])
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                pass
+    return None
 
 
 def _verdict_passed(output: str, token: str, positive: str) -> bool:
@@ -198,15 +275,33 @@ async def _correct(
     bus: DelegationBus,
     job_id: str,
 ) -> tuple[bool, str]:
-    instructions = (
-        base["task"]
-        + "\n\nThe previous attempt FAILED verification:\n"
-        + feedback
-        + "\n\nFix the issues with minimal, surgical changes. Do not introduce "
-        "unrelated edits."
-    )
+    backend = base.get("backend", OPENCODE_BACKEND)
+    if backend == GEMINI_BACKEND:
+        correction_agent = base.get("agent")
+        instructions = (
+            base["task"]
+            + "\n\nThe previous attempt FAILED verification:\n"
+            + feedback
+            + "\n\nImprove your findings by grounding them in concrete "
+            "evidence and sources. Report honest confidence. Return ONLY "
+            "the structured result block in the same format as before -- "
+            "no other prose."
+        )
+    else:
+        correction_agent = None
+        instructions = (
+            base["task"]
+            + "\n\nThe previous attempt FAILED verification:\n"
+            + feedback
+            + "\n\nFix the issues with minimal, surgical changes. Do not introduce "
+            "unrelated edits."
+        )
     task = _make_task(
-        base, f"fix_{attempt}", instructions, backend=OPENCODE_BACKEND, agent=None
+        base,
+        f"fix_{attempt}",
+        instructions,
+        backend=backend,
+        agent=correction_agent,
     )
     return await _run(task, semaphore, bus, job_id)
 
@@ -218,57 +313,123 @@ async def run_qa_gate(
     bus: DelegationBus,
     job_id: str,
 ) -> dict[str, Any]:
-    """Gate an opencode task result through tier-1 and tier-2 verification.
+    """Gate a task result through verification.
+
+    For opencode tasks: tier-1 and tier-2 verification with correction rounds.
+    For gemini tasks (when delegate_persist_noncode is enabled): predicate-based
+    validation with confidence requirements.
 
     Returns the result dict: COMPLETED with a QA note appended on approval, or
-    ERROR with a diagnosis if both tiers cannot be satisfied within the
-    configured correction rounds.
+    ERROR with a diagnosis if verification cannot pass within correction rounds.
     """
     if (
         not config.delegate_qa_gate_enabled
-        or task.get("backend") != OPENCODE_BACKEND
         or result.get("status") != TaskStatus.COMPLETED
     ):
         return result
 
-    rounds = config.delegate_correction_rounds
-    task_id = task["id"]
-    last_reason = "verification did not pass"
+    backend = task.get("backend")
+    if backend is None:
+        return result
 
-    for attempt in range(rounds + 1):
-        tier1_ok, tier1_output = await _tier1(task, attempt, semaphore, bus, job_id)
-        if not tier1_ok:
-            last_reason = f"tier-1 tests failing:\n{tier1_output[-500:]}"
-        else:
-            approved, rejections = await _tier2(
-                task, attempt, tier1_output, semaphore, bus, job_id
+    # Handle opencode path (unchanged behavior)
+    if backend == OPENCODE_BACKEND:
+        rounds = config.delegate_correction_rounds
+        task_id = task["id"]
+        last_reason = "verification did not pass"
+
+        for attempt in range(rounds + 1):
+            tier1_ok, tier1_output = await _tier1(task, attempt, semaphore, bus, job_id)
+            if not tier1_ok:
+                last_reason = f"tier-1 tests failing:\n{tier1_output[-500:]}"
+            else:
+                approved, rejections = await _tier2(
+                    task, attempt, tier1_output, semaphore, bus, job_id
+                )
+                if approved:
+                    logger.info(f"QA gate: task '{task_id}' approved (round {attempt})")
+                    result["output"] += "\n\n[QA gate: tier-1 + tier-2 PASSED]"
+                    return result
+                last_reason = f"tier-2 rejected: {rejections}"
+
+            if attempt >= rounds:
+                break
+            logger.info(
+                f"QA gate: task '{task_id}' correction round {attempt + 1}/{rounds}"
             )
-            if approved:
-                logger.info(f"QA gate: task '{task_id}' approved (round {attempt})")
-                result["output"] += "\n\n[QA gate: tier-1 + tier-2 PASSED]"
+            fixed, fix_output = await _correct(
+                task, attempt, last_reason, semaphore, bus, job_id
+            )
+            if not fixed:
+                last_reason = (
+                    f"correction round {attempt + 1} did not complete:\n"
+                    f"{fix_output[-500:]}"
+                )
+                logger.warning(
+                    f"QA gate: task '{task_id}' correction round {attempt + 1} failed"
+                )
+                break
+
+        logger.warning(f"QA gate: task '{task_id}' rejected after {rounds} rounds")
+        result["status"] = TaskStatus.ERROR
+        result["output"] = (
+            f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
+        )
+        return result
+
+    # Handle gemini path (when delegate_persist_noncode is enabled)
+    if config.delegate_persist_noncode and backend == GEMINI_BACKEND:
+        agent = task.get("agent")
+        output = result.get("output", "")
+        task_id = task["id"]
+
+        failure = _gemini_predicate_failure(output, agent)
+        if failure is None:
+            logger.info(f"QA gate: gemini task '{task_id}' passed predicate")
+            result["output"] += "\n\n[QA gate: gemini predicate PASSED]"
+            return result
+
+        # Needs correction - run correction loop with gemini predicate
+        rounds = config.delegate_correction_rounds
+        last_reason = f"gemini output failed: {failure}"
+
+        for attempt in range(rounds + 1):
+            if attempt >= rounds:
+                break
+            logger.info(
+                f"QA gate: gemini task '{task_id}' correction round "
+                f"{attempt + 1}/{rounds}"
+            )
+            fixed, fix_output = await _correct(
+                task, attempt, last_reason, semaphore, bus, job_id
+            )
+            if not fixed:
+                last_reason = (
+                    f"correction round {attempt + 1} did not complete:\n"
+                    f"{fix_output[-500:]}"
+                )
+                logger.warning(
+                    f"QA gate: gemini task '{task_id}' correction round "
+                    f"{attempt + 1} failed"
+                )
+                break
+            failure = _gemini_predicate_failure(fix_output, agent)
+            if failure is None:
+                logger.info(
+                    f"QA gate: gemini task '{task_id}' approved (round {attempt + 1})"
+                )
+                result["output"] = fix_output
+                result["output"] += "\n\n[QA gate: gemini predicate PASSED]"
                 return result
-            last_reason = f"tier-2 rejected: {rejections}"
+            last_reason = f"gemini output failed: {failure}"
 
-        if attempt >= rounds:
-            break
-        logger.info(
-            f"QA gate: task '{task_id}' correction round {attempt + 1}/{rounds}"
+        logger.warning(
+            f"QA gate: gemini task '{task_id}' rejected after {rounds} rounds"
         )
-        fixed, fix_output = await _correct(
-            task, attempt, last_reason, semaphore, bus, job_id
+        result["status"] = TaskStatus.ERROR
+        result["output"] = (
+            f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
         )
-        if not fixed:
-            last_reason = (
-                f"correction round {attempt + 1} did not complete:\n{fix_output[-500:]}"
-            )
-            logger.warning(
-                f"QA gate: task '{task_id}' correction round {attempt + 1} failed"
-            )
-            break
+        return result
 
-    logger.warning(f"QA gate: task '{task_id}' rejected after {rounds} rounds")
-    result["status"] = TaskStatus.ERROR
-    result["output"] = (
-        f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
-    )
     return result

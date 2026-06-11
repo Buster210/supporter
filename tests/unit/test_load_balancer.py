@@ -11,7 +11,7 @@ from supporter.pool import DynamicPool, LLMChunk, LLMResult, clear_providers
 async def pool_cleanup() -> AsyncGenerator[None, None]:
     yield
     await DynamicPool.shutdown_all()
-    clear_providers()
+    await clear_providers()
 
 
 def create_mock_provider(name: str) -> MagicMock:
@@ -117,13 +117,14 @@ async def test_lazy_fallback_provider() -> None:
     assert lfp._fallback is not None
 
 
-def test_get_provider_registry() -> None:
+@pytest.mark.asyncio
+async def test_get_provider_registry() -> None:
     from supporter.pool import clear_providers, get_provider
 
-    clear_providers()
+    await clear_providers()
     p1 = get_provider("gemini")
     p2 = get_provider("gemini")
     assert p1 is p2
-    clear_providers()
+    await clear_providers()
     p3 = get_provider("gemini")
     assert p3 is not p1

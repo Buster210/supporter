@@ -59,7 +59,7 @@ ignore = ["S101", "B019", "UP043"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["T201"]
-"scripts/**" = ["T201"]
+"scripts/**" = ["T201", "ASYNC240"]
 "src/supporter/tools/file_ops.py" = ["T201"]
 "src/supporter/tools/browser/humanize.py" = ["S311"]
 "src/supporter/tools/browser/guardrails.py" = ["S311"]
@@ -74,7 +74,7 @@ indent-style = "space"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-m 'not e2e' --cov=src --cov-report=term-missing"
+addopts = "--cov=src --cov-report=term-missing"
 filterwarnings = [
     "ignore:.*deprecated.*:DeprecationWarning",
 ]

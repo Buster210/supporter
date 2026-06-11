@@ -344,6 +344,47 @@ class TestSubAgentRunner:
         assert result["id"] == "t1"
         assert result["status"] == TaskStatus.COMPLETED
         assert result["output"] == "Done"
+        assert result["step_count"] == 0
+        assert result["tokens"] == {}
+
+    @pytest.mark.asyncio
+    async def test_step_count_derived_from_afc_history(self) -> None:
+        task = {
+            "id": "t1",
+            "task": "task",
+            "tools": {"read_file"},
+            "model": "m",
+            "persona": "p",
+            "context": "c",
+            "timeout": 10,
+            "max_retries": 0,
+            "depends_on": [],
+        }
+        semaphore = asyncio.Semaphore(1)
+        mock_result = MagicMock()
+        mock_result.text = "Done"
+        mock_result.model = "m"
+        mock_result.usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        }
+        mock_result.automatic_function_calling_history = [object(), object(), object()]
+        mock_agent = MagicMock()
+        mock_agent.execute = AsyncMock(return_value=mock_result)
+
+        from supporter.tools.delegate.bus import DelegationBus
+
+        mock_bus = MagicMock(spec=DelegationBus)
+
+        with patch(
+            "supporter.tools.delegate.agents._create_sub_agent",
+            return_value=(mock_agent, "prompt"),
+        ):
+            result = await run_sub_agent(task, semaphore, mock_bus, "job1")
+
+        assert result["step_count"] == 3
+        assert result["tokens"] == mock_result.usage
 
     @pytest.mark.asyncio
     async def test_timeout(self) -> None:
@@ -431,6 +472,8 @@ class TestSubAgentRunner:
         assert result["status"] == TaskStatus.COMPLETED
         assert result["output"] == "changed a.py"
         assert result["model"] == "google/x"
+        assert result["step_count"] == 0
+        assert result["tokens"] == {}
 
     def test_build_spec_includes_result_contract(self) -> None:
         from supporter.tools.delegate.opencode_backend import _build_spec
@@ -881,6 +924,96 @@ class TestOutputTailTruncation:
             "sources": 1,
         }
         assert event.handoff == "Render capsule fields in task completion UI"
+
+    @pytest.mark.asyncio
+    async def test_completed_event_includes_efficiency_fields(self) -> None:
+        tasks = [
+            {
+                "id": "a",
+                "task": "t",
+                "tools": {"read_file"},
+                "model": "m",
+                "persona": "p",
+                "context": "",
+                "timeout": 10,
+                "depends_on": [],
+            }
+        ]
+        semaphore = asyncio.Semaphore(1)
+
+        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
+            mock_run.return_value = {
+                "id": "a",
+                "status": TaskStatus.COMPLETED,
+                "output": "out_a",
+                "duration": 1.0,
+                "model": "m",
+                "tokens": {
+                    "prompt_tokens": 7,
+                    "completion_tokens": 3,
+                    "total_tokens": 10,
+                },
+                "step_count": 4,
+            }
+            from supporter.tools.delegate.bus import DelegationBus
+
+            mock_bus = MagicMock(spec=DelegationBus)
+            await create_capsule("eff_job", "test", tasks, 1)
+            await _execute_dag(tasks, semaphore, semaphore, mock_bus, "eff_job")
+
+        completion_events = [
+            call.args[0]
+            for call in mock_bus.publish.call_args_list
+            if isinstance(call.args[0], TaskCompleted)
+        ]
+        assert len(completion_events) == 1
+        event = completion_events[0]
+        assert event.tokens == {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        }
+        assert event.step_count == 4
+
+    @pytest.mark.asyncio
+    async def test_completed_event_defaults_efficiency_fields(self) -> None:
+        tasks = [
+            {
+                "id": "a",
+                "task": "t",
+                "tools": {"read_file"},
+                "model": "m",
+                "persona": "p",
+                "context": "",
+                "timeout": 10,
+                "depends_on": [],
+            }
+        ]
+        semaphore = asyncio.Semaphore(1)
+
+        with patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run:
+            mock_run.return_value = {
+                "id": "a",
+                "status": TaskStatus.COMPLETED,
+                "output": "out_a",
+                "duration": 1.0,
+                "model": "m",
+            }
+            from supporter.tools.delegate.bus import DelegationBus
+
+            mock_bus = MagicMock(spec=DelegationBus)
+            await create_capsule("eff_job2", "test", tasks, 1)
+            await _execute_dag(tasks, semaphore, semaphore, mock_bus, "eff_job2")
+
+        completion_events = [
+            call.args[0]
+            for call in mock_bus.publish.call_args_list
+            if isinstance(call.args[0], TaskCompleted)
+        ]
+        assert len(completion_events) == 1
+        event = completion_events[0]
+        assert event.tokens == {}
+        assert event.step_count == 0
 
 
 class TestSerializeResults:

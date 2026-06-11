@@ -188,8 +188,11 @@ def init_logger() -> None:
 
 
 def shutdown_logger() -> None:
+    from .decision_log import shutdown_decision_logger
+
     _stop_queue_listener()
     _close_file_handler()
+    shutdown_decision_logger()
 
 
 def _stop_queue_listener() -> None:

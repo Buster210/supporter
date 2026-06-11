@@ -61,6 +61,30 @@ def _check_find_command(tokens: list[str]) -> bool:
     return any(token in risky_flags for token in tokens)
 
 
+def _find_exec_payload_tier(tokens: list[str]) -> int:
+    for i, token in enumerate(tokens):
+        if token in {"-exec", "-execdir", "-ok", "-okdir"} and i + 1 < len(tokens):
+            payload_token = tokens[i + 1]
+            payload_tokens = shlex.split(payload_token)
+            if payload_tokens:
+                binary_name = payload_tokens[0]
+                try:
+                    binary_path = verify_binary(binary_name)
+                    if binary_path.name in BLOCKED_BINARIES:
+                        return TIER_BLOCK
+                    inner_command = shlex.join(payload_tokens)
+                    tier = apply_policy_checks(
+                        inner_command, payload_tokens, binary_name, TIER_SAFE
+                    )
+                    if tier >= TIER_BLOCK:
+                        return TIER_BLOCK
+                    if tier >= TIER_CONFIRM:
+                        return TIER_CONFIRM
+                except PermissionError:
+                    return TIER_BLOCK
+    return TIER_CONFIRM
+
+
 def _check_network_egress(binary_name: str, tokens: list[str]) -> int:
     command_string = " ".join(tokens)
     if "|" in command_string or "<" in command_string:
@@ -453,7 +477,8 @@ def apply_policy_checks(
         security_tier = max(security_tier, TIER_CONFIRM)
 
     if binary_name == "find" and _check_find_command(tokens):
-        security_tier = max(security_tier, TIER_CONFIRM)
+        exec_tier = _find_exec_payload_tier(tokens)
+        security_tier = max(security_tier, exec_tier)
 
     return security_tier
 

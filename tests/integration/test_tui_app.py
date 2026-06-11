@@ -163,3 +163,19 @@ class TestFlushQueuedMessages:
         app._flush_queued = flush  # type: ignore[method-assign]
         app._flush_queued()
         assert len(app._user_message_queue) == 0
+
+
+class TestFlushDoesNotWedge:
+    """Regression: the REAL flush must not leave _is_processing stuck True
+    when the queue is empty. Previously it set the flag before the empty-check
+    and early-returned, wedging the app permanently after the first turn."""
+
+    def test_real_flush_empty_queue_leaves_processing_false(self) -> None:
+        import asyncio
+        from types import SimpleNamespace
+
+        from supporter.tui import SupporterApp
+
+        stand_in = SimpleNamespace(_user_message_queue=[], _is_processing=False)
+        asyncio.run(SupporterApp._flush_queued_messages(stand_in))  # type: ignore[arg-type]
+        assert stand_in._is_processing is False

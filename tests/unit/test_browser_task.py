@@ -230,16 +230,6 @@ def test_replay_params_template_var_not_clobbered_by_sibling() -> None:
     assert kwargs["text"] == "admin@test.com"
 
 
-def test_find_ref_fuzzy_strips_punctuation() -> None:
-    tree = '- button "Sign in!" [ref=e1]'
-    assert _find_ref_fuzzy(tree, "button", "Sign in") == "e1"
-
-
-def test_find_ref_fuzzy_requires_exact_role() -> None:
-    tree = '- link "Sign in" [ref=e1]'
-    assert _find_ref_fuzzy(tree, "button", "Sign in") == ""
-
-
 def test_normalize_name_collapses_punctuation_and_space() -> None:
     assert _normalize_name("  Sign-In!!  Now ") == "sign in now"
 

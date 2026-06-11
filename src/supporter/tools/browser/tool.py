@@ -2,12 +2,44 @@ from __future__ import annotations
 
 import time
 
+from ...config import config
 from ...logger import logger
-from .core import BrowseRequest
+from . import guardrails, session
+from .core import BrowseRequest, _page_host
 from .handlers import HANDLERS
 from .recorder import _record_step
+from .support import _attach_viewport_image
 
-__all__ = ["browse"]
+__all__ = ["browse", "session"]
+
+# State-changing actions: after these, attach a viewport screenshot so the model
+# sees the page alongside the a11y snapshot (Live only — sink is None otherwise).
+# Excludes `screenshot` (its handler already sinks), `diff` (deliberate
+# token-saver), and read-only meta actions (status/tabs/extract/eval/cookies/
+# storage/close/closenow).
+_IMAGE_ACTIONS = frozenset(
+    {
+        "navigate",
+        "back",
+        "forward",
+        "snapshot",
+        "click",
+        "type",
+        "scroll",
+        "press",
+        "select",
+        "hover",
+        "tab",
+        "newtab",
+        "closetab",
+        "wait",
+        "waitnetwork",
+        "frame",
+        "upload",
+        "download",
+        "solve_cloudflare",
+    }
+)
 
 
 async def browse(
@@ -30,6 +62,8 @@ async def browse(
     path: str = "",
     stamp: str = "",
     variable: str = "",
+    full_page: bool = False,
+    brief: bool = False,
 ) -> str:
     """Browser automation -- and your PRIMARY tool for web search and research.
 
@@ -44,13 +78,27 @@ async def browse(
         navigate (url): load a URL.
         back: go back one history entry.
         forward: go forward one history entry.
-        snapshot (depth, compact): return the accessibility tree.
+        snapshot (depth, compact): return the accessibility tree. In a Live
+            session this and the other state-changing actions (navigate, click,
+            type, scroll, ...) also attach a viewport screenshot automatically,
+            so you see the page by default — no separate screenshot call needed.
+        read (url | selector, full_page): READ a page as clean article text.
+            This is your PRIMARY reading action for research: it extracts the
+            main content as markdown plus metadata (title/author/date/site) and
+            the in-content links, dropping nav/ads/boilerplate. Pass url to
+            navigate first (or SEVERAL urls separated by spaces/newlines to read
+            them in one batch); omit url to read the current page. selector
+            scopes to a container; full_page=True auto-scrolls to load lazy
+            content first. Prefer this over snapshot/extract for reading.
+        links (url | selector): list the in-content outbound links (text ->
+            absolute URL) so you can decide what to open and follow next.
         diff (depth): return only the lines that changed since the last
             snapshot of this page (+ added, - removed); far fewer tokens than
             a full re-snapshot after a small page change.
-        screenshot: capture the viewport, save it as a PNG artifact under the
-            project, and (in a Live session) show the image to the model so it
-            can see the page when the accessibility snapshot is insufficient.
+        screenshot: capture the viewport and save it as a PNG artifact under the
+            project (and show it to the model in a Live session). State-changing
+            actions already attach a viewport image automatically; use this when
+            you specifically want a saved PNG file.
         click (ref): click the element [ref=eN] from a snapshot.
         type (ref, text): type text into the element [ref=eN].
         hover (ref): move the cursor onto the element [ref=eN], no click.
@@ -129,6 +177,10 @@ async def browse(
         variable: While recording a task (start_task), tag this step's input as
             a named template variable so replay_playbook can override its value
             per run, e.g. type(..., text="alice", variable="username").
+        full_page: For read, auto-scroll the page to load lazy/infinite-scroll
+            content before extracting. Default False.
+        brief: If True, skip the lean-perception diff/snapshot pairing after
+            state-changing actions (screenshot still attaches). Use in hot loops.
 
     Returns:
         Snapshot text, confirmation prompt, or error message.
@@ -161,10 +213,110 @@ async def browse(
         path=path,
         stamp=stamp,
         variable=variable,
+        full_page=full_page,
+        brief=brief,
     )
     _t0 = time.perf_counter()
     result = await HANDLERS[action](req)
     await _record_step(req, result)
+
+    # WI-3: Record clean interaction for trust promotion
+    # Only count truly non-confirmation interactions: not in ALWAYS_CONFIRM set
+    # AND the handler didn't trigger a confirmation dialog
+    from .support import _last_confirmation_needed
+
+    success = not (isinstance(result, str) and result.startswith("Error"))
+    if (
+        success
+        and action not in guardrails._ALWAYS_CONFIRM_ACTIONS
+        and not _last_confirmation_needed.get()
+    ):
+        page = session.active_page()
+        if page is not None:
+            host = await _page_host(page)
+            await guardrails.record_clean_interaction(host)
+
+    if action in _IMAGE_ACTIONS and not (
+        isinstance(result, str) and result.startswith("Error")
+    ):
+        page = session.active_page()
+        if page is not None:
+            await _attach_viewport_image(page)
+            # Lean perception: auto-pair diff + screenshot
+            if not brief and action not in {
+                "navigate",
+                "newtab",
+                "back",
+                "forward",
+                "upload",
+                "download",
+                "frame",
+                "closetab",
+                "tab",
+                "wait",
+                "waitnetwork",
+                "solve_cloudflare",
+                "snapshot",
+            }:
+                from .snapshot import (
+                    clean_snapshot,
+                    diff_snapshot,
+                    filter_interactive,
+                    has_baseline,
+                    remember_snapshot,
+                )
+                from .support import _page_baseline_key, _page_key
+
+                bkey = _page_baseline_key(page)
+                page_url = _page_key(page)
+                raw_snap = await page.aria_snapshot(mode="ai")
+                cleaned = clean_snapshot(raw_snap, page_url)
+                assert isinstance(result, str)
+
+                prefix: str = ""
+                if has_baseline(bkey):
+                    diff_text = diff_snapshot(bkey, cleaned)
+                    diff_lines = [
+                        line
+                        for line in diff_text.splitlines()
+                        if line.startswith(("+", "-"))
+                    ]
+                    if len(diff_lines) <= config.browser_diff_threshold:
+                        added = sum(1 for line in diff_lines if line.startswith("+"))
+                        removed = sum(1 for line in diff_lines if line.startswith("-"))
+                        prefix = f"[diff: +{added}/-{removed} lines]\n{diff_text}"
+                    else:
+                        compact_snap = filter_interactive(cleaned)
+                        prefix = (
+                            f"[full snapshot:"
+                            f" {len(compact_snap.splitlines())}"
+                            f" interactive elements]\n{compact_snap}"
+                        )
+                else:
+                    compact_snap = filter_interactive(cleaned)
+                    remember_snapshot(bkey, cleaned)
+                    prefix = (
+                        f"[full snapshot:"
+                        f" {len(compact_snap.splitlines())}"
+                        f" interactive elements]\n{compact_snap}"
+                    )
+                if prefix:
+                    result = f"{prefix}\n\n{result}"
+
+    # WI-1: Cookbook auto-discovery hints on navigate/newtab
+    if action in {"navigate", "newtab"} and not (
+        isinstance(result, str) and result.startswith("Error")
+    ):
+        from .playbook_store import find_cookbook_hints
+
+        current_url = req.url or (
+            session.active_page().url if session.active_page() else ""
+        )
+        if current_url:
+            hints = find_cookbook_hints(current_url)
+            if hints:
+                result = result + "\n" + "\n".join(hints)
+
     _elapsed_ms = (time.perf_counter() - _t0) * 1000.0
     logger.debug(f"browse action={action} elapsed_ms={_elapsed_ms:.1f}")
     return result

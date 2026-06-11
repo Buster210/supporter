@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from .prompts import (
 )
 from .types import AppConfig
 
-__all__ = ["AppConfig", "config"]
+__all__ = ["AppConfig", "config", "reload_config"]
 
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
@@ -74,6 +75,8 @@ DELEGATE_MAX_RETRIES = 2
 
 DELEGATE_RESULT_REPAIR = True
 DELEGATE_CORRECTION_ROUNDS = 3
+DELEGATE_MIN_CONFIDENCE = "medium"
+DELEGATE_PERSIST_NONCODE = True
 DELEGATE_HEARTBEAT_INTERVAL = 30
 DELEGATE_ANOMALY_THRESHOLD = 0.8
 DELEGATE_JOB_ID_LEN = 8
@@ -89,6 +92,17 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ValueError(f"${name} must be an integer, got: {raw!r}") from exc
+
+
+def _confidence_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    value = raw.lower()
+    allowed = {"low", "medium", "high"}
+    if value not in allowed:
+        raise ValueError(f"${name} must be one of {allowed}, got: {raw!r}")
+    return value
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -185,6 +199,12 @@ def load_config() -> AppConfig:
         delegate_correction_rounds=_int_env(
             "DELEGATE_CORRECTION_ROUNDS", DELEGATE_CORRECTION_ROUNDS
         ),
+        delegate_min_confidence=_confidence_env(
+            "DELEGATE_MIN_CONFIDENCE", DELEGATE_MIN_CONFIDENCE
+        ),
+        delegate_persist_noncode=_bool_env(
+            "DELEGATE_PERSIST_NONCODE", DELEGATE_PERSIST_NONCODE
+        ),
         delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
         delegate_result_repair=_bool_env(
             "DELEGATE_RESULT_REPAIR", DELEGATE_RESULT_REPAIR
@@ -209,7 +229,6 @@ def load_config() -> AppConfig:
         reconnect_backoff_base=float(os.getenv("RECONNECT_BACKOFF_BASE", "0.5")),
         reconnect_backoff_cap=float(os.getenv("RECONNECT_BACKOFF_CAP", "8.0")),
         prewarm_safety_margin=float(os.getenv("PREWARM_SAFETY_MARGIN", "5.0")),
-        keepalive_enabled=_bool_env("KEEPALIVE_ENABLED", True),
         idle_monitor_enabled=_bool_env(
             "IDLE_MONITOR_ENABLED",
             _bool_env("KEEPALIVE_ENABLED", True),
@@ -219,3 +238,15 @@ def load_config() -> AppConfig:
 
 
 config = load_config()
+
+
+def reload_config() -> AppConfig:
+    """Reload config from env, mutating the existing module-global ``config``
+    object in place so all importers that did ``from .config import config``
+    automatically see the updated values without rebinding.
+    """
+    global config
+    fresh = load_config()
+    for f in dataclasses.fields(AppConfig):
+        setattr(config, f.name, getattr(fresh, f.name))
+    return config

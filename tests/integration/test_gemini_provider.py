@@ -26,7 +26,7 @@ async def test_gemini_provider_generate(mock_genai_client: Any) -> None:
         },
         clear=True,
     ):
-        index.clear_providers()
+        await index.clear_providers()
         index.config = load_config()
         provider = get_provider("gemini")
         assert "gemini" in provider.get_name().lower()
@@ -47,7 +47,7 @@ async def test_provider_streaming(mock_genai_client: Any) -> None:
         },
         clear=True,
     ):
-        index.clear_providers()
+        await index.clear_providers()
         index.config = load_config()
         provider = get_provider("gemini")
         chunks = []
@@ -168,7 +168,7 @@ async def test_provider_options_propagation(mock_genai_client: Any) -> None:
         },
         clear=True,
     ):
-        index.clear_providers()
+        await index.clear_providers()
         index.config = load_config()
         provider = get_provider("gemini")
         await provider.generate(

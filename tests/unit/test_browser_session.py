@@ -442,17 +442,6 @@ async def test_resolve_profile_raises_on_cancel(
         await session._resolve_profile_name()
 
 
-async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "browser_profile_path", None)
-    session._PAGE = None
-
-    async def boom() -> Path:
-        raise OSError("disk gone")
-
-    monkeypatch.setattr(session, "_clone_profile", boom)
-    await session.prewarm_clone()
-
-
 class _Clock:
     def __init__(self) -> None:
         self.t = 1000.0

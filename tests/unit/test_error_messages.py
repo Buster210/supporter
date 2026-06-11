@@ -23,8 +23,8 @@ def _make_app() -> tuple[MagicMock, MagicMock]:
     app.active_turn = chat_view
 
     app._mount_user_turn = AsyncMock()
-    app._start_thinking = MagicMock()
-    app._stop_thinking = MagicMock()
+    app.start_thinking = MagicMock()
+    app.stop_thinking = MagicMock()
     app._flush_queued_messages = AsyncMock()
 
     return app, chat_view

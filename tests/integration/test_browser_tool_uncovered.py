@@ -71,7 +71,9 @@ async def test_record_locator_no_ref_path(fake_session: FakeSession) -> None:
     assert result is None
 
 
-async def test_confirm_or_block_callback_none(fake_session: FakeSession) -> None:
+async def test_browse_confirm_or_block_no_callback(
+    fake_session: FakeSession,
+) -> None:
     import supporter.tools.browser.guardrails as guardrails
 
     original_callback = guardrails.browse_confirmation_callback

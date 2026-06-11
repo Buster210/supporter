@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
+import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
@@ -13,6 +15,7 @@ if TYPE_CHECKING:
 
 from ..config import config
 from ..logger import logger
+from ..recovery_metrics import record_key_rotation
 from ..tools.resolver import (
     ensure_function_search_tool,
     resolve_live_provider_tools,
@@ -156,6 +159,7 @@ class GeminiLiveProvider:
     def _rotate_key(self) -> None:
         self._current_key_index = (self._current_key_index + 1) % len(self.api_keys)
         self._client = None
+        record_key_rotation()
 
     def _emit(self, event: str, data: dict[str, Any] | None = None) -> None:
         if self.recovery_observer is None:
@@ -248,10 +252,19 @@ class GeminiLiveProvider:
                         f"model={self.model_name}, "
                         f"key_index={self._current_key_index}"
                     )
-                    self._session_manager = self.client.aio.live.connect(
+                    session_manager = self.client.aio.live.connect(
                         model=self.model_name, config=session_config
                     )
-                    self._session = await self._session_manager.__aenter__()
+                    try:
+                        self._session_manager = session_manager
+                        self._session = await session_manager.__aenter__()
+                    except Exception:
+                        # Clean up the un-entered session manager to prevent leak.
+                        self._session_manager = None
+                        self._session = None
+                        with contextlib.suppress(Exception):
+                            await session_manager.__aexit__(None, None, None)
+                        raise
                     logger.info(
                         f"Live session established: model={self.model_name}, "
                         f"key_index={self._current_key_index}"
@@ -440,7 +453,7 @@ class GeminiLiveProvider:
         from google.genai import types
 
         await self._session.send_realtime_input(
-            media=types.Blob(data=data, mime_type=mime_type)
+            video=types.Blob(data=data, mime_type=mime_type)
         )
 
     async def _reinject_recent_images(self, session: Any) -> None:
@@ -449,7 +462,7 @@ class GeminiLiveProvider:
                 from google.genai import types
 
                 await session.send_realtime_input(
-                    media=types.Blob(data=data, mime_type=mime_type)
+                    video=types.Blob(data=data, mime_type=mime_type)
                 )
             except Exception as exc:
                 logger.warning(
@@ -795,9 +808,10 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
-                    summary = _summarize_live_response(response)
-                    if summary is not None:
-                        logger.debug(f"Live receive: {summary}")
+                    if logger.isEnabledFor(logging.DEBUG):
+                        summary = _summarize_live_response(response)
+                        if summary is not None:
+                            logger.debug("Live receive: %s", summary)
                     if response.tool_call:
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(
@@ -887,7 +901,7 @@ class GeminiLiveProvider:
                 logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
                 self._last_turn_complete = True
                 self._reconnect_pending = True
-                yield LLMChunk(text="", is_last=True, model=self.model_name)
+                raise
             finally:
                 # ALWAYS run the turn-end epilogue, even if a consumer
                 # breaks early (async generator aclose() injects
@@ -907,8 +921,6 @@ class GeminiLiveProvider:
     async def _teardown_session(self) -> None:
         async with self._session_lock:
             if self._session_manager:
-                import contextlib
-
                 # ALWAYS null the session pointers, even on CancelledError.
                 # contextlib.suppress(Exception) does NOT catch CancelledError
                 # (BaseException in 3.9+). If a turn cancels the monitor

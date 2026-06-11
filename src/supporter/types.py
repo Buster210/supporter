@@ -72,6 +72,8 @@ class AppConfig:
     delegate_agent_roster: dict[str, dict[str, Any]]
     delegate_max_retries: int
     delegate_correction_rounds: int = 3
+    delegate_min_confidence: str = "medium"
+    delegate_persist_noncode: bool = True
     delegate_qa_gate_enabled: bool = True
     delegate_result_repair: bool = True
     delegate_tier1_commands: list[list[str]] = field(default_factory=list)
@@ -92,10 +94,6 @@ class AppConfig:
     reconnect_backoff_base: float = 0.5
     reconnect_backoff_cap: float = 8.0
     prewarm_safety_margin: float = 5.0
-    # Deprecated: kept only as the fallback default for idle_monitor_enabled
-    # when IDLE_MONITOR_ENABLED env var is unset. The provider no longer
-    # reads this directly.
-    keepalive_enabled: bool = True
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
 

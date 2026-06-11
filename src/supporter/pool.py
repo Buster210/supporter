@@ -35,6 +35,7 @@ __all__ = [
     "get_provider",
     "is_model_error",
     "is_rate_limit",
+    "reset_model_cooldowns",
     "should_trigger_fallback",
 ]
 
@@ -102,25 +103,35 @@ def should_trigger_fallback(error: Any) -> bool:
 
 def _prune_expired_cooldowns() -> None:
     now = datetime.now()
-    expired = [name for name, exp in _model_cooldowns.items() if now > exp]
-    for name in expired:
-        del _model_cooldowns[name]
-        logger.info(f"Model '{name}' cooldown expired — re-enabling")
+    with _provider_lock:
+        expired = [name for name, exp in _model_cooldowns.items() if now > exp]
+        for name in expired:
+            del _model_cooldowns[name]
+            logger.info(f"Model '{name}' cooldown expired — re-enabling")
 
 
 def _is_model_in_cooldown(model_name: str) -> bool:
     _prune_expired_cooldowns()
-    return model_name in _model_cooldowns
+    with _provider_lock:
+        return model_name in _model_cooldowns
 
 
 def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
     expiry = datetime.now() + timedelta(minutes=minutes)
-    _model_cooldowns.pop(model_name, None)
-    _model_cooldowns[model_name] = expiry
+    with _provider_lock:
+        _model_cooldowns.pop(model_name, None)
+        _model_cooldowns[model_name] = expiry
     logger.info(
         f"Model '{model_name}' placed in cooldown until "
         f"{expiry.strftime('%Y-%m-%d %H:%M:%S')} — repeated 5XX errors"
     )
+
+
+def reset_model_cooldowns() -> None:
+    """Clear all model cooldowns in place (test isolation / reconfiguration)."""
+    global _model_cooldowns
+    with _provider_lock:
+        _model_cooldowns.clear()
 
 
 class DynamicPool(LLMProvider):
@@ -366,8 +377,15 @@ class LazyFallbackProvider(LLMProvider):
                 await close_fn()
 
 
-def clear_providers() -> None:
+async def clear_providers() -> None:
     logger.info("Clearing provider registry")
+    for provider in list(_provider_registry.values()):
+        close_fn = getattr(provider, "close", None)
+        if close_fn:
+            try:
+                await close_fn()
+            except Exception:
+                logger.debug("Error closing provider", exc_info=True)
     _provider_registry.clear()
 
 
@@ -382,13 +400,6 @@ def get_provider(
 ) -> LLMProvider:
     target_type = provider_type or config.provider
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
-
-    if shared and cache_key in _provider_registry:
-        logger.debug(f"Provider cache hit: {cache_key}")
-        provider = _provider_registry[cache_key]
-        if live and registry and hasattr(provider, "registry"):
-            provider.registry.update(registry)
-        return provider
 
     with _provider_lock:
         if shared and cache_key in _provider_registry:

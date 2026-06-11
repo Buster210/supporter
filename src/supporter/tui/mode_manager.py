@@ -77,6 +77,9 @@ class ModeManager:
         self._app._message_processor.wire_recovery_observer(self._app.agent)
 
     async def toggle_mode(self, live: bool | None = None) -> None:
+        if self._app._is_processing:
+            return
+
         if live is not None and self._app.live_mode == live:
             from .bubble import MessageBubble
 

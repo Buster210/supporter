@@ -176,3 +176,30 @@ def test_close_file_handler_close_exception() -> None:
     finally:
         supporter.logger._file_handler = original
     assert "Failed to close supporter log handler" in captured.getvalue()
+
+
+def test_shutdown_logger_flushes_decisions_queue(tmp_path: Any) -> None:
+    """Verify shutdown_logger stops the decisions queue listener on shutdown."""
+    from supporter import decision_log
+    from supporter.decision_log import log_decision
+    from supporter.logger import shutdown_logger
+
+    log_file = tmp_path / "supporter.log"
+    with patch("supporter.config.config.log_file", str(log_file)):
+        init_logger()
+        log_decision("test.site", "choice")
+
+        # Verify decisions logger is set up with queue listener
+        assert decision_log._decisions_queue_listener is not None
+
+        # Shutdown should stop the listener
+        shutdown_logger()
+
+        # Listener should be stopped and cleared
+        assert decision_log._decisions_queue_listener is None
+
+    # Clean up main logger
+    import supporter.logger as logger_mod
+
+    logger_mod._file_handler = None
+    logger_mod._queue_listener = None

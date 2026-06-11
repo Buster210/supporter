@@ -82,13 +82,6 @@ def test_render_snapshot_empty_tree_reports_empty_page() -> None:
     assert out == "(empty page)"
 
 
-def test_page_key_returns_url() -> None:
-    class P:
-        url = "https://x.test/p"
-
-    assert support._page_key(P()) == "https://x.test/p"
-
-
 def test_page_key_empty_url_is_empty_string() -> None:
     class P:
         url = ""

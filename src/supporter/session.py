@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .logger import logger
+
 
 def new_session_id() -> str:
     return f"session_{int(time.time() * 1000)}_{uuid4().hex[:6]}"
@@ -59,6 +61,8 @@ def _serialize_content(content: Any, images_dir: Path | None = None) -> dict[str
                 img_path = images_dir / fname
                 img_path.write_bytes(img_data)
                 sp["image"]["image_ref"] = str(img_path)
+            else:
+                logger.warning("Image part has no data; skipping image_ref")
         serialized_parts.append(sp)
     return {
         "role": getattr(content, "role", "user"),
@@ -94,8 +98,6 @@ def _deserialize_content(record: dict[str, Any]) -> Any:
                     )
                 )
             )
-        elif "unsupported" in sp:
-            continue
         elif "image" in sp:
             ref = sp["image"].get("image_ref")
             if ref and Path(ref).exists():
@@ -110,6 +112,11 @@ def _deserialize_content(record: dict[str, Any]) -> Any:
                         )
                     )
                 )
+            else:
+                logger.warning(
+                    f"Image ref {ref!r} missing; inserting placeholder"
+                )
+                parts.append(Part(text="[image unavailable]"))
         else:
             continue
     if not parts:

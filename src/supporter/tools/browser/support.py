@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,11 @@ from ..file_ops import validate_path
 from . import guardrails, humanize, session, snapshot
 from .core import BrowseRequest, _page_host
 
+# WI-3: Track whether last _confirm_or_block needed confirmation
+_last_confirmation_needed: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_last_confirmation_needed", default=False
+)
+
 __all__ = [
     "_EVAL_DETAIL_MAX",
     "_NAV_MAX_ATTEMPTS",
@@ -23,6 +29,7 @@ __all__ = [
     "_REF_VISIBLE_TIMEOUT_MS",
     "_ROLE_NAME_JS",
     "_SETTLE_TIMEOUT_MS",
+    "_attach_viewport_image",
     "_capture",
     "_confirm_always",
     "_confirm_or_block",
@@ -210,6 +217,9 @@ def _record_locator(page: Any, req: BrowseRequest) -> Any:
 
 
 async def _confirm_or_block(page: Any, req: BrowseRequest, locator: Any) -> str | None:
+    # WI-3: Reset confirmation flag each invocation
+    _last_confirmation_needed.set(False)
+
     if locator is not None:
         aria_role, aria_name = await _resolve_role_and_name(locator, req.ref)
     else:
@@ -218,6 +228,9 @@ async def _confirm_or_block(page: Any, req: BrowseRequest, locator: Any) -> str 
 
     if not guardrails.needs_confirmation(req.action, aria_role, aria_name, host):
         return None
+
+    # WI-3: Mark that confirmation was needed (for trust promotion filtering)
+    _last_confirmation_needed.set(True)
 
     target = req.ref or f"frame selector {req.selector!r}"
     detail = (
@@ -352,6 +365,24 @@ async def _post_action_snapshot(page: Any, req: BrowseRequest) -> str:
     with contextlib.suppress(PlaywrightTimeoutError):
         await page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
     return await _capture(page, req, force_full=False, label=f" after {req.action}")
+
+
+async def _attach_viewport_image(page: Any) -> None:
+    """Push a viewport screenshot to the model via the image sink, if wired.
+
+    In a Live session ``guardrails.browse_image_sink`` is registered, so the
+    model sees the page alongside the a11y snapshot. In non-live sessions the
+    sink is ``None`` and this is a no-op (no AFC image path exists there).
+    Best-effort: never raises, so it can't break a tool result.
+    """
+    sink = guardrails.browse_image_sink
+    if sink is None:
+        return
+    try:
+        img_bytes = await page.screenshot(type="png", full_page=False)
+        await sink(img_bytes, "image/png")
+    except Exception:
+        logger.debug("auto image attach failed", exc_info=True)
 
 
 async def _diff_text(page: Any, req: BrowseRequest) -> str:

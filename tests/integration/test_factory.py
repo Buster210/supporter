@@ -9,20 +9,22 @@ from supporter.config import load_config
 from supporter.pool import LLMResult, get_provider
 
 
-def test_default_to_gemini() -> None:
+@pytest.mark.asyncio
+async def test_default_to_gemini() -> None:
     with patch.dict(
         os.environ,
         {"GEMINI_API_KEY": "test-key"},  # pragma: allowlist secret
         clear=True,
     ):
-        index.clear_providers()
+        await index.clear_providers()
         index.config = load_config()
         provider = get_provider()
         name = provider.get_name().lower()
         assert "gemini" in name or "gemma" in name
 
 
-def test_detect_provider_from_env() -> None:
+@pytest.mark.asyncio
+async def test_detect_provider_from_env() -> None:
     with patch.dict(
         os.environ,
         {
@@ -30,14 +32,15 @@ def test_detect_provider_from_env() -> None:
             "GEMINI_API_KEY": "test-key",  # pragma: allowlist secret
         },
     ):
-        index.clear_providers()
+        await index.clear_providers()
         index.config = load_config()
         provider = get_provider()
         assert "gemini" in provider.get_name().lower()
 
 
-def test_unsupported_provider_type() -> None:
-    index.clear_providers()
+@pytest.mark.asyncio
+async def test_unsupported_provider_type() -> None:
+    await index.clear_providers()
     with pytest.raises(ValueError, match="Unsupported provider type"):
         get_provider("unsupported")
 
@@ -62,7 +65,7 @@ async def test_multiple_api_keys_round_robin() -> None:
         ),
         patch("supporter.pool.GeminiProvider", side_effect=mock_provider_factory),
     ):
-        index.clear_providers()
+        await index.clear_providers()
         index.config = load_config()
         provider = get_provider()
         await provider.generate("test")
@@ -71,8 +74,9 @@ async def test_multiple_api_keys_round_robin() -> None:
 
 
 @pytest.mark.integration
-def test_invalid_api_key_handling() -> None:
-    index.clear_providers()
+@pytest.mark.asyncio
+async def test_invalid_api_key_handling() -> None:
+    await index.clear_providers()
     with patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=True):
         index.config = load_config()
         with pytest.raises(ValueError, match="missing"):
@@ -80,8 +84,9 @@ def test_invalid_api_key_handling() -> None:
 
 
 @pytest.mark.integration
-def test_missing_env_vars() -> None:
-    index.clear_providers()
+@pytest.mark.asyncio
+async def test_missing_env_vars() -> None:
+    await index.clear_providers()
     with patch.dict(os.environ, {}, clear=True):
         index.config = load_config()
         with pytest.raises((ValueError, KeyError)):
@@ -89,8 +94,9 @@ def test_missing_env_vars() -> None:
 
 
 @pytest.mark.integration
-def test_multiple_provider_selection() -> None:
-    index.clear_providers()
+@pytest.mark.asyncio
+async def test_multiple_provider_selection() -> None:
+    await index.clear_providers()
     with patch.dict(
         os.environ,
         {"GEMINI_API_KEY": "test-key"},  # pragma: allowlist secret
@@ -104,8 +110,9 @@ def test_multiple_provider_selection() -> None:
 
 
 @pytest.mark.integration
-def test_provider_priority_order() -> None:
-    index.clear_providers()
+@pytest.mark.asyncio
+async def test_provider_priority_order() -> None:
+    await index.clear_providers()
     with patch.dict(
         os.environ,
         {"GEMINI_API_KEY": "test-key"},  # pragma: allowlist secret

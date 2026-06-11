@@ -42,6 +42,6 @@ async def test_browse_navigate_snapshot_click_type(throwaway_browser: None) -> N
     after_click = await browse("click", ref=click_ref)
     assert "clicked" in after_click
 
-    type_ref = _first_ref(after_click, "textbox")
+    type_ref = _first_ref(snap, "textbox")
     after_type = await browse("type", ref=type_ref, text="hello")
     assert "typed:hello" in after_type

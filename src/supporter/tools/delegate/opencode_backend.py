@@ -108,8 +108,8 @@ async def run_opencode(
         await asyncio.wait_for(_stream_stdout(), timeout=task["timeout"])
     except TimeoutError, asyncio.CancelledError:
         proc.kill()
-        with contextlib.suppress(ProcessLookupError):
-            await asyncio.shield(proc.wait())
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
         raise
 
     # Reap the process to get return code (already exited if we got all stdout)
@@ -117,8 +117,8 @@ async def run_opencode(
         await proc.wait()
     except TimeoutError, asyncio.CancelledError:
         proc.kill()
-        with contextlib.suppress(ProcessLookupError):
-            await asyncio.shield(proc.wait())
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
         raise
 
     output = b"".join(stdout_buffer).decode("utf-8", errors="replace").strip()

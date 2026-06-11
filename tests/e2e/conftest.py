@@ -54,7 +54,7 @@ class MockLLMProvider(LLMProvider):
 
 
 @pytest.fixture(autouse=True)
-def setup_test_env() -> Generator[None, None, None]:
+async def setup_test_env() -> AsyncIterator[None]:
     with patch.dict(
         os.environ,
         {
@@ -65,7 +65,7 @@ def setup_test_env() -> Generator[None, None, None]:
         clear=True,
     ):
         yield
-    clear_providers()
+    await clear_providers()
 
 
 @pytest.fixture
