@@ -23,3 +23,6 @@ dist/
 # test artifact: tests/unit/test_bash.py touches this in CWD
 mutation_test
 .claude/workers/
+
+# scraped scratch artifacts (X.com job posts) — not part of the codebase
+post_*.md
