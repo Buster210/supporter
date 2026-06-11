@@ -93,13 +93,6 @@ def _int_env(name: str, default: int) -> int:
         raise ValueError(f"${name} must be an integer, got: {raw!r}") from exc
 
 
-def _str_env(name: str, default: str) -> str:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    return raw
-
-
 def _confidence_env(name: str, default: str) -> str:
     raw = os.getenv(name)
     if raw is None or raw == "":

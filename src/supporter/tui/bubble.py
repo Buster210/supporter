@@ -213,9 +213,9 @@ class MessageBubble(Vertical):
         container = self._elements_container
         if not container.is_attached:
             return
-        current_widgets = list(container.query("*"))
+        current_widgets = list(container.children)
         if self._ensure_correct_widget_count(container, current_widgets):
-            current_widgets = list(container.query("*"))
+            current_widgets = list(container.children)
         self._refresh_widget_content(current_widgets)
 
     def _ensure_correct_widget_count(

@@ -1,7 +1,6 @@
 from typing import Any
 
 MODEL_GEMMA_31B = "gemma-4-31b-it"
-MODEL_GEMMA_26B = "gemma-4-26b-a4b-it"
 MODEL_GEMINI_LIVE = "gemini-3.1-flash-live-preview"
 MODEL_GEMINI_LIVE_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
 

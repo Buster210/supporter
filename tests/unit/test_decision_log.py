@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,9 +24,13 @@ def _reset_decision_log_state() -> Iterator[None]:
     lg = decision_log._decisions_logger
     if lg is not None:
         for handler in lg.handlers[:]:
-            handler.close()
             lg.removeHandler(handler)
     decision_log._decisions_logger = None
+    decision_log._decisions_file_handler = None
+    listener = decision_log._decisions_queue_listener
+    decision_log._decisions_queue_listener = None
+    if listener is not None:
+        listener.stop()
     decision_log._RING.clear()
 
 
@@ -50,8 +55,9 @@ def test_log_decision_writes_json_line_to_sibling_file(tmp_path: Path) -> None:
             reason="Dependency 'x' failed",
             correlation_id="job1:t2",
         )
-        for handler in decision_log._decisions_logger.handlers:  # type: ignore[union-attr]
-            handler.flush()
+        # Stop the queue listener to flush pending records to the file
+        if decision_log._decisions_queue_listener is not None:
+            decision_log._decisions_queue_listener.stop()
 
         log_path = tmp_path / "decisions.log"
         assert log_path.exists()
@@ -131,3 +137,23 @@ def test_brain_hook_records_text_response_when_no_tool() -> None:
     agent._record_brain_decision("just chatting", _make_result(None))
 
     assert recent_decisions()[-1].chosen == "text_response"
+
+
+def test_decisions_logger_uses_queue_handler(tmp_path: Path) -> None:
+    """Verify decisions logger uses QueueHandler for non-blocking I/O."""
+    with patch("supporter.config.config.log_file", str(tmp_path / "app.log")):
+        log_decision("test.site", "choice")
+
+        # Check that logger has a QueueHandler
+        lg = decision_log._decisions_logger
+        assert lg is not None
+        queue_handlers = [
+            h for h in lg.handlers if isinstance(h, logging.handlers.QueueHandler)
+        ]
+        assert len(queue_handlers) == 1, "Expected QueueHandler on decisions logger"
+
+        # Check that a QueueListener is running with the RotatingFileHandler
+        listener = decision_log._decisions_queue_listener
+        assert listener is not None, "Expected QueueListener to be started"
+        assert len(listener.handlers) == 1
+        assert isinstance(listener.handlers[0], logging.handlers.RotatingFileHandler)

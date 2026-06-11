@@ -43,6 +43,8 @@ _TIER2_ROLES = ("test_engineer", "code_reviewer", "security_auditor")
 
 _FINDING_ROLES = ("explorer", "security_auditor", "code_reviewer")
 
+_JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
 
 def _gemini_predicate_failure(output: str, agent: str | None) -> str | None:
     """Check gemini output quality; return failure reason or None.
@@ -89,7 +91,7 @@ def _gemini_predicate_passed(output: str, agent: str | None) -> bool:
 
 def _parse_delegation_result(output: str) -> dict[str, Any] | None:
     """Parse the structured delegation result from output text."""
-    match = re.search(r"```json\s*(\{.*?\})\s*```", output, re.DOTALL)
+    match = _JSON_FENCE_RE.search(output)
     if match:
         try:
             data = json.loads(match.group(1))

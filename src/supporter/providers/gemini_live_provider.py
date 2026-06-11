@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
@@ -807,9 +808,10 @@ class GeminiLiveProvider:
 
             try:
                 async for response in session.receive():
-                    summary = _summarize_live_response(response)
-                    if summary is not None:
-                        logger.debug(f"Live receive: {summary}")
+                    if logger.isEnabledFor(logging.DEBUG):
+                        summary = _summarize_live_response(response)
+                        if summary is not None:
+                            logger.debug("Live receive: %s", summary)
                     if response.tool_call:
                         for fc in response.tool_call.function_calls:
                             yield LLMChunk(
