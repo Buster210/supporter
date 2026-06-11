@@ -113,6 +113,14 @@ class TestDetectPython:
     def test_no_pyproject_yields_empty(self, tmp_path: Path) -> None:
         assert _detect_python(tmp_path) == []
 
+    def test_invalid_toml_in_pyproject_yields_empty(self, tmp_path: Path) -> None:
+        """TOMLDecodeError branch in _pyproject_has_section must not raise."""
+        (tmp_path / "pyproject.toml").write_text("[[[ invalid")
+        # No tests/ dir, no venv; invalid TOML must not raise, just return [].
+        with patch.object(shutil, "which", return_value=None):
+            result = _detect_python(tmp_path)
+        assert result == []
+
     def test_drops_tools_that_cannot_be_resolved(self, tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text("[tool.ruff]\n[tool.mypy]\n")
         with patch.object(shutil, "which", return_value=None):
@@ -147,6 +155,21 @@ class TestDetectNode:
         (tmp_path / "package.json").write_text(json.dumps({}))
         assert _detect_node(tmp_path) == []
 
+    def test_invalid_json_in_package_json_yields_empty(self, tmp_path: Path) -> None:
+        """Covers tier1_checks.py:105-106 — JSONDecodeError branch."""
+        (tmp_path / "package.json").write_text("{ not valid json")
+        assert _detect_node(tmp_path) == []
+
+    def test_npm_not_resolvable_yields_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Covers tier1_checks.py:113 — npm not found branch."""
+        (tmp_path / "package.json").write_text(
+            json.dumps({"scripts": {"lint": "eslint ."}})
+        )
+        monkeypatch.setattr(tier1_checks, "_resolve_tool", lambda repo, tool: None)
+        assert _detect_node(tmp_path) == []
+
 
 class TestResolveTier1Commands:
     def test_explicit_config_override_returned_verbatim(
@@ -167,6 +190,16 @@ class TestResolveTier1Commands:
         # Returned structure must be independent of the source list.
         out[0].append("mutated")
         assert cmd == ["echo", "x"]
+
+    def test_get_commands_uses_config_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Covers tier1_checks.py:130 — config override bypasses auto-detection."""
+        monkeypatch.setattr(app_config, "delegate_tier1_commands", [["pytest", "-v"]])
+        result = resolve_tier1_commands(tmp_path)
+        assert result == [["pytest", "-v"]]
+        # No pyproject or package.json needed — detection must have been skipped.
+        assert not (tmp_path / "pyproject.toml").exists()
 
 
 class TestRunObjectiveTier1:
@@ -271,6 +304,32 @@ class TestRunObjectiveTier1:
         assert ok is False
         assert "timed out" in report
         fake_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_output_truncated_when_exceeds_max_chars(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Covers tier1_checks.py:186 — long output is truncated with a marker."""
+        monkeypatch.setattr(app_config, "delegate_max_output_chars", 10)
+        long_output = b"A" * 200
+        fake_proc = MagicMock()
+        fake_proc.communicate = AsyncMock(return_value=(long_output, b""))
+        fake_proc.returncode = 0
+        with (
+            patch.object(
+                bash_sandbox,
+                "wrap_in_sandbox",
+                side_effect=lambda argv, cwd, root: list(argv),
+            ),
+            patch.object(
+                asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_proc)
+            ),
+        ):
+            ok, report = await run_objective_tier1(
+                tmp_path, [["echo", "lots"]], timeout=5.0
+            )
+        assert ok is True
+        assert "[Output truncated...]" in report
 
     @pytest.mark.asyncio
     async def test_sandbox_unavailable_raises_tool_unavailable(
