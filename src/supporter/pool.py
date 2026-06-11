@@ -35,6 +35,7 @@ __all__ = [
     "get_provider",
     "is_model_error",
     "is_rate_limit",
+    "reset_model_cooldowns",
     "should_trigger_fallback",
 ]
 
@@ -124,6 +125,13 @@ def _mark_model_cooldown(model_name: str, minutes: int = 30) -> None:
         f"Model '{model_name}' placed in cooldown until "
         f"{expiry.strftime('%Y-%m-%d %H:%M:%S')} — repeated 5XX errors"
     )
+
+
+def reset_model_cooldowns() -> None:
+    """Clear all model cooldowns in place (test isolation / reconfiguration)."""
+    global _model_cooldowns
+    with _provider_lock:
+        _model_cooldowns.clear()
 
 
 class DynamicPool(LLMProvider):

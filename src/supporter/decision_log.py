@@ -15,7 +15,7 @@ from typing import Any
 from .config import config
 from .logger import logger
 
-__all__ = ["DecisionEntry", "log_decision", "recent_decisions"]
+__all__ = ["DecisionEntry", "log_decision", "recent_decisions", "reset_decision_log"]
 
 _RING_CAPACITY = 256
 _DECISIONS_LOGGER_NAME = "supporter.decisions"
@@ -128,6 +128,15 @@ def log_decision(
 def recent_decisions() -> list[DecisionEntry]:
     """Snapshot of the in-memory decision ring, oldest first."""
     return list(_RING)
+
+
+def reset_decision_log() -> None:
+    """Clear the in-memory decision ring (test isolation / reconfiguration).
+
+    Does NOT touch the logger handle or the on-disk log file — call
+    ``shutdown_decision_logger()`` separately for that.
+    """
+    _RING.clear()
 
 
 def shutdown_decision_logger() -> None:

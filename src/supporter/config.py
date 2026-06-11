@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from .prompts import (
 )
 from .types import AppConfig
 
-__all__ = ["AppConfig", "config"]
+__all__ = ["AppConfig", "config", "reload_config"]
 
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
@@ -237,3 +238,15 @@ def load_config() -> AppConfig:
 
 
 config = load_config()
+
+
+def reload_config() -> AppConfig:
+    """Reload config from env, mutating the existing module-global ``config``
+    object in place so all importers that did ``from .config import config``
+    automatically see the updated values without rebinding.
+    """
+    global config
+    fresh = load_config()
+    for f in dataclasses.fields(AppConfig):
+        setattr(config, f.name, getattr(fresh, f.name))
+    return config
