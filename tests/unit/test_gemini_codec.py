@@ -18,7 +18,6 @@ from supporter.llm.types import (
     Message,
     TextPart,
     ToolCallPart,
-    ToolDef,
     ToolResultPart,
 )
 from supporter.providers.gemini_codec import (
@@ -26,7 +25,6 @@ from supporter.providers.gemini_codec import (
     content_to_message,
     gen_options_to_config,
     message_to_content,
-    tooldefs_to_gemini,
 )
 
 # ---------------------------------------------------------------------------
@@ -346,55 +344,3 @@ class TestGenOptionsToConfig:
         cfg = gen_options_to_config(opts, None, default_system_instruction="Fallback")
         assert cfg.system_instruction == "Fallback"
 
-
-# ---------------------------------------------------------------------------
-# tooldefs_to_gemini
-# ---------------------------------------------------------------------------
-
-
-class TestTooldefsToGemini:
-    def test_empty(self) -> None:
-        result = tooldefs_to_gemini([])
-        assert result == []
-
-    def test_callable_passed_through(self) -> None:
-        def my_tool(x: str) -> str:
-            return x
-
-        td = ToolDef(
-            name="my_tool", description="desc", parameters={}, callable=my_tool
-        )
-        result = tooldefs_to_gemini([td])
-        assert result[0] is my_tool
-
-    def test_search_tool_added(self) -> None:
-        result = tooldefs_to_gemini([], use_search=True, model_name="gemini-3.1-flash")
-        assert any(getattr(t, "google_search", None) is not None for t in result)
-
-    def test_code_execution_added(self) -> None:
-        result = tooldefs_to_gemini([], use_code_execution=True)
-        assert any(getattr(t, "code_execution", None) is not None for t in result)
-
-    def test_gemma_strips_code_execution(self) -> None:
-        result = tooldefs_to_gemini(
-            [], use_code_execution=True, model_name="gemma-4-31b-it"
-        )
-        assert not any(getattr(t, "code_execution", None) is not None for t in result)
-
-    def test_registry_functions_included(self) -> None:
-        def reg_tool() -> str:
-            return "ok"
-
-        registry = {"reg_tool": reg_tool}
-        result = tooldefs_to_gemini([], registry=registry)
-        assert reg_tool in result
-
-    def test_registry_deduplicates_declared(self) -> None:
-        def my_tool(x: str) -> str:
-            return x
-
-        td = ToolDef(name="my_tool", description="d", parameters={}, callable=my_tool)
-        registry = {"my_tool": lambda: "dup"}
-        result = tooldefs_to_gemini([td], registry=registry)
-        # my_tool callable appears once (from tooldef), registry dup skipped.
-        assert result.count(my_tool) == 1

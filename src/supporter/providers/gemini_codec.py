@@ -14,7 +14,6 @@ from ..llm.types import (
     Message,
     TextPart,
     ToolCallPart,
-    ToolDef,
     ToolResultPart,
 )
 
@@ -171,63 +170,6 @@ def gen_options_to_config(
         response_schema=extras.get("response_schema"),
         thinking_config=thinking,
     )
-
-
-def tooldefs_to_gemini(
-    tooldefs: list[ToolDef],
-    *,
-    use_search: bool = False,
-    use_code_execution: bool = False,
-    model_name: str = "",
-    registry: dict[str, Any] | None = None,
-) -> list[Any]:
-    """Build Gemini Tool objects from neutral ToolDefs + server-side tools.
-
-    Passes user callables through (AFC introspects them). Handles
-    google_search and code_execution server-side tools. Strips
-    code_execution from Gemma models.
-    """
-    from google.genai import types
-
-    final_tools: list[Any] = []
-    declared_names: set[str] = set()
-
-    # Add user callables from tooldefs — AFC introspects them directly.
-    for td in tooldefs:
-        final_tools.append(td.callable)
-        declared_names.add(td.name)
-
-    # Add registry functions not already declared.
-    if registry:
-        for name, func in registry.items():
-            if name not in declared_names:
-                final_tools.append(func)
-
-    is_gemma = model_name.lower().startswith("gemma")
-
-    # Server-side search tool.
-    if use_search:
-        has_server_search = any(
-            getattr(t, "google_search", None) is not None for t in final_tools
-        )
-        if not has_server_search:
-            final_tools.append(types.Tool(google_search=types.GoogleSearch()))
-
-    # Server-side code execution tool (skip for Gemma).
-    if use_code_execution and not is_gemma:
-        has_code_exec = any(
-            getattr(t, "code_execution", None) is not None for t in final_tools
-        )
-        if not has_code_exec:
-            final_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
-
-    # Gemma: strip code_execution if somehow present.
-    if is_gemma:
-        final_tools = [
-            t for t in final_tools if getattr(t, "code_execution", None) is None
-        ]
-
-    return final_tools
 
 
 def gemini_error_classes() -> tuple[type[BaseException], ...]:
