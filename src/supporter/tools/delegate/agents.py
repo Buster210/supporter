@@ -57,26 +57,6 @@ def _rotated_keys_for_role(role: str) -> list[str]:
     return [keys[(offset + i) % n] for i in range(n)]
 
 
-def _build_dedicated_provider(
-    task: dict[str, Any],
-    role: str,
-    registry: dict[str, Any],
-) -> LLMProvider:
-    keys = _rotated_keys_for_role(role)
-    if task.get("live"):
-        from ...providers.gemini_live_provider import GeminiLiveProvider
-
-        return GeminiLiveProvider(
-            keys,
-            model_name=task["model"],
-            registry=registry,
-            system_instruction=task["persona"],
-        )
-    from ...pool import DynamicPool
-
-    return DynamicPool(keys, task["model"], pool_size=1)
-
-
 def _create_sub_agent(
     task: dict[str, Any],
     provider: LLMProvider | None = None,
@@ -100,7 +80,15 @@ def _create_sub_agent(
         return cached, prompt
 
     if cache_key:
-        provider = _build_dedicated_provider(task, task["agent"], registry)
+        provider = get_provider(
+            shared=False,
+            live=task.get("live", False),
+            model_name=task["model"],
+            registry=registry,
+            system_instruction=task["persona"],
+            pool_size=1,
+            keys=_rotated_keys_for_role(task["agent"]),
+        )
     elif not provider:
         provider = get_provider(
             shared=False,

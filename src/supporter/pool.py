@@ -6,10 +6,7 @@ import weakref
 from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar
-
-if TYPE_CHECKING:
-    from .providers.gemini_live_provider import GeminiLiveProvider
+from typing import Any, ClassVar
 
 from .config import (
     HTTP_RATE_LIMIT,
@@ -395,6 +392,7 @@ def get_provider(
     registry: dict[str, Callable[..., Any]] | None = None,
     system_instruction: str | None = None,
     pool_size: int = 2,
+    keys: list[str] | None = None,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
@@ -413,7 +411,7 @@ def get_provider(
             )
 
         provider = PROVIDER_FACTORIES[target_type](
-            keys=config.gemini_api_keys,
+            keys=keys if keys is not None else config.gemini_api_keys,
             model_name=model_name,
             pool_size=pool_size,
             registry=registry,

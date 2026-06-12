@@ -1415,14 +1415,12 @@ class TestCacheKeyFunctions:
 
 
 class TestCreateSubAgent:
-    @patch("supporter.tools.delegate.agents._build_dedicated_provider")
     @patch("supporter.pool.get_provider")
     @patch("supporter.tools.delegate.agents.ChatAgent")
     def test_create_sub_agent_cache_hit_path(
         self,
         mock_agent_class: Any,
         mock_get_provider: Any,
-        mock_build_provider: Any,
     ) -> None:
         task = {
             "id": "t1",
@@ -1450,16 +1448,13 @@ class TestCreateSubAgent:
 
         mock_agent_class.assert_not_called()
         mock_get_provider.assert_not_called()
-        mock_build_provider.assert_not_called()
 
-    @patch("supporter.tools.delegate.agents._build_dedicated_provider")
     @patch("supporter.pool.get_provider")
     @patch("supporter.tools.delegate.agents.ChatAgent")
     def test_create_sub_agent_cache_key_with_new_agent_path(
         self,
         mock_agent_class: Any,
         mock_get_provider: Any,
-        mock_build_provider: Any,
     ) -> None:
         task = {
             "id": "t1",
@@ -1474,19 +1469,25 @@ class TestCreateSubAgent:
         mock_provider = MagicMock()
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
-        mock_build_provider.return_value = mock_provider
+        mock_get_provider.return_value = mock_provider
 
-        agent1, prompt1 = _create_sub_agent(task)
+        with patch("supporter.config.config.gemini_api_keys", ["key1", "key2"]):
+            agent1, prompt1 = _create_sub_agent(task)
 
-        assert agent1 is mock_agent
-        cache_key = _cache_key(task)
-        assert cache_key is not None
-        assert _cache.agents[cache_key] is mock_agent
-        assert cache_key in _cache.locks
+            assert agent1 is mock_agent
+            cache_key = _cache_key(task)
+            assert cache_key is not None
+            assert _cache.agents[cache_key] is mock_agent
+            assert cache_key in _cache.locks
 
-        mock_build_provider.assert_called_once()
+            # cached path now routes through the neutral factory with the
+            # role's rotated key list instead of building a vendor provider.
+            mock_get_provider.assert_called_once()
+            assert mock_get_provider.call_args.kwargs["keys"] == ["key1", "key2"]
+            assert mock_get_provider.call_args.kwargs["shared"] is False
+            assert mock_get_provider.call_args.kwargs["pool_size"] == 1
 
-        agent2, prompt2 = _create_sub_agent(task)
+            agent2, prompt2 = _create_sub_agent(task)
 
         assert agent2 is mock_agent
         assert agent2 is agent1
