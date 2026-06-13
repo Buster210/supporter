@@ -347,3 +347,68 @@ async def test_per_milestone_cap_is_effective_even_with_higher_global_cap() -> N
     assert len(results) == 5
     for result in results:
         assert result["status"] == TaskStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# P3 Item 4 — narrow job-semaphore hold
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_second_task_starts_sub_agent_while_first_is_in_qa() -> None:
+    """job_semaphore released after run_sub_agent; QA does not hold a job slot.
+
+    Two tasks, job_semaphore=1: if job_semaphore were held across QA the two
+    tasks would form a deadlock (task-1 QA waits for task-2 sub-agent which
+    waits for the semaphore task-1 holds). With the narrow hold, task-2's
+    sub-agent starts while task-1 is still in QA, and both complete.
+    """
+    tasks = [_task("t1"), _task("t2")]
+    outcomes = {
+        "t1": _result("t1", TaskStatus.COMPLETED, "t1 done"),
+        "t2": _result("t2", TaskStatus.COMPLETED, "t2 done"),
+    }
+
+    task2_sub_started = asyncio.Event()
+    task1_qa_gate = asyncio.Event()
+
+    async def controlled_run(
+        task: dict[str, Any], *_args: Any, **_kwargs: Any
+    ) -> dict[str, Any]:
+        tid = task["id"]
+        if tid == "t1":
+            task1_qa_gate.set()  # signal: t1 sub-agent done, entering QA soon
+        elif tid == "t2":
+            task2_sub_started.set()  # signal: t2 sub-agent running
+        return outcomes[tid]
+
+    async def blocking_qa(
+        task: dict[str, Any], result: dict[str, Any], *_args: Any, **_kwargs: Any
+    ) -> dict[str, Any]:
+        if task["id"] == "t1":
+            # QA for t1 waits until t2's sub-agent has started.
+            # If job_semaphore is still held here, t2 can never start → deadlock.
+            await asyncio.wait_for(task2_sub_started.wait(), timeout=2.0)
+        return result
+
+    bus = DelegationBus("narrow-sem-test")
+    job_sem = asyncio.Semaphore(1)
+    global_sem = asyncio.Semaphore(4)
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler.run_sub_agent",
+            side_effect=controlled_run,
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.run_qa_gate",
+            side_effect=blocking_qa,
+        ),
+        patch.object(config, "delegate_result_repair", False),
+    ):
+        await create_capsule("narrow-job", "narrow", tasks, 1)
+        results = await _execute_dag(tasks, job_sem, global_sem, bus, "narrow-job")
+
+    indexed = _by_id(results)
+    assert indexed["t1"]["status"] == TaskStatus.COMPLETED
+    assert indexed["t2"]["status"] == TaskStatus.COMPLETED

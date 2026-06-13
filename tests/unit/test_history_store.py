@@ -80,22 +80,21 @@ def test_tool_call_and_response_parts_survive_roundtrip(store: HistoryStore) -> 
     loaded = store.load()
     assert len(loaded) == 2
     fc_part = loaded[0].parts[0]
-    assert fc_part.function_call.name == "search"
-    assert fc_part.function_call.args == {"query": "test"}
+    assert fc_part.name == "search"
+    assert fc_part.args == {"query": "test"}
     fr_part = loaded[1].parts[0]
-    assert fr_part.function_response.name == "search"
-    assert fr_part.function_response.response == {"results": [1, 2]}
+    assert fr_part.name == "search"
+    assert fr_part.response == {"results": [1, 2]}
 
 
 def test_unsupported_part_degrades_not_crashes(store: HistoryStore) -> None:
     content = MagicMock()
     content.role = "model"
-    bad_part = MagicMock()
-    bad_part.text = None
-    bad_part.function_call = None
-    bad_part.function_response = None
-    bad_part.inline_data = None
-    content.parts = [bad_part]
+
+    class _Unsupported:
+        pass
+
+    content.parts = [_Unsupported()]
     store.append(content)
 
     loaded = store.load()
@@ -147,3 +146,60 @@ def test_new_session_id_format() -> None:
     sid = new_session_id()
     assert sid.startswith("session_")
     assert len(sid) > 8
+
+
+# ---------------------------------------------------------------------------
+# P3 Item 2 — batch fsync focused tests
+# ---------------------------------------------------------------------------
+
+
+def test_append_no_fsync_sync_does_fsync(store: HistoryStore) -> None:
+    """append does NOT fsync; sync() does exactly one fsync per call."""
+    fsync_calls: list[int] = []
+    import os as _os
+
+    real_fsync = _os.fsync
+
+    def counting_fsync(fd: int) -> None:
+        fsync_calls.append(fd)
+        real_fsync(fd)
+
+    import unittest.mock as mock
+
+    with mock.patch("os.fsync", side_effect=counting_fsync):
+        store.append(_turn("user", "msg1"))
+        store.append(_turn("model", "reply1"))
+        # No fsync yet
+        assert len(fsync_calls) == 0
+        store.sync()
+        # Exactly one fsync for the whole turn
+        assert len(fsync_calls) == 1
+        store.append(_turn("user", "msg2"))
+        store.append(_turn("model", "reply2"))
+        store.sync()
+        # One more fsync for second turn
+        assert len(fsync_calls) == 2
+
+
+def test_reloaded_history_equals_appended_sequence(store: HistoryStore) -> None:
+    """History reloaded from disk equals the sequence that was appended."""
+    msgs = [
+        _turn("user", "hello"),
+        _turn("model", "hi"),
+        _turn("user", "how are you"),
+        _turn("model", "fine"),
+    ]
+    for msg in msgs:
+        store.append(msg)
+    store.sync()
+    loaded = store.load()
+    assert len(loaded) == len(msgs)
+    for orig, got in zip(msgs, loaded, strict=True):
+        assert orig.role == got.role
+        assert orig.parts[0].text == got.parts[0].text
+
+
+def test_sync_noop_on_empty_store(store: HistoryStore) -> None:
+    """sync() on a store with no history file does not raise."""
+    assert not store.path.exists()
+    store.sync()  # must not raise

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from supporter.config import config
+from supporter.llm.types import GenOptions
 from supporter.tools.delegate.agents import _cache
 from supporter.tools.delegate.api import (
     cancel_delegation,
@@ -20,7 +21,6 @@ from supporter.tools.delegate.capsule_query import (
     serialize_capsule_result,
 )
 from supporter.types import (
-    LLMOptions,
     LLMResult,
     MilestoneCancelled,
     MilestoneCompleted,
@@ -35,7 +35,7 @@ class ScriptedProvider:
         return "scripted-provider"
 
     async def generate(
-        self, prompt: str, options: LLMOptions | None = None
+        self, prompt: str, options: GenOptions | None = None
     ) -> LLMResult:
         self.prompts.append(prompt)
         task_id = "synthesize" if "TASK:\nSummarize" in prompt else "map"
@@ -68,7 +68,7 @@ class BlockingProvider:
         return "blocking-provider"
 
     async def generate(
-        self, prompt: str, options: LLMOptions | None = None
+        self, prompt: str, options: GenOptions | None = None
     ) -> LLMResult:
         self.started.set()
         await self.release.wait()

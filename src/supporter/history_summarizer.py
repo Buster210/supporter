@@ -6,13 +6,9 @@ hard-dropping oldest turns, fold them into a dense summary for context preservat
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from supporter.llm.types import Message, TextPart, ToolCallPart, ToolResultPart
 
 from .config import config
-
-if TYPE_CHECKING:
-    from google.genai.types import Content
-
 
 __all__ = ["render_turns", "summarize_turns"]
 
@@ -24,8 +20,8 @@ _SUMMARIZATION_INSTRUCTION = (
 )
 
 
-def render_turns(turns: list[Content]) -> str:
-    """Flatten Content turns to a 'User:/Assistant:' transcript.
+def render_turns(turns: list[Message]) -> str:
+    """Flatten conversation turns to a 'User:/Assistant:' transcript.
 
     WHY: Summarizer needs plain text input; render function_call/response parts
     compactly to preserve tool interactions without raw JSON noise.
@@ -45,9 +41,18 @@ def render_turns(turns: list[Content]) -> str:
         part_texts: list[str] = []
 
         for part in parts:
+            if isinstance(part, TextPart):
+                part_texts.append(part.text)
+                continue
+
             text = getattr(part, "text", None)
             if text:
                 part_texts.append(text)
+                continue
+
+            if isinstance(part, ToolCallPart):
+                args_str = ", ".join(f"{k}={v!r}" for k, v in part.args.items())
+                part_texts.append(f"[tool_call: {part.name}({args_str})]")
                 continue
 
             fc = getattr(part, "function_call", None)
@@ -56,6 +61,11 @@ def render_turns(turns: list[Content]) -> str:
                 args = getattr(fc, "args", None) or {}
                 args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
                 part_texts.append(f"[tool_call: {name}({args_str})]")
+                continue
+
+            if isinstance(part, ToolResultPart):
+                resp_str = ", ".join(f"{k}={v!r}" for k, v in part.response.items())
+                part_texts.append(f"[tool_response: {part.name}({resp_str})]")
                 continue
 
             fr = getattr(part, "function_response", None)
@@ -72,7 +82,7 @@ def render_turns(turns: list[Content]) -> str:
     return "\n".join(lines)
 
 
-async def summarize_turns(turns: list[Content]) -> str:
+async def summarize_turns(turns: list[Message]) -> str:
     """Summarize turns into a dense summary string.
 
     WHY: Provide compressed context for long sessions; decoupled from live provider
@@ -87,10 +97,10 @@ async def summarize_turns(turns: list[Content]) -> str:
     if not config.gemini_api_keys:
         raise RuntimeError("No Gemini API keys configured for summarization")
 
-    from .providers.gemini_provider import GeminiProvider
+    from .pool import get_provider
 
-    summarizer = GeminiProvider(
-        api_key=config.gemini_api_keys[0],
+    summarizer = get_provider(
+        shared=True,
         model_name=config.gemini_model,
     )
 

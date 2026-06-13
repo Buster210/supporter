@@ -4,14 +4,32 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
-from google.genai.types import Content, Part
 
 import supporter.pool as index
 from supporter.config import load_config
+from supporter.llm.types import GenOptions
 from supporter.pool import get_provider
 from supporter.providers.gemini_provider import GeminiProvider
 from supporter.tools.resolver import extract_declared_tool_names
 from tests.mocks import build_mock_stream_chunk, build_mock_stream_part
+
+
+def _make_options(**kwargs: Any) -> GenOptions:
+    """Build a GenOptions from old-style dict kwargs for test convenience."""
+    extras = {}
+    for k in (
+        "registry",
+        "tools",
+        "use_code_execution",
+        "interaction_id",
+        "top_k",
+        "thinking_level",
+        "response_mime_type",
+        "response_schema",
+    ):
+        if k in kwargs:
+            extras[k] = kwargs.pop(k)
+    return GenOptions(extras=extras, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -172,7 +190,8 @@ async def test_provider_options_propagation(mock_genai_client: Any) -> None:
         index.config = load_config()
         provider = get_provider("gemini")
         await provider.generate(
-            "test", {"temperature": 0.1, "top_p": 0.9, "max_output_tokens": 100}
+            "test",
+            _make_options(temperature=0.1, top_p=0.9, max_output_tokens=100),
         )
         client_instance = mock_genai_client.return_value
         if client_instance.aio.interactions.create.called:
@@ -198,7 +217,9 @@ async def test_provider_generate_interaction_resume_falls_back_to_standard_gener
     )
     client_instance = mock_genai_client.return_value
     client_instance.aio.interactions.create.side_effect = RuntimeError("resume failed")
-    result = await provider.generate("test", {"interaction_id": "interaction-123"})
+    result = await provider.generate(
+        "test", _make_options(interaction_id="interaction-123")
+    )
     client_instance.aio.interactions.create.assert_awaited_once()
     assert (
         client_instance.aio.interactions.create.call_args.kwargs[
@@ -262,7 +283,9 @@ async def test_provider_generate_uses_nested_response_history_fallback(
         return response
 
     client_instance.aio.models.generate_content.side_effect = mock_generate
-    result = await provider.generate("test", {"interaction_id": "interaction-123"})
+    result = await provider.generate(
+        "test", _make_options(interaction_id="interaction-123")
+    )
     assert cast(Any, result.automatic_function_calling_history) == mock_history
 
 
@@ -290,7 +313,9 @@ async def test_provider_generate_uses_result_history_as_final_fallback(
         return response
 
     client_instance.aio.models.generate_content.side_effect = mock_generate
-    result = await provider.generate("test", {"interaction_id": "interaction-123"})
+    result = await provider.generate(
+        "test", _make_options(interaction_id="interaction-123")
+    )
     assert cast(Any, result.automatic_function_calling_history) == mock_history
 
 
@@ -304,12 +329,12 @@ async def test_provider_tool_transformation(mock_genai_client: Any) -> None:
     async def async_tool() -> str:
         return "async"
 
-    options = {
-        "registry": {"sync_tool": sync_tool, "async_tool": async_tool},
-        "use_search": True,
-        "use_code_execution": True,
-    }
-    transformed = provider._transform_tools(cast(index.LLMOptions, options))
+    options = _make_options(
+        registry={"sync_tool": sync_tool, "async_tool": async_tool},
+        use_search=True,
+        use_code_execution=True,
+    )
+    transformed = provider._transform_tools(options)
     assert transformed is not None
     assert len(transformed) >= 4
 
@@ -323,13 +348,13 @@ def test_transform_tools_returns_cached_result_on_cache_hit() -> Any:
     async def async_tool() -> str:
         return "async"
 
-    options = {
-        "registry": {"sync_tool": sync_tool, "async_tool": async_tool},
-        "use_search": True,
-        "use_code_execution": True,
-    }
-    first = provider._transform_tools(cast(index.LLMOptions, options))
-    second = provider._transform_tools(cast(index.LLMOptions, options))
+    options = _make_options(
+        registry={"sync_tool": sync_tool, "async_tool": async_tool},
+        use_search=True,
+        use_code_execution=True,
+    )
+    first = provider._transform_tools(options)
+    second = provider._transform_tools(options)
     assert first is second
 
 
@@ -350,11 +375,11 @@ def test_transform_tools_skips_registry_tools_with_predeclared_names() -> Any:
         return "async"
 
     declared_tool = {"function_declarations": [{"name": "sync_tool"}]}
-    options = {
-        "tools": [declared_tool],
-        "registry": {"sync_tool": sync_tool, "async_tool": async_tool},
-    }
-    transformed = provider._transform_tools(cast(index.LLMOptions, options))
+    options = _make_options(
+        tools=[declared_tool],
+        registry={"sync_tool": sync_tool, "async_tool": async_tool},
+    )
+    transformed = provider._transform_tools(options)
     assert transformed is not None
     assert len(transformed) == 2
     assert transformed[0] is declared_tool
@@ -371,10 +396,7 @@ def test_transform_tools_does_not_duplicate_code_execution_tool() -> None:
         code_execution=types.ToolCodeExecution(),
     )
     transformed = provider._transform_tools(
-        cast(
-            index.LLMOptions,
-            {"tools": [code_execution_tool], "use_code_execution": True},
-        )
+        _make_options(tools=[code_execution_tool], use_code_execution=True)
     )
 
     assert transformed is not None
@@ -394,18 +416,14 @@ GEMMA_4_IT = "gemma-4-31b-it"
 
 def test_transform_search_gemini_3() -> None:
     provider = GeminiProvider(api_key="test-key", model_name=GEMINI_3_FLASH)
-    transformed = provider._transform_tools(
-        cast(index.LLMOptions, {"registry": {}, "use_search": True})
-    )
+    transformed = provider._transform_tools(_make_options(registry={}, use_search=True))
     assert transformed is not None
     assert "google_search" in {t.__name__ for t in transformed if callable(t)}
 
 
 def test_transform_search_gemma() -> None:
     provider = GeminiProvider(api_key="test-key", model_name=GEMMA_4_IT)
-    transformed = provider._transform_tools(
-        cast(index.LLMOptions, {"registry": {}, "use_search": True})
-    )
+    transformed = provider._transform_tools(_make_options(registry={}, use_search=True))
     assert transformed is not None
     assert any(hasattr(t, "google_search") for t in transformed)
 
@@ -413,8 +431,13 @@ def test_transform_search_gemma() -> None:
 @pytest.mark.asyncio
 async def test_provider_prepare_contents() -> None:
     provider = GeminiProvider(api_key="test-key")  # pragma: allowlist secret
-    history = [Content(role="user", parts=[Part(text="hello")])]
-    contents = provider._prepare_contents("how are you?", history=history)
+    from supporter.llm.types import Message, TextPart
+
+    msgs = [
+        Message(role="user", parts=[TextPart(text="hello")]),
+        Message(role="user", parts=[TextPart(text="how are you?")]),
+    ]
+    contents = provider._prepare_contents(msgs)
     assert len(contents) == 2
     assert contents[0].parts is not None
     assert contents[0].parts[0].text == "hello"

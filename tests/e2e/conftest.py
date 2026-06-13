@@ -1,5 +1,5 @@
 import os
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,9 +9,10 @@ import pytest
 from google.genai.types import Content, Part
 
 from supporter.config import config as real_config
+from supporter.llm.types import GenOptions
 from supporter.pool import LLMProvider, clear_providers
 from supporter.tools.browser import guardrails, session
-from supporter.types import LLMChunk, LLMOptions, LLMResult
+from supporter.types import LLMChunk, LLMResult
 
 TEST_MODEL = "gemini-3.1-flash-lite-preview"
 TEST_API_KEY = "test-key-for-e2e"  # pragma: allowlist secret
@@ -31,7 +32,7 @@ class MockLLMProvider(LLMProvider):
         return "MockProvider"
 
     async def generate(
-        self, prompt: str | list[Any], options: LLMOptions | None = None
+        self, prompt: str | list[Any], options: GenOptions | None = None
     ) -> LLMResult:
         self._call_count += 1
         text = f"{self._text} (call #{self._call_count})"
@@ -44,7 +45,7 @@ class MockLLMProvider(LLMProvider):
         )
 
     async def generate_stream(
-        self, prompt: str | list[Any], options: LLMOptions | None = None
+        self, prompt: str | list[Any], options: GenOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
         self._call_count += 1
         words = self._text.split()

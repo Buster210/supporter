@@ -103,6 +103,7 @@ def test_afc_sync_across_compaction_writes_unique_real_turns_to_store() -> None:
             Content(role="user", parts=[Part(text="afc-1-tc")]),
         ]
         result_1 = MagicMock()
+        result_1.history = []
         result_1.automatic_function_calling_history = afc_batch_1
         result_1.interaction_id = "i1"
         result_1.candidates = []
@@ -116,6 +117,7 @@ def test_afc_sync_across_compaction_writes_unique_real_turns_to_store() -> None:
             Content(role="user", parts=[Part(text="afc-2-u")]),
         ]
         result_2 = MagicMock()
+        result_2.history = []
         result_2.automatic_function_calling_history = afc_batch_2
         result_2.interaction_id = "i2"
         result_2.candidates = []

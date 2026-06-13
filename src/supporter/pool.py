@@ -6,27 +6,21 @@ import weakref
 from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar
-
-if TYPE_CHECKING:
-    from google.genai.types import Content
-
-    from .providers.gemini_live_provider import GeminiLiveProvider
+from typing import Any, ClassVar
 
 from .config import (
     HTTP_RATE_LIMIT,
     config,
 )
+from .llm.types import GenOptions, Message
 from .logger import logger
 from .providers.gemini_provider import GeminiProvider
-from .types import LLMChunk, LLMOptions, LLMProvider, LLMResult
+from .providers.registry import PROVIDER_FACTORIES
+from .types import LLMChunk, LLMProvider, LLMResult
 
 __all__ = [
     "DynamicPool",
-    "GeminiLiveProvider",
-    "GeminiProvider",
     "LLMChunk",
-    "LLMOptions",
     "LLMProvider",
     "LLMResult",
     "LazyFallbackProvider",
@@ -54,12 +48,9 @@ _provider_lock = threading.Lock()
 
 
 def _genai_error_classes() -> tuple[type[BaseException], ...]:
-    try:
-        from google.genai import errors as genai_errors
+    from .providers.gemini_codec import gemini_error_classes
 
-        return (genai_errors.ClientError, genai_errors.ServerError)
-    except ImportError:
-        return ()
+    return gemini_error_classes()
 
 
 def _status_code(error: Any) -> int | None:
@@ -147,24 +138,28 @@ class DynamicPool(LLMProvider):
         keys: list[str],
         model_name: str,
         pool_size: int = 2,
+        provider_factory: Callable[[str, str], LLMProvider] | None = None,
     ):
         self.keys = keys
         self.model_name = model_name
         self.pool_size = min(pool_size, len(keys))
         self.next_key_index = 0
-        self.active_slots: deque[GeminiProvider] = deque()
+        self.active_slots: deque[LLMProvider] = deque()
         self._current_index = 0
         self.background_tasks: set[asyncio.Task[None]] = set()
         self._replace_lock = asyncio.Semaphore(1)
+        self._provider_factory = provider_factory or (
+            lambda key, model: GeminiProvider(key, model_name=model)
+        )
         self._instances.add(self)
 
     def _fill_slot(self) -> None:
         key = self.keys[self.next_key_index % len(self.keys)]
         self.next_key_index = (self.next_key_index + 1) % len(self.keys)
-        provider = GeminiProvider(key, model_name=self.model_name)
+        provider = self._provider_factory(key, self.model_name)
         self.active_slots.append(provider)
 
-    def _rotate_and_get(self) -> GeminiProvider:
+    def _rotate_and_get(self) -> LLMProvider:
         if len(self.active_slots) < self.pool_size:
             self._fill_slot()
 
@@ -173,7 +168,7 @@ class DynamicPool(LLMProvider):
         self._current_index += 1
         return provider
 
-    def _replace_instance(self, provider: GeminiProvider) -> None:
+    def _replace_instance(self, provider: LLMProvider) -> None:
         try:
             self.active_slots.remove(provider)
         except ValueError:
@@ -220,7 +215,7 @@ class DynamicPool(LLMProvider):
         await self.shutdown()
 
     async def generate(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Message], options: GenOptions | None = None
     ) -> LLMResult:
         if _is_model_in_cooldown(self.model_name):
             raise RuntimeError(
@@ -263,7 +258,7 @@ class DynamicPool(LLMProvider):
         raise RuntimeError("Unexpected: no provider available")
 
     async def generate_stream(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Message], options: GenOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
         if _is_model_in_cooldown(self.model_name):
             raise RuntimeError(
@@ -337,7 +332,7 @@ class LazyFallbackProvider(LLMProvider):
         return self._fallback
 
     async def generate(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Message], options: GenOptions | None = None
     ) -> LLMResult:
         try:
             return await self.primary.generate(prompt, options)
@@ -351,7 +346,7 @@ class LazyFallbackProvider(LLMProvider):
             return await self.fallback.generate(prompt, options)
 
     async def generate_stream(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Message], options: GenOptions | None = None
     ) -> AsyncIterator[LLMChunk]:
         try:
             async for chunk in self.primary.generate_stream(prompt, options):
@@ -397,6 +392,7 @@ def get_provider(
     registry: dict[str, Callable[..., Any]] | None = None,
     system_instruction: str | None = None,
     pool_size: int = 2,
+    keys: list[str] | None = None,
 ) -> LLMProvider:
     target_type = provider_type or config.provider
     cache_key = f"{target_type}_{live}_{model_name or 'default'}"
@@ -408,57 +404,20 @@ def get_provider(
                 provider.registry.update(registry)
             return provider
 
-        if target_type != "gemini":
-            raise ValueError(f"Unsupported provider type: {target_type}")
+        if target_type not in PROVIDER_FACTORIES:
+            registered = ", ".join(sorted(PROVIDER_FACTORIES.keys()))
+            raise ValueError(
+                f"Unsupported provider type: {target_type!r}. Registered: {registered}"
+            )
 
-        keys = config.gemini_api_keys
-        if not keys:
-            raise ValueError("GEMINI_API_KEYS is missing/empty in environment")
-
-        if live:
-            from .providers.gemini_live_provider import GeminiLiveProvider
-
-            def live_primary_factory() -> LLMProvider:
-                target_model = model_name or config.gemini_live_model
-                logger.info(f"Constructing Live Primary provider: model={target_model}")
-                return GeminiLiveProvider(
-                    keys,
-                    model_name=target_model,
-                    registry=registry,
-                    system_instruction=system_instruction,
-                )
-
-            live_fallback_model = config.gemini_live_fallback_model
-            live_fallback_factory: Callable[[], LLMProvider | None] | None = None
-            if live_fallback_model:
-
-                def live_fallback_factory() -> LLMProvider | None:
-                    logger.info(
-                        f"Constructing Live Fallback provider: "
-                        f"model={live_fallback_model}"
-                    )
-                    return GeminiLiveProvider(
-                        keys,
-                        model_name=live_fallback_model,
-                        registry=registry,
-                        system_instruction=system_instruction,
-                    )
-
-            provider = LazyFallbackProvider(live_primary_factory, live_fallback_factory)
-        else:
-
-            def primary_factory() -> LLMProvider:
-                target_model = model_name or config.gemini_model
-                return DynamicPool(keys, target_model, pool_size=pool_size)
-
-            rest_fallback_model = config.gemini_fallback_model
-            fallback_factory: Callable[[], LLMProvider | None] | None = None
-            if rest_fallback_model:
-
-                def fallback_factory() -> LLMProvider | None:
-                    return DynamicPool(keys, rest_fallback_model, pool_size=pool_size)
-
-            provider = LazyFallbackProvider(primary_factory, fallback_factory)
+        provider = PROVIDER_FACTORIES[target_type](
+            keys=keys if keys is not None else config.gemini_api_keys,
+            model_name=model_name,
+            pool_size=pool_size,
+            registry=registry,
+            system_instruction=system_instruction,
+            live=live,
+        )
 
         if shared:
             _provider_registry[cache_key] = provider

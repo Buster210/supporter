@@ -5,12 +5,13 @@ from unittest.mock import patch
 import pytest
 
 from supporter.agent import ChatAgent
+from supporter.llm.types import GenOptions
 from supporter.pool import (
     DynamicPool,
     LazyFallbackProvider,
     LLMProvider,
 )
-from supporter.types import LLMChunk, LLMOptions, LLMResult
+from supporter.types import LLMChunk, LLMResult
 
 from .conftest import MockLLMProvider
 
@@ -92,7 +93,7 @@ async def test_conversation_fallback_trigger() -> None:
             return "FailingProvider"
 
         async def generate(
-            self, prompt: str | list[Any], options: LLMOptions | None = None
+            self, prompt: str | list[Any], options: GenOptions | None = None
         ) -> LLMResult:
             call_count["primary"] += 1
 
@@ -104,7 +105,7 @@ async def test_conversation_fallback_trigger() -> None:
             raise error
 
         async def generate_stream(
-            self, prompt: str | list[Any], options: LLMOptions | None = None
+            self, prompt: str | list[Any], options: GenOptions | None = None
         ) -> AsyncIterator[LLMChunk]:
             return
             yield
@@ -114,7 +115,7 @@ async def test_conversation_fallback_trigger() -> None:
             return "FallbackProvider"
 
         async def generate(
-            self, prompt: str | list[Any], options: LLMOptions | None = None
+            self, prompt: str | list[Any], options: GenOptions | None = None
         ) -> LLMResult:
             call_count["fallback"] += 1
             return LLMResult(
@@ -122,7 +123,7 @@ async def test_conversation_fallback_trigger() -> None:
             )
 
         async def generate_stream(
-            self, prompt: str | list[Any], options: LLMOptions | None = None
+            self, prompt: str | list[Any], options: GenOptions | None = None
         ) -> AsyncIterator[LLMChunk]:
             yield LLMChunk(text="Fallback ", model="fallback", is_last=True)
 

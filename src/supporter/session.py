@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .llm.types import ImagePart, Message, TextPart, ToolCallPart, ToolResultPart
 from .logger import logger
 
 
@@ -15,10 +16,18 @@ def new_session_id() -> str:
 
 
 def _serialize_part(part: Any) -> dict[str, Any]:
+    # TextPart or Gemini Part with text
     if getattr(part, "text", None):
         return {"text": part.text}
 
-    fc = getattr(part, "function_call", None)
+    # neutral ToolCallPart has .name and .args directly
+    name: str | None = getattr(part, "name", None)
+    args: Any = getattr(part, "args", None)
+    if name is not None and args is not None:
+        return {"function_call": {"name": name, "args": args or {}}}
+
+    # Gemini Part with nested function_call
+    fc: Any = getattr(part, "function_call", None)
     if fc is not None and getattr(fc, "name", None):
         return {
             "function_call": {
@@ -27,7 +36,13 @@ def _serialize_part(part: Any) -> dict[str, Any]:
             }
         }
 
-    fr = getattr(part, "function_response", None)
+    # neutral ToolResultPart has .name and .response directly
+    response: Any = getattr(part, "response", None)
+    if name is not None and response is not None:
+        return {"function_response": {"name": name, "response": response or {}}}
+
+    # Gemini Part with nested function_response
+    fr: Any = getattr(part, "function_response", None)
     if fr is not None and getattr(fr, "name", None):
         return {
             "function_response": {
@@ -36,7 +51,15 @@ def _serialize_part(part: Any) -> dict[str, Any]:
             }
         }
 
-    idata = getattr(part, "inline_data", None)
+    # neutral ImagePart has .mime_type + .data or .ref directly
+    mime: str | None = getattr(part, "mime_type", None)
+    img_data: Any = getattr(part, "data", None)
+    img_ref: Any = getattr(part, "ref", None)
+    if mime is not None and (img_data is not None or img_ref is not None):
+        return {"image": {"mime_type": mime}}
+
+    # Gemini Part with nested inline_data (Blob)
+    idata: Any = getattr(part, "inline_data", None)
     if idata is not None and getattr(idata, "data", None):
         return {
             "image": {
@@ -52,11 +75,14 @@ def _serialize_content(content: Any, images_dir: Path | None = None) -> dict[str
     serialized_parts: list[dict[str, Any]] = []
     for part in parts_raw:
         sp = _serialize_part(part)
-        if images_dir and "image" in sp and getattr(part, "inline_data", None):
-            idata = part.inline_data
-            img_data = getattr(idata, "data", None)
+        if images_dir and "image" in sp:
+            img_data = getattr(part, "data", None)
+            if img_data is None:
+                idata = getattr(part, "inline_data", None)
+                img_data = getattr(idata, "data", None) if idata is not None else None
             if img_data:
-                ext = (getattr(idata, "mime_type", "") or "").split("/")[-1] or "bin"
+                mime_type = sp["image"].get("mime_type", "application/octet-stream")
+                ext = mime_type.split("/")[-1] or "bin"
                 fname = f"img_{int(time.time() * 1000)}_{uuid4().hex[:8]}.{ext}"
                 img_path = images_dir / fname
                 img_path.write_bytes(img_data)
@@ -71,57 +97,47 @@ def _serialize_content(content: Any, images_dir: Path | None = None) -> dict[str
     }
 
 
-def _deserialize_content(record: dict[str, Any]) -> Any:
-    from google.genai.types import Blob, Content, FunctionCall, FunctionResponse, Part
-
-    parts = []
+def _deserialize_content(record: dict[str, Any]) -> Message | None:
+    parts: list[TextPart | ToolCallPart | ToolResultPart | ImagePart] = []
     for sp in record.get("parts", []):
         if "text" in sp:
-            parts.append(Part(text=sp["text"]))
+            parts.append(TextPart(text=sp["text"]))
         elif "function_call" in sp:
             fc = sp["function_call"]
             parts.append(
-                Part(
-                    function_call=FunctionCall(
-                        name=fc["name"],
-                        args=fc.get("args", {}),
-                    )
+                ToolCallPart(
+                    name=fc["name"],
+                    args=fc.get("args", {}),
                 )
             )
         elif "function_response" in sp:
             fr = sp["function_response"]
             parts.append(
-                Part(
-                    function_response=FunctionResponse(
-                        name=fr["name"],
-                        response=fr.get("response", {}),
-                    )
+                ToolResultPart(
+                    name=fr["name"],
+                    response=fr.get("response", {}),
                 )
             )
         elif "image" in sp:
             ref = sp["image"].get("image_ref")
+            mime_type = sp["image"].get("mime_type", "application/octet-stream")
             if ref and Path(ref).exists():
                 img_bytes = Path(ref).read_bytes()
                 parts.append(
-                    Part(
-                        inline_data=Blob(
-                            data=img_bytes,
-                            mime_type=sp["image"].get(
-                                "mime_type", "application/octet-stream"
-                            ),
-                        )
+                    ImagePart(
+                        mime_type=mime_type,
+                        ref=ref,
+                        data=img_bytes,
                     )
                 )
             else:
-                logger.warning(
-                    f"Image ref {ref!r} missing; inserting placeholder"
-                )
-                parts.append(Part(text="[image unavailable]"))
+                logger.warning(f"Image ref {ref!r} missing; inserting placeholder")
+                parts.append(TextPart(text="[image unavailable]"))
         else:
             continue
     if not parts:
         return None
-    return Content(role=record.get("role", "user"), parts=parts)
+    return Message(role=record.get("role", "user"), parts=parts)
 
 
 class HistoryStore:
@@ -146,6 +162,18 @@ class HistoryStore:
         line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(line)
+            f.flush()
+
+    def sync(self) -> None:
+        """Flush the history file to durable storage once per turn.
+
+        WHY: Per-append fsync is 1-100 ms blocking on the event loop; batching
+        to per-turn preserves the same durability granularity (a mid-turn crash
+        already discards the incomplete turn regardless).
+        """
+        if not self._path.exists():
+            return
+        with open(self._path, "a", encoding="utf-8") as f:
             f.flush()
             os.fsync(f.fileno())
 
