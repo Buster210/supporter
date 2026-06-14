@@ -14,32 +14,68 @@ from supporter.tools.browser.profiles import ChromeProfile
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-_SESSION_GLOBALS = (
+# Scalar module globals (saved/restored verbatim).
+_SCALAR_GLOBALS = (
     "_PWS",
     "_CONTEXT",
-    "_PAGE",
     "_LAUNCHING",
     "_LAUNCH_LOOP",
     "_CLONE_LOCK",
-    "_ACTION_COUNT",
-    "_LAST_ACTION_TS",
     "_KEEP_OPEN",
     "_LIFECYCLE_TASK",
-    "_FRAME_SELECTOR",
     "_SELECTED_PROFILE",
 )
+
+# Per-agent dict globals (saved/restored by content snapshot).
+_DICT_GLOBALS = (
+    "_PAGES",
+    "_FRAME_SELECTORS",
+    "_OWNED_PAGES",
+    "_ACTION_COUNT",
+    "_ACTION_CAP_CEILING",
+    "_LAST_ACTION_TS",
+    "_SESSION_START_TS",
+    "_TEMPO",
+)
+
+
+class _FakePage:
+    """Minimal live page stand-in: active_page()/get_session() probe is_closed()."""
+
+    def __init__(self, url: str = "about:blank") -> None:
+        self.url = url
+
+    def is_closed(self) -> bool:
+        return False
 
 
 @pytest.fixture(autouse=True)
 def _reset_session_globals() -> Iterator[None]:
-    saved = {name: getattr(session, name) for name in _SESSION_GLOBALS}
+    saved_scalars = {name: getattr(session, name) for name in _SCALAR_GLOBALS}
+    saved_dicts = {name: dict(getattr(session, name)) for name in _DICT_GLOBALS}
+    saved_times = list(session._ACTION_TIMES)
     saved_cb = guardrails.browse_confirmation_callback
+    token = session._AGENT_ID.set("main")
     try:
         yield
     finally:
-        for name, value in saved.items():
+        for name, value in saved_scalars.items():
             setattr(session, name, value)
+        for name, value in saved_dicts.items():
+            current = getattr(session, name)
+            current.clear()
+            current.update(value)
+        session._ACTION_TIMES.clear()
+        session._ACTION_TIMES.extend(saved_times)
         guardrails.browse_confirmation_callback = saved_cb
+        session._AGENT_ID.reset(token)
+
+
+def _set_main_page(page: Any | None) -> None:
+    if page is None:
+        session._PAGES.pop("main", None)
+    else:
+        session._PAGES["main"] = page
 
 
 @pytest.mark.parametrize(
@@ -64,10 +100,10 @@ def test_pinned_open_only_when_keep_open_explicitly_true(
     assert session.pinned_open() is expected
 
 
-def test_is_active_reflects_page_presence() -> None:
-    session._PAGE = None
+def test_is_active_reflects_session_presence() -> None:
+    session._PAGES.pop("main", None)
     assert session.is_active() is False
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     assert session.is_active() is True
 
 
@@ -98,8 +134,19 @@ async def test_prompt_lifecycle_fails_open_when_unwired() -> None:
 
 
 def test_active_page_returns_current_page() -> None:
-    session._PAGE = cast("Any", object())
-    assert session.active_page() is session._PAGE
+    page = _FakePage()
+    _set_main_page(page)
+    assert session.active_page() is page
+
+
+def test_active_page_drops_closed_page() -> None:
+    class _Closed:
+        def is_closed(self) -> bool:
+            return True
+
+    _set_main_page(cast("Any", _Closed()))
+    assert session.active_page() is None
+    assert "main" not in session._PAGES
 
 
 def test_list_pages_empty_when_no_context() -> None:
@@ -107,14 +154,15 @@ def test_list_pages_empty_when_no_context() -> None:
     assert session.list_pages() == []
 
 
-def test_list_pages_returns_context_pages() -> None:
-    pages = [cast("Any", object()), cast("Any", object())]
+def test_list_pages_returns_owned_live_pages() -> None:
+    pages = [_FakePage(), _FakePage()]
     context = cast("Any", type("", (), {"pages": pages})())
     session._CONTEXT = context
-    assert session.list_pages() == pages
+    session._OWNED_PAGES["main"] = set(pages)  # type: ignore[arg-type]
+    assert set(session.list_pages()) == set(pages)
 
 
-async def test_cleanup_blank_tabs_keeps_working_tab_and_closes_other_blanks() -> None:
+async def test_cleanup_blank_tabs_keeps_owned_tab_and_closes_other_blanks() -> None:
     class _Tab:
         def __init__(self, url: str) -> None:
             self.url = url
@@ -129,7 +177,7 @@ async def test_cleanup_blank_tabs_keeps_working_tab_and_closes_other_blanks() ->
     content = _Tab("https://example.test/")
     ctx = cast("Any", type("", (), {"pages": [restored_blank, working, content]})())
     session._CONTEXT = ctx
-    session._PAGE = cast("Any", working)
+    session._OWNED_PAGES["main"] = {cast("Any", working)}
 
     await session.cleanup_blank_tabs()
 
@@ -140,40 +188,41 @@ async def test_cleanup_blank_tabs_keeps_working_tab_and_closes_other_blanks() ->
 
 
 def test_set_active_updates_page_and_clears_frame() -> None:
-    page_a = cast("Any", object())
-    page_b = cast("Any", object())
-    session._PAGE = page_a
-    session._FRAME_SELECTOR = "iframe#main"
+    page_a = _FakePage()
+    page_b = _FakePage()
+    _set_main_page(page_a)
+    session._FRAME_SELECTORS["main"] = "iframe#main"
 
     session.set_active(page_b)
 
-    assert session._PAGE is page_b
-    assert session._FRAME_SELECTOR is None
+    assert session._PAGES["main"] is page_b  # type: ignore[comparison-overlap]
+    assert session._FRAME_SELECTORS["main"] is None
+    assert page_b in session._OWNED_PAGES["main"]  # type: ignore[comparison-overlap]
 
 
 def test_active_frame_selector_returns_frame() -> None:
-    session._FRAME_SELECTOR = "iframe#content"
+    session._FRAME_SELECTORS["main"] = "iframe#content"
     assert session.active_frame_selector() == "iframe#content"
 
-    session._FRAME_SELECTOR = None
+    session._FRAME_SELECTORS["main"] = None
     assert session.active_frame_selector() is None
 
 
 def test_set_frame_updates_selector() -> None:
     session.set_frame("iframe#nav")
-    assert session._FRAME_SELECTOR == "iframe#nav"
+    assert session._FRAME_SELECTORS["main"] == "iframe#nav"
 
     session.set_frame(None)
-    assert session._FRAME_SELECTOR is None
+    assert session._FRAME_SELECTORS["main"] is None
 
 
 async def test_get_session_returns_existing_when_active() -> None:
     pws = cast("Any", object())
     context = cast("Any", object())
-    page = cast("Any", object())
+    page = _FakePage()
     session._PWS = pws
     session._CONTEXT = context
-    session._PAGE = page
+    _set_main_page(page)
 
     result = await session.get_session()
 
@@ -206,8 +255,8 @@ async def test_pace_waits_when_elapsed_less_than_gap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = time.monotonic()
-    session._LAST_ACTION_TS = now
-    session._ACTION_COUNT = 0
+    session._LAST_ACTION_TS["main"] = now
+    session._ACTION_COUNT["main"] = 0
     monkeypatch.setattr(guardrails, "random_gap", lambda: 10.0)
 
     slept: list[float] = []
@@ -228,7 +277,7 @@ async def test_pace_skips_sleep_when_elapsed_exceeds_gap(
 ) -> None:
     clock, slept = _install_pace_harness(monkeypatch)
     monkeypatch.setattr(guardrails, "random_gap", lambda: 0.001)
-    session._LAST_ACTION_TS = clock.t - 60.0
+    session._LAST_ACTION_TS["main"] = clock.t - 60.0
 
     await session.pace()
 
@@ -240,11 +289,11 @@ async def test_pace_increments_action_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock, _ = _install_pace_harness(monkeypatch)
-    session._LAST_ACTION_TS = clock.t - 60.0
+    session._LAST_ACTION_TS["main"] = clock.t - 60.0
 
     await session.pace()
 
-    assert session._ACTION_COUNT == 1
+    assert session._ACTION_COUNT["main"] == 1
     _reset_pace_globals()
 
 
@@ -253,9 +302,9 @@ async def test_pace_action_cap_triggers_callback(
 ) -> None:
     clock, _ = _install_pace_harness(monkeypatch)
     monkeypatch.setattr(guardrails, "action_cap", lambda: 5)
-    session._LAST_ACTION_TS = clock.t - 60.0
-    session._ACTION_CAP_CEILING = 5
-    session._ACTION_COUNT = 4
+    session._LAST_ACTION_TS["main"] = clock.t - 60.0
+    session._ACTION_CAP_CEILING["main"] = 5
+    session._ACTION_COUNT["main"] = 4
 
     prompted: list[str] = []
 
@@ -271,8 +320,8 @@ async def test_pace_action_cap_triggers_callback(
         guardrails.browse_confirmation_callback = None
 
     assert len(prompted) == 1
-    assert session._ACTION_COUNT == 0
-    assert session._ACTION_CAP_CEILING == 0
+    assert session._ACTION_COUNT["main"] == 0
+    assert session._ACTION_CAP_CEILING["main"] == 0
     _reset_pace_globals()
 
 
@@ -281,9 +330,9 @@ async def test_pace_action_cap_raises_when_denied(
 ) -> None:
     clock, _ = _install_pace_harness(monkeypatch)
     monkeypatch.setattr(guardrails, "action_cap", lambda: 5)
-    session._LAST_ACTION_TS = clock.t - 60.0
-    session._ACTION_CAP_CEILING = 5
-    session._ACTION_COUNT = 4
+    session._LAST_ACTION_TS["main"] = clock.t - 60.0
+    session._ACTION_CAP_CEILING["main"] = 5
+    session._ACTION_COUNT["main"] = 4
 
     async def deny(_title: str, _detail: str) -> bool:
         return False
@@ -303,15 +352,15 @@ async def test_pace_action_cap_without_callback_resets_counter(
 ) -> None:
     clock, _ = _install_pace_harness(monkeypatch)
     monkeypatch.setattr(guardrails, "action_cap", lambda: 5)
-    session._LAST_ACTION_TS = clock.t - 60.0
-    session._ACTION_CAP_CEILING = 5
-    session._ACTION_COUNT = 4
+    session._LAST_ACTION_TS["main"] = clock.t - 60.0
+    session._ACTION_CAP_CEILING["main"] = 5
+    session._ACTION_COUNT["main"] = 4
 
     guardrails.browse_confirmation_callback = None
 
     await session.pace()
 
-    assert session._ACTION_COUNT == 0
+    assert session._ACTION_COUNT["main"] == 0
     _reset_pace_globals()
 
 
@@ -442,6 +491,17 @@ async def test_resolve_profile_raises_on_cancel(
         await session._resolve_profile_name()
 
 
+async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "browser_profile_path", None)
+    session._PAGES.clear()
+
+    async def boom() -> Path:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(session, "_clone_profile", boom)
+    await session.prewarm_clone()
+
+
 class _Clock:
     def __init__(self) -> None:
         self.t = 1000.0
@@ -451,12 +511,15 @@ class _Clock:
 
 
 def _reset_pace_globals() -> None:
-    session._ACTION_COUNT = 0
-    session._ACTION_CAP_CEILING = 0
-    session._LAST_ACTION_TS = 0.0
+    for name in (
+        "_ACTION_COUNT",
+        "_ACTION_CAP_CEILING",
+        "_LAST_ACTION_TS",
+        "_SESSION_START_TS",
+        "_TEMPO",
+    ):
+        getattr(session, name).clear()
     session._ACTION_TIMES.clear()
-    session._SESSION_START_TS = 0.0
-    session._TEMPO = 1.0
 
 
 def _install_pace_harness(
@@ -483,11 +546,11 @@ def _install_pace_harness(
 async def test_pace_sets_session_start_once(monkeypatch: pytest.MonkeyPatch) -> None:
     clock, _ = _install_pace_harness(monkeypatch)
     await session.pace()
-    first = session._SESSION_START_TS
+    first = session._SESSION_START_TS["main"]
     assert first == 1000.0
     clock.t += 5.0
     await session.pace()
-    assert first == session._SESSION_START_TS
+    assert first == session._SESSION_START_TS["main"]
     _reset_pace_globals()
 
 
@@ -521,7 +584,7 @@ async def test_pace_applies_fatigue_and_tempo_to_gap(
     monkeypatch.setattr(guardrails, "random_gap", lambda: 1.0)
     monkeypatch.setattr(guardrails, "fatigue_multiplier", lambda _m: 1.5)
     monkeypatch.setattr(guardrails, "next_tempo", lambda _t: 1.2)
-    session._LAST_ACTION_TS = clock.t
+    session._LAST_ACTION_TS["main"] = clock.t
     await session.pace()
     assert slept and abs(slept[0] - 1.8) < 1e-9
     _reset_pace_globals()
@@ -532,14 +595,14 @@ async def test_close_session_resets_pace_globals(
 ) -> None:
     _install_pace_harness(monkeypatch)
     await session.pace()
-    session._TEMPO = 1.25
-    assert session._SESSION_START_TS != 0.0
-    session._PAGE = None
+    session._TEMPO["main"] = 1.25
+    assert session._SESSION_START_TS["main"] != 0.0
+    session._PAGES.clear()
     session._CONTEXT = None
     session._PWS = None
     session._LIFECYCLE_TASK = None
     await session.close_session()
-    assert session._SESSION_START_TS == 0.0
-    assert session._TEMPO == 1.0
+    assert session._SESSION_START_TS == {}
+    assert session._TEMPO == {}
     assert len(session._ACTION_TIMES) == 0
-    assert session._ACTION_COUNT == 0
+    assert session._ACTION_COUNT == {}

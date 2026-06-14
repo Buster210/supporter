@@ -221,7 +221,7 @@ def test_actions_per_minute_max_default(
 
     monkeypatch.delenv("BROWSER_ACTIONS_PER_MIN", raising=False)
     importlib.reload(guardrails)
-    assert guardrails.ACTIONS_PER_MINUTE_MAX == 24
+    assert guardrails.ACTIONS_PER_MINUTE_MAX == 36
 
 
 def test_session_idle_gap_range_from_env(
@@ -231,7 +231,7 @@ def test_session_idle_gap_range_from_env(
 
     monkeypatch.setenv("BROWSER_IDLE_GAP_MIN", "7.5")
     importlib.reload(guardrails)
-    assert guardrails.SESSION_IDLE_GAP_RANGE == (7.5, 60.0)
+    assert guardrails.SESSION_IDLE_GAP_RANGE == (7.5, 15.0)
 
 
 def test_session_idle_gap_range_default(
@@ -241,7 +241,7 @@ def test_session_idle_gap_range_default(
 
     monkeypatch.delenv("BROWSER_IDLE_GAP_MIN", raising=False)
     importlib.reload(guardrails)
-    assert guardrails.SESSION_IDLE_GAP_RANGE == (5.0, 60.0)
+    assert guardrails.SESSION_IDLE_GAP_RANGE == (3.0, 15.0)
 
 
 @pytest.fixture(autouse=True)

@@ -6,13 +6,7 @@ from typing import Any
 
 from ...logger import logger
 from .core import BrowseRequest, _page_host
-from .playbook_store import (
-    _RECORD_PARAMS,
-    _REF_RESOLVABLE_ACTIONS,
-    Playbook,
-    Step,
-    build_step,
-)
+from .playbook_store import _RECORD_PARAMS, _REF_RESOLVABLE_ACTIONS, Step, build_step
 
 __all__ = [
     "RECORDABLE_ACTIONS",
@@ -22,13 +16,9 @@ __all__ = [
     "discard",
     "discard_all",
     "finish",
-    "finish_repair",
-    "get_repair_context",
     "is_recording",
-    "is_repair_recording",
     "record",
     "start",
-    "start_repair",
 ]
 
 
@@ -65,10 +55,6 @@ class _ActiveTask:
 # Per-agent active task dict (lazy import from session to avoid cycles)
 _ACTIVE: dict[str, _ActiveTask] = {}
 
-# WI-2: Auto-repair recording buffer (per-agent)
-_repair_steps: dict[str, list[Step]] = {}
-_repair_context: dict[str, dict[str, Any]] = {}
-
 
 def _get_agent_id() -> str:
     """Helper to get current agent ID (lazy import to avoid cycle)."""
@@ -99,8 +85,6 @@ def start(goal: str, host: str = "", variables: list[str] | None = None) -> str:
     if not goal:
         return "Error: a task goal is required."
     aid = _get_agent_id()
-    _repair_steps.pop(aid, None)
-    _repair_context.pop(aid, None)
     _ACTIVE[aid] = _ActiveTask(goal=goal, host=host, variables=variables or [])
     return f"Recording task: {goal!r}. Browse normally, then call finish_task."
 
@@ -117,43 +101,11 @@ def discard_all() -> None:
     """Discard all active tasks (called during full teardown)."""
     global _ACTIVE
     _ACTIVE.clear()
-    _repair_steps.clear()
-    _repair_context.clear()
 
 
 def is_recording() -> bool:
     aid = _get_agent_id()
     return aid in _ACTIVE
-
-
-# ── WI-2: Repair recording ───────────────────────────────────────────────────
-
-
-def start_repair(playbook: Playbook, good_prefix: list[Step]) -> None:
-    """Start repair recording with context about the original playbook."""
-    aid = _get_agent_id()
-    _repair_steps[aid] = []
-    _repair_context[aid] = {
-        "original_playbook": playbook,
-        "good_prefix": good_prefix,
-    }
-
-
-def is_repair_recording() -> bool:
-    aid = _get_agent_id()
-    return aid in _repair_steps
-
-
-def get_repair_context() -> dict[str, Any] | None:
-    aid = _get_agent_id()
-    return _repair_context.get(aid)
-
-
-def finish_repair() -> tuple[list[Step], dict[str, Any] | None]:
-    aid = _get_agent_id()
-    steps = _repair_steps.pop(aid, [])
-    ctx = _repair_context.pop(aid, None)
-    return steps, ctx
 
 
 def record(step: Step) -> None:
@@ -197,7 +149,7 @@ async def finish(success: bool, host: str = "") -> str:
             if var and var not in variables:
                 variables.append(var)
 
-    from .playbook_store import Playbook, _normalize_url_path, save_playbook
+    from .playbook_store import Playbook, save_playbook
 
     playbook = Playbook(
         host=final_host,
@@ -206,20 +158,13 @@ async def finish(success: bool, host: str = "") -> str:
         steps=task.steps,
         variables=variables,
     )
-    # Derive url_template from first navigate step's URL
-    url_template = "/*"
-    for step in task.steps:
-        if step.action in {"navigate", "newtab"} and step.params.get("url"):
-            url_template = _normalize_url_path(step.params["url"])
-            break
-    playbook.url_template = url_template
     await save_playbook(playbook)
     stepped_count = len(task.steps)
     return f"Saved playbook for {task.goal!r} on {final_host} ({stepped_count} steps)."
 
 
 async def _record_step(req: BrowseRequest, result: str) -> None:
-    if not is_recording() and not is_repair_recording():
+    if not is_recording():
         return
     try:
         from .session import active_page
@@ -247,10 +192,5 @@ async def _record_step(req: BrowseRequest, result: str) -> None:
             variable=req.variable,
         )
         record(step)
-        # WI-2: Also record to repair buffer if active
-        if is_repair_recording() and req.action in RECORDABLE_ACTIONS:
-            aid = _get_agent_id()
-            if aid in _repair_steps:
-                _repair_steps[aid].append(step)
     except Exception:
         logger.debug("Failed to record task step", exc_info=True)

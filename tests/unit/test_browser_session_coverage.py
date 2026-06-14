@@ -18,24 +18,27 @@ from tests.browser_fakes import FakePage, make_session
 @pytest.fixture(autouse=True)
 def _reset_session() -> Generator[None]:
     session._KEEP_OPEN = None
-    session._PAGE = None
+    session._PAGES.clear()
     session._CONTEXT = None
     session._PWS = None
-    session._FRAME_SELECTOR = None
+    session._FRAME_SELECTORS.clear()
+    session._OWNED_PAGES.clear()
     session._LIFECYCLE_TASK = None
     session._CLEANUP_TASK = None
     session._LAUNCHING = False
     session._LAUNCH_LOOP = None
-    session._ACTION_COUNT = 0
-    session._ACTION_CAP_CEILING = 0
-    session._LAST_ACTION_TS = 0.0
+    session._ACTION_COUNT.clear()
+    session._ACTION_CAP_CEILING.clear()
+    session._LAST_ACTION_TS.clear()
     session._ACTION_TIMES.clear()
-    session._SESSION_START_TS = 0.0
-    session._TEMPO = 1.0
+    session._SESSION_START_TS.clear()
+    session._TEMPO.clear()
     session._SELECTED_PROFILE = None
     session._CLONE_LOCK = None
+    token = session._AGENT_ID.set("main")
     yield
     session._KEEP_OPEN = None
+    session._AGENT_ID.reset(token)
 
 
 async def test_is_blank_detects_blank_urls() -> None:
@@ -148,20 +151,20 @@ def test_mirror_dir_noop_when_src_missing(tmp_path: Path) -> None:
 
 
 async def test_resolve_close_at_task_end_not_active() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     result = await session.resolve_close_at_task_end()
     assert result == ""
 
 
 async def test_resolve_close_at_task_end_pinned_open() -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     session._KEEP_OPEN = True
     result = await session.resolve_close_at_task_end()
     assert "persistent session" in result
 
 
 async def test_resolve_close_at_task_end_no_callback() -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     session._KEEP_OPEN = None
     guardrails.browse_confirmation_callback = None
     result = await session.resolve_close_at_task_end()
@@ -169,7 +172,7 @@ async def test_resolve_close_at_task_end_no_callback() -> None:
 
 
 async def test_resolve_close_at_task_end_user_confirms_close() -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     session._KEEP_OPEN = False
     session._CONTEXT = cast(
         "Any",
@@ -199,7 +202,7 @@ async def test_resolve_close_at_task_end_user_confirms_close() -> None:
 
 
 async def test_resolve_close_at_task_end_user_declines() -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     session._KEEP_OPEN = False
 
     async def deny(title: str, detail: str) -> bool:
@@ -235,12 +238,12 @@ async def test_await_lifecycle_answer_waits_for_task() -> None:
 
 async def test_cleanup_blank_tabs_with_no_context() -> None:
     session._CONTEXT = None
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     await session.cleanup_blank_tabs()
 
 
 async def test_close_session_resets_all_globals() -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     session._CONTEXT = cast(
         "Any",
         type("", (), {"close": AsyncMock(), "pages": []})(),
@@ -249,29 +252,29 @@ async def test_close_session_resets_all_globals() -> None:
     session._LIFECYCLE_TASK = None
     session._CLEANUP_TASK = None
     session._KEEP_OPEN = True
-    session._ACTION_COUNT = 5
-    session._TEMPO = 1.5
+    session._ACTION_COUNT["main"] = 5
+    session._TEMPO["main"] = 1.5
 
     await session.close_session()
 
-    assert session._PAGE is None
+    assert session._PAGES.get("main") is None
     assert session._CONTEXT is None
     assert session._PWS is None
     assert session._KEEP_OPEN is None
-    assert session._ACTION_COUNT == 0
-    assert session._TEMPO == 1.0
+    assert session._ACTION_COUNT == {}
+    assert session._TEMPO == {}
 
 
 async def test_prewarm_clone_skips_when_profile_path_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("supporter.config.config.browser_profile_path", "/some/path")
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     await session.prewarm_clone()
 
 
 async def test_prewarm_clone_skips_when_page_active() -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     await session.prewarm_clone()
 
 
@@ -280,7 +283,7 @@ async def test_prewarm_clone_skips_when_no_profile_name(
 ) -> None:
     monkeypatch.setattr("supporter.config.config.browser_profile_path", None)
     monkeypatch.setattr("supporter.config.config.browser_profile_name", "")
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     await session.prewarm_clone()
 
 
@@ -345,7 +348,7 @@ async def test_cleanup_blank_tabs_closes_blank_keeps_active() -> None:
     log, context, page = make_session()
     blank = context.add_page(FakePage(log, url="about:blank"))
     session._CONTEXT = cast("Any", context)
-    session._PAGE = cast("Any", page)
+    session._PAGES["main"] = cast("Any", page)
 
     await session.cleanup_blank_tabs()
 
@@ -364,7 +367,7 @@ async def test_cleanup_blank_tabs_handles_close_error() -> None:
 
     context.pages.append(cast("Any", BoomTab()))
     session._CONTEXT = cast("Any", context)
-    session._PAGE = cast("Any", page)
+    session._PAGES["main"] = cast("Any", page)
 
     await session.cleanup_blank_tabs()
 
@@ -386,7 +389,7 @@ async def test_await_lifecycle_answer_handles_task_error() -> None:
 async def test_resolve_close_at_task_end_no_callback_not_pinned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session._PAGE = cast("Any", object())
+    session._PAGES["main"] = cast("Any", object())
     session._KEEP_OPEN = False
     monkeypatch.setattr(guardrails, "browse_confirmation_callback", None)
 
@@ -448,7 +451,7 @@ async def test_clone_profile_runs_build_in_thread(
 async def test_prewarm_clone_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("supporter.config.config.browser_profile_path", None)
     monkeypatch.setattr("supporter.config.config.browser_profile_name", "Default")
-    session._PAGE = None
+    session._PAGES.pop("main", None)
 
     async def ok(profile: str) -> Path:
         return Path("/clone")
@@ -463,7 +466,7 @@ async def test_prewarm_clone_logs_on_failure(
 ) -> None:
     monkeypatch.setattr("supporter.config.config.browser_profile_path", None)
     monkeypatch.setattr("supporter.config.config.browser_profile_name", "Default")
-    session._PAGE = None
+    session._PAGES.pop("main", None)
 
     async def boom(profile: str) -> Path:
         raise RuntimeError("clone failed")
@@ -553,7 +556,7 @@ async def test_launch_context_linux_adds_password_store_no_profile(
 
 
 async def test_get_session_rejects_cross_loop_launch() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     session._CONTEXT = None
     session._PWS = None
     session._LAUNCHING = True
@@ -571,7 +574,7 @@ async def test_close_session_cancels_cleanup_task() -> None:
     session._CLEANUP_TASK = cleanup
     session._CONTEXT = None
     session._PWS = None
-    session._PAGE = None
+    session._PAGES.pop("main", None)
 
     await session.close_session()
 
@@ -593,15 +596,15 @@ async def test_pace_prunes_stale_action_timestamps(
 
     session._ACTION_TIMES.clear()
     session._ACTION_TIMES.append(0.0)
-    session._LAST_ACTION_TS = 0.0
-    session._SESSION_START_TS = 0.0
-    session._ACTION_COUNT = 0
-    session._ACTION_CAP_CEILING = 0
+    session._LAST_ACTION_TS["main"] = 0.0
+    session._SESSION_START_TS["main"] = 0.0
+    session._ACTION_COUNT["main"] = 0
+    session._ACTION_CAP_CEILING["main"] = 0
 
     await session.pace()
 
     assert all(ts > 0.0 for ts in session._ACTION_TIMES)
-    assert session._ACTION_COUNT == 1
+    assert session._ACTION_COUNT["main"] == 1
 
 
 async def test_start_lifecycle_prompt_propagates_cancellation(
@@ -673,7 +676,7 @@ def _wire_launch(monkeypatch: pytest.MonkeyPatch, pws: Any, launch: Any) -> None
     monkeypatch.setattr("supporter.config.config.browser_profile_path", "/profile/dir")
     monkeypatch.setattr(session, "_profile_dir", lambda: Path("/profile/dir"))
     monkeypatch.setattr(session, "_launch_or_lock_error", launch)
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     session._CONTEXT = None
     session._PWS = None
     session._LAUNCHING = False
@@ -734,7 +737,7 @@ async def test_get_session_cleans_up_when_launch_fails(
     assert pws.stopped is True
     assert session._PWS is None
     assert session._CONTEXT is None
-    assert session._PAGE is None
+    assert session._PAGES.get("main") is None
     assert session._LAUNCHING is False
 
 
@@ -771,7 +774,7 @@ async def test_get_session_closes_context_when_page_setup_fails(
 
 async def test_get_session_waits_for_concurrent_launch() -> None:
     _log, context, page = make_session()
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     session._CONTEXT = None
     session._PWS = None
     session._LAUNCHING = True
@@ -779,7 +782,7 @@ async def test_get_session_waits_for_concurrent_launch() -> None:
 
     async def finish_launch() -> None:
         await asyncio.sleep(0.01)
-        session._PAGE = cast("Any", page)
+        session._PAGES["main"] = cast("Any", page)
         session._CONTEXT = cast("Any", context)
         session._PWS = cast("Any", object())
         session._LAUNCHING = False
@@ -794,7 +797,7 @@ async def test_get_session_waits_for_concurrent_launch() -> None:
 
 
 async def test_get_session_raises_when_concurrent_launch_fails() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     session._CONTEXT = None
     session._PWS = None
     session._LAUNCHING = True

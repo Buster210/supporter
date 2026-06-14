@@ -352,8 +352,8 @@ async def test_start_task_captures_host(
     msg = await start_task("capture test")
     assert "Recording task" in msg
 
-    assert recorder._ACTIVE is not None
-    assert recorder._ACTIVE.host == "example.test"
+    assert "main" in recorder._ACTIVE
+    assert recorder._ACTIVE["main"].host == "example.test"
 
     recorder.discard()
 

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import time
 
-from ...config import config
 from ...logger import logger
-from . import guardrails, session
-from .core import BrowseRequest, _page_host
+from . import session
+from .core import BrowseRequest
 from .handlers import HANDLERS
 from .recorder import _record_step
 from .support import _attach_viewport_image
@@ -63,7 +62,6 @@ async def browse(
     stamp: str = "",
     variable: str = "",
     full_page: bool = False,
-    brief: bool = False,
 ) -> str:
     """Browser automation -- and your PRIMARY tool for web search and research.
 
@@ -179,8 +177,6 @@ async def browse(
             per run, e.g. type(..., text="alice", variable="username").
         full_page: For read, auto-scroll the page to load lazy/infinite-scroll
             content before extracting. Default False.
-        brief: If True, skip the lean-perception diff/snapshot pairing after
-            state-changing actions (screenshot still attaches). Use in hot loops.
 
     Returns:
         Snapshot text, confirmation prompt, or error message.
@@ -214,109 +210,16 @@ async def browse(
         stamp=stamp,
         variable=variable,
         full_page=full_page,
-        brief=brief,
     )
     _t0 = time.perf_counter()
     result = await HANDLERS[action](req)
     await _record_step(req, result)
-
-    # WI-3: Record clean interaction for trust promotion
-    # Only count truly non-confirmation interactions: not in ALWAYS_CONFIRM set
-    # AND the handler didn't trigger a confirmation dialog
-    from .support import _last_confirmation_needed
-
-    success = not (isinstance(result, str) and result.startswith("Error"))
-    if (
-        success
-        and action not in guardrails._ALWAYS_CONFIRM_ACTIONS
-        and not _last_confirmation_needed.get()
-    ):
-        page = session.active_page()
-        if page is not None:
-            host = await _page_host(page)
-            await guardrails.record_clean_interaction(host)
-
     if action in _IMAGE_ACTIONS and not (
         isinstance(result, str) and result.startswith("Error")
     ):
         page = session.active_page()
         if page is not None:
             await _attach_viewport_image(page)
-            # Lean perception: auto-pair diff + screenshot
-            if not brief and action not in {
-                "navigate",
-                "newtab",
-                "back",
-                "forward",
-                "upload",
-                "download",
-                "frame",
-                "closetab",
-                "tab",
-                "wait",
-                "waitnetwork",
-                "solve_cloudflare",
-                "snapshot",
-            }:
-                from .snapshot import (
-                    clean_snapshot,
-                    diff_snapshot,
-                    filter_interactive,
-                    has_baseline,
-                    remember_snapshot,
-                )
-                from .support import _page_baseline_key, _page_key
-
-                bkey = _page_baseline_key(page)
-                page_url = _page_key(page)
-                raw_snap = await page.aria_snapshot(mode="ai")
-                cleaned = clean_snapshot(raw_snap, page_url)
-                assert isinstance(result, str)
-
-                prefix: str = ""
-                if has_baseline(bkey):
-                    diff_text = diff_snapshot(bkey, cleaned)
-                    diff_lines = [
-                        line
-                        for line in diff_text.splitlines()
-                        if line.startswith(("+", "-"))
-                    ]
-                    if len(diff_lines) <= config.browser_diff_threshold:
-                        added = sum(1 for line in diff_lines if line.startswith("+"))
-                        removed = sum(1 for line in diff_lines if line.startswith("-"))
-                        prefix = f"[diff: +{added}/-{removed} lines]\n{diff_text}"
-                    else:
-                        compact_snap = filter_interactive(cleaned)
-                        prefix = (
-                            f"[full snapshot:"
-                            f" {len(compact_snap.splitlines())}"
-                            f" interactive elements]\n{compact_snap}"
-                        )
-                else:
-                    compact_snap = filter_interactive(cleaned)
-                    remember_snapshot(bkey, cleaned)
-                    prefix = (
-                        f"[full snapshot:"
-                        f" {len(compact_snap.splitlines())}"
-                        f" interactive elements]\n{compact_snap}"
-                    )
-                if prefix:
-                    result = f"{prefix}\n\n{result}"
-
-    # WI-1: Cookbook auto-discovery hints on navigate/newtab
-    if action in {"navigate", "newtab"} and not (
-        isinstance(result, str) and result.startswith("Error")
-    ):
-        from .playbook_store import find_cookbook_hints
-
-        current_url = req.url or (
-            session.active_page().url if session.active_page() else ""
-        )
-        if current_url:
-            hints = find_cookbook_hints(current_url)
-            if hints:
-                result = result + "\n" + "\n".join(hints)
-
     _elapsed_ms = (time.perf_counter() - _t0) * 1000.0
     logger.debug(f"browse action={action} elapsed_ms={_elapsed_ms:.1f}")
     return result

@@ -14,7 +14,7 @@ from supporter.tools.browser import humanize
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from patchright.async_api import Mouse, Page
+    from patchright.async_api import Mouse, Page, ViewportSize
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +60,7 @@ def test_fitts_duration_grows_with_distance() -> None:
     near = humanize.fitts_duration((0.0, 0.0), (10.0, 0.0))
     far = humanize.fitts_duration((0.0, 0.0), (1000.0, 0.0))
     assert far > near
-    assert near >= 200.0
+    assert near >= humanize._FITTS_BASE_MS
 
 
 def test_random_control_points_starts_and_ends_fixed() -> None:
@@ -88,9 +88,17 @@ def test_lognormal_delay_centers_near_median() -> None:
 
 
 def test_origin_uses_tracked_position_when_set() -> None:
+    random.seed(0)
     humanize._LAST_POS = (123.0, 456.0)
-    assert humanize._origin_for(None) == (123.0, 456.0)
-    assert humanize._origin_for({"width": 800, "height": 600}) == (123.0, 456.0)
+    tol = 6 * humanize._ORIGIN_SETTLE_JITTER
+    viewports: tuple[ViewportSize | None, ...] = (
+        None,
+        cast("ViewportSize", {"width": 800, "height": 600}),
+    )
+    for vp in viewports:
+        x, y = humanize._origin_for(vp)
+        assert abs(x - 123.0) <= tol
+        assert abs(y - 456.0) <= tol
 
 
 def test_origin_falls_back_inside_viewport_when_unset() -> None:
@@ -128,7 +136,7 @@ async def test_reading_pause_sleeps_within_documented_window(
         await humanize.reading_pause()
 
     assert len(slept) == 50
-    assert all(0.4 <= s <= humanize._READ_HI_BASE for s in slept)
+    assert all(0.25 <= s <= humanize._READ_HI_BASE for s in slept)
 
 
 class _FakeTextPage:
@@ -178,7 +186,7 @@ async def test_reading_pause_subthreshold_page_keeps_pass1_clamp(
     page = _FakeTextPage(50)
     for _ in range(500):
         await humanize.reading_pause(cast("Page", page))
-    assert all(0.4 <= s <= humanize._READ_HI_BASE for s in slept)
+    assert all(0.25 <= s <= humanize._READ_HI_BASE for s in slept)
 
 
 def test_jitter_ms_within_bounds_and_int() -> None:

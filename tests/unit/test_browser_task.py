@@ -55,7 +55,7 @@ def test_record_appends_eligible_step() -> None:
     start("do a thing")
     record(build_step("navigate", params={"url": "u"}))
     assert is_recording()
-    active = recorder._ACTIVE
+    active = recorder._ACTIVE["main"]
     assert active is not None
     assert len(active.steps) == 1
     assert active.steps[0].action == "navigate"

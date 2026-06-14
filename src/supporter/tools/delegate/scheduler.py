@@ -20,7 +20,6 @@ from ...types import (
     TaskStatus,
     TaskTimedOut,
 )
-from ..research.claims import ingest_claims
 from .agents import delegate_allowed_tool_names, run_sub_agent
 from .backends import GEMINI_BACKEND
 from .bus import DelegationBus, bus_exists, get_bus, remove_bus
@@ -192,10 +191,6 @@ async def _execute_dag(
 ) -> list[dict[str, Any]]:
     results: dict[str, dict[str, Any]] = dict(seed_results) if seed_results else {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
-    try:
-        question_id = str(load_capsule(job_id).get("question_id", job_id))
-    except Exception:
-        question_id = job_id
     # Load project memory once for all tasks
     memory = await load_project_memory()
     memory_block = memory_context_block(memory)
@@ -248,175 +243,159 @@ async def _execute_dag(
             task_done[task_id].set()
             return
 
+        started_at = time.monotonic()
+        bus.update_task_state(
+            task_id,
+            {
+                "status": "RUNNING",
+                "agent_label": agent_label,
+                "task_goal": task["task"],
+                "started_at": started_at,
+                "timeout": task["timeout"],
+                "anomaly_fired": False,
+            },
+        )
+        enriched = _inject_dependency_context(task, results)
+        enriched = _inject_memory_context(enriched, memory_block)
+        await mark_task_started(
+            job_id,
+            task_id,
+            dependency_context=enriched.get("context", ""),
+        )
+        bus.publish(
+            TaskStarted(
+                job_id=job_id,
+                task_id=task_id,
+                agent_label=agent_label,
+                started_at=started_at,
+                timeout=task["timeout"],
+            )
+        )
+
+        # Ignite a per-task browser agent id so concurrent page-pilots each bind
+        # to their own tab. Runs in this task's contextvar copy → isolated. The
+        # finally net releases the agent's tabs even on crash/timeout.
+        browser_touch = _task_touches_browser(task)
+        agent_token = None
+        browser_session: Any = None
+        if browser_touch:
+            from ..browser import session as browser_session
+
+            agent_token = browser_session.set_agent_id(task_id)
         try:
-            started_at = time.monotonic()
-            bus.update_task_state(
-                task_id,
-                {
-                    "status": "RUNNING",
-                    "agent_label": agent_label,
-                    "task_goal": task["task"],
-                    "started_at": started_at,
-                    "timeout": task["timeout"],
-                    "anomaly_fired": False,
-                },
-            )
-            enriched = _inject_dependency_context(task, results)
-            enriched = _inject_memory_context(enriched, memory_block)
-            await mark_task_started(
-                job_id,
-                task_id,
-                dependency_context=enriched.get("context", ""),
-            )
-            bus.publish(
-                TaskStarted(
-                    job_id=job_id,
-                    task_id=task_id,
-                    agent_label=agent_label,
-                    started_at=started_at,
-                    timeout=task["timeout"],
-                )
-            )
-
-            # Ignite a per-task browser agent id so concurrent page-pilots each bind
-            # to their own tab. Runs in this task's contextvar copy → isolated. The
-            # finally net releases the agent's tabs even on crash/timeout.
-            browser_touch = _task_touches_browser(task)
-            agent_token = None
-            browser_session: Any = None
-            if browser_touch:
-                from ..browser import session as browser_session
-
-                agent_token = browser_session.set_agent_id(task_id)
-            try:
-                async with job_semaphore:
-                    result = await run_sub_agent(
-                        enriched, global_semaphore, bus, job_id
-                    )
-                # Release job_semaphore before QA/repair: they use global_semaphore
-                # independently, so holding job_semaphore across them needlessly
-                # throttles sub-agent concurrency below the configured budget.
+            async with job_semaphore:
+                result = await run_sub_agent(enriched, global_semaphore, bus, job_id)
                 result = await run_qa_gate(
                     enriched, result, global_semaphore, bus, job_id
                 )
                 result = await _repair_or_rerequest(
                     enriched, result, global_semaphore, bus, job_id
                 )
-            finally:
-                if browser_session is not None:
-                    with contextlib.suppress(Exception):
-                        await browser_session.release_agent(task_id)
-                    if agent_token is not None:
-                        browser_session.reset_contextvar(agent_token)
-            results[task_id] = result
-
-            if result["status"] == TaskStatus.COMPLETED:
-                parsed_fields = extract_task_capsule_fields(result.get("output", ""))
-                evidence_raw = parsed_fields.get("evidence")
-                evidence: dict[str, Any] = (
-                    evidence_raw if isinstance(evidence_raw, dict) else {}
-                )
-                evidence_counts = {
-                    key: len(value) if isinstance(value, list) else 0
-                    for key, value in evidence.items()
-                }
-                findings_raw = parsed_fields.get("findings")
-                findings_count = (
-                    len(findings_raw) if isinstance(findings_raw, list) else 0
-                )
-                await mark_task_completed(
-                    job_id,
-                    task_id,
-                    result.get("output", ""),
-                    result.get("duration", 0.0),
-                    result.get("model") or task.get("model"),
-                    result.get("tokens", {}),
-                    parsed_fields,
-                )
-                claims = parsed_fields.get("claims") or []
-                if claims:
-                    try:
-                        await asyncio.to_thread(
-                            ingest_claims, question_id, task_id, agent_label, claims
-                        )
-                    except Exception as exc:
-                        logger.warning(f"claim ingest failed for {task_id}: {exc}")
-                bus.update_task_state(
-                    task_id,
-                    {
-                        "status": "DONE",
-                        "agent_label": agent_label,
-                        "task_goal": task["task"],
-                        "duration": result["duration"],
-                        "summary": str(parsed_fields.get("summary", "")),
-                    },
-                )
-                bus.publish(
-                    TaskCompleted(
-                        job_id=job_id,
-                        task_id=task_id,
-                        duration=result["duration"],
-                        output=result.get("output", ""),
-                        model=result.get("model", ""),
-                        summary=str(parsed_fields.get("summary", "")),
-                        confidence=str(parsed_fields.get("confidence", "unknown")),
-                        findings_count=findings_count,
-                        evidence_counts=evidence_counts,
-                        handoff=str(parsed_fields.get("handoff", "")),
-                        tokens=result.get("tokens") or {},
-                        step_count=int(result.get("step_count", 0)),
-                    )
-                )
-            elif result["status"] == TaskStatus.TIMEOUT:
-                await mark_task_timed_out(
-                    job_id,
-                    task_id,
-                    result.get("output", "Task timed out"),
-                    result.get("duration", 0.0),
-                )
-                bus.update_task_state(
-                    task_id,
-                    {
-                        "status": "TIMEOUT",
-                        "agent_label": agent_label,
-                        "task_goal": task["task"],
-                        "duration": result["duration"],
-                        "summary": "Execution timed out before completion.",
-                    },
-                )
-                bus.publish(
-                    TaskTimedOut(
-                        job_id=job_id, task_id=task_id, duration=result["duration"]
-                    )
-                )
-            else:
-                await mark_task_failed(
-                    job_id,
-                    task_id,
-                    result.get("output", "Unknown error"),
-                    result.get("duration", 0.0),
-                    result.get("output", ""),
-                )
-                bus.update_task_state(
-                    task_id,
-                    {
-                        "status": "FAILED",
-                        "agent_label": agent_label,
-                        "task_goal": task["task"],
-                        "duration": result["duration"],
-                        "summary": result.get("output", "Unknown error"),
-                    },
-                )
-                bus.publish(
-                    TaskFailed(
-                        job_id=job_id,
-                        task_id=task_id,
-                        duration=result["duration"],
-                        error=result.get("output", "Unknown error"),
-                    )
-                )
         finally:
-            task_done[task_id].set()
+            if browser_session is not None:
+                with contextlib.suppress(Exception):
+                    await browser_session.release_agent(task_id)
+                if agent_token is not None:
+                    browser_session.reset_contextvar(agent_token)
+        results[task_id] = result
+
+        if result["status"] == TaskStatus.COMPLETED:
+            parsed_fields = extract_task_capsule_fields(result.get("output", ""))
+            evidence_raw = parsed_fields.get("evidence")
+            evidence: dict[str, Any] = (
+                evidence_raw if isinstance(evidence_raw, dict) else {}
+            )
+            evidence_counts = {
+                key: len(value) if isinstance(value, list) else 0
+                for key, value in evidence.items()
+            }
+            findings_raw = parsed_fields.get("findings")
+            findings_count = len(findings_raw) if isinstance(findings_raw, list) else 0
+            await mark_task_completed(
+                job_id,
+                task_id,
+                result.get("output", ""),
+                result.get("duration", 0.0),
+                result.get("model") or task.get("model"),
+                result.get("tokens", {}),
+                parsed_fields,
+            )
+            bus.update_task_state(
+                task_id,
+                {
+                    "status": "DONE",
+                    "agent_label": agent_label,
+                    "task_goal": task["task"],
+                    "duration": result["duration"],
+                    "summary": str(parsed_fields.get("summary", "")),
+                },
+            )
+            bus.publish(
+                TaskCompleted(
+                    job_id=job_id,
+                    task_id=task_id,
+                    duration=result["duration"],
+                    output=result.get("output", ""),
+                    model=result.get("model", ""),
+                    summary=str(parsed_fields.get("summary", "")),
+                    confidence=str(parsed_fields.get("confidence", "unknown")),
+                    findings_count=findings_count,
+                    evidence_counts=evidence_counts,
+                    handoff=str(parsed_fields.get("handoff", "")),
+                    tokens=result.get("tokens") or {},
+                    step_count=int(result.get("step_count", 0)),
+                )
+            )
+        elif result["status"] == TaskStatus.TIMEOUT:
+            await mark_task_timed_out(
+                job_id,
+                task_id,
+                result.get("output", "Task timed out"),
+                result.get("duration", 0.0),
+            )
+            bus.update_task_state(
+                task_id,
+                {
+                    "status": "TIMEOUT",
+                    "agent_label": agent_label,
+                    "task_goal": task["task"],
+                    "duration": result["duration"],
+                    "summary": "Execution timed out before completion.",
+                },
+            )
+            bus.publish(
+                TaskTimedOut(
+                    job_id=job_id, task_id=task_id, duration=result["duration"]
+                )
+            )
+        else:
+            await mark_task_failed(
+                job_id,
+                task_id,
+                result.get("output", "Unknown error"),
+                result.get("duration", 0.0),
+                result.get("output", ""),
+            )
+            bus.update_task_state(
+                task_id,
+                {
+                    "status": "FAILED",
+                    "agent_label": agent_label,
+                    "task_goal": task["task"],
+                    "duration": result["duration"],
+                    "summary": result.get("output", "Unknown error"),
+                },
+            )
+            bus.publish(
+                TaskFailed(
+                    job_id=job_id,
+                    task_id=task_id,
+                    duration=result["duration"],
+                    error=result.get("output", "Unknown error"),
+                )
+            )
+
+        task_done[task_id].set()
 
     child_tasks = [asyncio.create_task(_run_with_gate(t)) for t in tasks]
     try:
@@ -745,6 +724,7 @@ async def resume_milestone(job_id: str) -> bool:
         # Create the bus only when there is live work; seed its snapshot with
         # every task's last-known state so the resumed run renders in full.
         bus = get_bus(job_id, milestone)
+        bus.notify_per_task = True
         _register_capsule_tasks_on_bus(bus, tasks_by_id, terminal_statuses)
 
         job_semaphore = asyncio.Semaphore(parallel_cap)

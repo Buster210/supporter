@@ -108,6 +108,70 @@ async def test_dispatch_forwards_keyword_args_into_the_request(
     assert req.stamp == "s"
 
 
+def _wire_image_capture(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Route dispatch through a fake page + record _attach_viewport_image calls."""
+    attached: list[Any] = []
+    page = object()
+
+    async def attach(p: Any) -> None:
+        attached.append(p)
+
+    async def record(_req: BrowseRequest, _result: str) -> None:
+        return None
+
+    monkeypatch.setattr(tool.session, "active_page", lambda: page)
+    monkeypatch.setattr(tool, "_attach_viewport_image", attach)
+    monkeypatch.setattr(tool, "_record_step", record)
+    return attached
+
+
+async def test_state_changing_action_attaches_viewport_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attached = _wire_image_capture(monkeypatch)
+
+    async def handler(_req: BrowseRequest) -> str:
+        return "snapshot text"
+
+    monkeypatch.setattr(tool, "HANDLERS", {"snapshot": handler})
+
+    await tool.browse("snapshot")
+
+    assert len(attached) == 1
+
+
+async def test_excluded_action_does_not_attach_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attached = _wire_image_capture(monkeypatch)
+
+    async def handler(_req: BrowseRequest) -> str:
+        return "diff text"
+
+    # diff is a deliberate token-saver — must stay text-only.
+    assert "diff" not in tool._IMAGE_ACTIONS
+    monkeypatch.setattr(tool, "HANDLERS", {"diff": handler})
+
+    await tool.browse("diff")
+
+    assert attached == []
+
+
+async def test_failed_action_does_not_attach_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attached = _wire_image_capture(monkeypatch)
+
+    async def handler(_req: BrowseRequest) -> str:
+        return "Error: something went wrong"
+
+    monkeypatch.setattr(tool, "HANDLERS", {"navigate": handler})
+
+    await tool.browse("navigate", url="https://example.test/")
+
+    assert attached == []
+
+
 async def test_action_cap_runtimeerror_surfaces_as_recoverable_string(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

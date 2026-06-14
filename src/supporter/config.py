@@ -221,6 +221,7 @@ def load_config() -> AppConfig:
         browser_profile_path=os.getenv("BROWSER_PROFILE_PATH"),
         browser_profile_name=os.getenv("BROWSER_PROFILE_NAME"),
         browser_debug_overlay=_bool_env("BROWSER_DEBUG_OVERLAY", False),
+        browser_parallel_pilots=_bool_env("BROWSER_PARALLEL_PILOTS", True),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),

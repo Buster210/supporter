@@ -12,9 +12,9 @@ from supporter.tools.browser.playbook_store import build_step
 
 @pytest.fixture(autouse=True)
 def _reset_recorder() -> Generator[None]:
-    recorder._ACTIVE = None
+    recorder._ACTIVE = {}
     yield
-    recorder._ACTIVE = None
+    recorder._ACTIVE = {}
 
 
 def test_start_sets_active_task() -> None:
@@ -25,8 +25,8 @@ def test_start_sets_active_task() -> None:
 
 def test_start_strips_whitespace_from_goal() -> None:
     result = recorder.start("  hello  ")
-    assert recorder._ACTIVE is not None
-    assert recorder._ACTIVE.goal == "hello"
+    assert "main" in recorder._ACTIVE
+    assert recorder._ACTIVE["main"].goal == "hello"
     assert "hello" in result
 
 
@@ -44,8 +44,8 @@ def test_start_rejects_whitespace_only_goal() -> None:
 
 def test_start_captures_variables() -> None:
     recorder.start("task", variables=["user", "pass"])
-    assert recorder._ACTIVE is not None
-    assert recorder._ACTIVE.variables == ["user", "pass"]
+    assert "main" in recorder._ACTIVE
+    assert recorder._ACTIVE["main"].variables == ["user", "pass"]
 
 
 def test_discard_clears_active() -> None:
@@ -53,7 +53,7 @@ def test_discard_clears_active() -> None:
     assert recorder.is_recording()
     recorder.discard()
     assert not recorder.is_recording()
-    assert recorder._ACTIVE is None
+    assert "main" not in recorder._ACTIVE
 
 
 def test_is_recording_false_when_no_active() -> None:
@@ -64,48 +64,48 @@ def test_record_appends_step_when_active() -> None:
     recorder.start("task")
     step = build_step("click", role="button", name="OK", result="clicked")
     recorder.record(step)
-    assert recorder._ACTIVE is not None
-    assert len(recorder._ACTIVE.steps) == 1
-    assert recorder._ACTIVE.steps[0].action == "click"
+    assert "main" in recorder._ACTIVE
+    assert len(recorder._ACTIVE["main"].steps) == 1
+    assert recorder._ACTIVE["main"].steps[0].action == "click"
 
 
 def test_record_skips_when_not_active() -> None:
     step = build_step("click", result="ok")
     recorder.record(step)
-    assert recorder._ACTIVE is None
+    assert "main" not in recorder._ACTIVE
 
 
 def test_record_skips_non_recordable_actions() -> None:
     recorder.start("task")
     step = build_step("unknown_action", result="ok")
     recorder.record(step)
-    assert recorder._ACTIVE is not None
-    assert len(recorder._ACTIVE.steps) == 0
+    assert "main" in recorder._ACTIVE
+    assert len(recorder._ACTIVE["main"].steps) == 0
 
 
 def test_record_marks_failed_on_error_result() -> None:
     recorder.start("task")
     step = build_step("click", result="Error: ref not found")
     recorder.record(step)
-    assert recorder._ACTIVE is not None
-    assert recorder._ACTIVE.failed is True
-    assert len(recorder._ACTIVE.steps) == 1
+    assert "main" in recorder._ACTIVE
+    assert recorder._ACTIVE["main"].failed is True
+    assert len(recorder._ACTIVE["main"].steps) == 1
 
 
 def test_record_does_not_mark_failed_on_success() -> None:
     recorder.start("task")
     step = build_step("click", result="clicked")
     recorder.record(step)
-    assert recorder._ACTIVE is not None
-    assert recorder._ACTIVE.failed is False
+    assert "main" in recorder._ACTIVE
+    assert recorder._ACTIVE["main"].failed is False
 
 
 def test_record_all_recordable_actions() -> None:
     recorder.start("task")
     for action in recorder.RECORDABLE_ACTIONS:
         recorder.record(build_step(action, result="ok"))
-    assert recorder._ACTIVE is not None
-    assert len(recorder._ACTIVE.steps) == len(recorder.RECORDABLE_ACTIONS)
+    assert "main" in recorder._ACTIVE
+    assert len(recorder._ACTIVE["main"].steps) == len(recorder.RECORDABLE_ACTIONS)
 
 
 async def test_finish_no_active_returns_message() -> None:
@@ -302,7 +302,7 @@ def test_record_locator_returns_frame_locator_with_selector() -> None:
 async def test_record_step_does_nothing_when_not_recording() -> None:
     req = BrowseRequest(action="click", ref="e1")
     await recorder._record_step(req, "clicked")
-    assert recorder._ACTIVE is None
+    assert "main" not in recorder._ACTIVE
 
 
 async def test_record_step_captures_step_with_role_name(
@@ -333,9 +333,9 @@ async def test_record_step_captures_step_with_role_name(
 
     req = BrowseRequest(action="click", ref="e5")
     await recorder._record_step(req, "clicked")
-    assert recorder._ACTIVE is not None
-    assert len(recorder._ACTIVE.steps) == 1
-    step = recorder._ACTIVE.steps[0]
+    assert "main" in recorder._ACTIVE
+    assert len(recorder._ACTIVE["main"].steps) == 1
+    step = recorder._ACTIVE["main"].steps[0]
     assert step.role == "button"
     assert step.name == "Submit"
     assert step.result_head == "clicked"
@@ -351,8 +351,8 @@ async def test_record_step_skips_when_page_is_none(
     )
     req = BrowseRequest(action="click", ref="e1")
     await recorder._record_step(req, "result")
-    assert recorder._ACTIVE is not None
-    assert len(recorder._ACTIVE.steps) == 0
+    assert "main" in recorder._ACTIVE
+    assert len(recorder._ACTIVE["main"].steps) == 0
 
 
 async def test_record_step_exception_does_not_propagate(
@@ -385,6 +385,6 @@ async def test_record_step_skips_non_ref_resolvable_actions(
     )
     req = BrowseRequest(action="navigate", url="https://x.test/")
     await recorder._record_step(req, "ok")
-    assert recorder._ACTIVE is not None
-    assert len(recorder._ACTIVE.steps) == 1
-    assert recorder._ACTIVE.steps[0].params == {"url": "https://x.test/"}
+    assert "main" in recorder._ACTIVE
+    assert len(recorder._ACTIVE["main"].steps) == 1
+    assert recorder._ACTIVE["main"].steps[0].params == {"url": "https://x.test/"}

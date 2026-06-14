@@ -16,42 +16,52 @@ from supporter.tools.browser.supervisor import (
     browser_supervise,
 )
 
+_SCALAR_GLOBALS = (
+    "_PWS",
+    "_CONTEXT",
+    "_LAUNCHING",
+    "_LAUNCH_LOOP",
+    "_CLONE_LOCK",
+    "_KEEP_OPEN",
+    "_LIFECYCLE_TASK",
+    "_CLEANUP_TASK",
+)
+_DICT_GLOBALS = (
+    "_PAGES",
+    "_FRAME_SELECTORS",
+    "_OWNED_PAGES",
+    "_ACTION_COUNT",
+    "_ACTION_CAP_CEILING",
+    "_LAST_ACTION_TS",
+    "_SESSION_START_TS",
+    "_TEMPO",
+)
+
 
 @pytest.fixture(autouse=True)
 def _reset_session() -> Generator[None, None, None]:
-    saved = {
-        name: getattr(session, name)
-        for name in (
-            "_PWS",
-            "_CONTEXT",
-            "_PAGE",
-            "_LAUNCHING",
-            "_LAUNCH_LOOP",
-            "_CLONE_LOCK",
-            "_ACTION_COUNT",
-            "_ACTION_CAP_CEILING",
-            "_LAST_ACTION_TS",
-            "_SESSION_START_TS",
-            "_TEMPO",
-            "_KEEP_OPEN",
-            "_FRAME_SELECTOR",
-            "_LIFECYCLE_TASK",
-            "_CLEANUP_TASK",
-        )
-    }
+    saved = {name: getattr(session, name) for name in _SCALAR_GLOBALS}
+    saved_dicts = {name: dict(getattr(session, name)) for name in _DICT_GLOBALS}
     saved_cb = session.guardrails.browse_confirmation_callback
+    token = session._AGENT_ID.set("main")
     try:
         yield
     finally:
         for name, value in saved.items():
             setattr(session, name, value)
+        for name, value in saved_dicts.items():
+            current = getattr(session, name)
+            current.clear()
+            current.update(value)
         session.guardrails.browse_confirmation_callback = saved_cb
+        session._AGENT_ID.reset(token)
 
 
 def _fake_page(url: str = "https://example.test/") -> Any:
     page = cast("Any", type("_FakePage", (), {"url": url})())
     page.close = AsyncMock()
     page.title = AsyncMock(return_value="Fake Title")
+    page.is_closed = lambda: False
     return page
 
 
@@ -60,8 +70,12 @@ def _fake_session(*, url: str = "https://example.test/", tabs: int = 1) -> None:
     context = cast("Any", type("_Ctx", (), {"pages": pages})())
     session._PWS = cast("Any", object())
     session._CONTEXT = context
-    session._PAGE = pages[0] if pages else None
-    session._LAST_ACTION_TS = time.monotonic() - 5.0
+    if pages:
+        session._PAGES["main"] = pages[0]
+        session._OWNED_PAGES["main"] = set(pages)
+    else:
+        session._PAGES.pop("main", None)
+    session._LAST_ACTION_TS["main"] = time.monotonic() - 5.0
 
 
 @pytest.mark.parametrize(
@@ -128,7 +142,7 @@ async def test_status_returns_json_with_session_fields() -> None:
 
 
 async def test_status_active_false_when_no_session() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     result = await browser_supervise("status")
     data = json.loads(result)
     assert data["active"] is False
@@ -138,7 +152,7 @@ async def test_status_active_false_when_no_session() -> None:
 
 async def test_status_reflects_launching_flag() -> None:
     session._LAUNCHING = True
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     result = await browser_supervise("status")
     data = json.loads(result)
     assert data["launching"] is True
@@ -161,13 +175,13 @@ async def test_closenow_force_tears_down_active_session() -> None:
 
 
 async def test_closenow_already_closed_returns_message() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     result = await browser_supervise("closenow")
     assert result == "Browser already closed."
 
 
 async def test_closenow_force_on_inactive_session() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     result = await browser_supervise("closenow", force=True)
     assert result == "Browser already closed."
 
@@ -198,7 +212,7 @@ async def test_close_confirmed_by_user() -> None:
 
 
 async def test_close_already_closed() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     result = await browser_supervise("close")
     assert result == "Browser already closed."
 
@@ -272,7 +286,7 @@ async def test_session_status_returns_dict() -> None:
 
 
 async def test_session_status_inactive_session() -> None:
-    session._PAGE = None
+    session._PAGES.pop("main", None)
     session._CONTEXT = None
     info = await session.session_status()
     assert info["active"] is False
@@ -282,11 +296,11 @@ async def test_session_status_inactive_session() -> None:
 async def test_close_session_force_resets_globals() -> None:
     _fake_session()
     session._KEEP_OPEN = True
-    session._FRAME_SELECTOR = "iframe"
+    session._FRAME_SELECTORS["main"] = "iframe"
     await session.close_session(force=True)
     assert not session.is_active()
     assert session._KEEP_OPEN is None
-    assert session._FRAME_SELECTOR is None
+    assert session._FRAME_SELECTORS.get("main") is None
 
 
 async def test_close_session_force_swallows_close_error() -> None:

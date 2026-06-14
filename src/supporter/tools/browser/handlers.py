@@ -9,6 +9,7 @@ from ...logger import logger
 from .. import resolved_project_root
 from . import cloudflare, debug_overlay, guardrails, humanize, session, snapshot
 from .core import BrowseRequest, _page_host
+from .reader import _handle_links, _handle_read
 from .support import (
     _confirm_always,
     _confirm_or_block,
@@ -187,6 +188,7 @@ async def _handle_closetab(req: BrowseRequest) -> str:
     closed_key = _page_baseline_key(target)
     await target.close()
     snapshot.forget_snapshot(closed_key)
+    session.drop_page(target)
 
     remaining = session.list_pages()
     if not remaining:
@@ -614,6 +616,8 @@ HANDLERS: dict[str, Callable[[BrowseRequest], Awaitable[str]]] = {
     "back": _handle_back,
     "forward": _handle_forward,
     "snapshot": _handle_snapshot,
+    "read": _handle_read,
+    "links": _handle_links,
     "diff": _handle_diff,
     "screenshot": _handle_screenshot,
     "click": _handle_click,
