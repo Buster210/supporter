@@ -457,7 +457,7 @@ async def _handle_status(_req: BrowseRequest) -> str:
 
 @_wrap_action_errors("close")
 async def _handle_close(req: BrowseRequest) -> str:
-    if not session.is_active():
+    if not session.is_session_alive():
         return "Browser already closed."
     cb = guardrails.browse_confirmation_callback
     if cb is None:
@@ -470,7 +470,7 @@ async def _handle_close(req: BrowseRequest) -> str:
 
 @_wrap_action_errors("closenow")
 async def _handle_closenow(req: BrowseRequest) -> str:
-    if not session.is_active():
+    if not session.is_session_alive():
         return "Browser already closed."
     await session.close_session(force=req.force)
     return "Browser closed."

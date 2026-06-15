@@ -44,7 +44,7 @@ async def test_close_when_inactive_reports_already_closed(
     close_calls: list[bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(session, "is_active", lambda: False)
+    monkeypatch.setattr(session, "is_session_alive", lambda: False)
 
     result = await browse("close")
 
@@ -68,7 +68,7 @@ async def test_closenow_when_inactive_reports_already_closed(
     close_calls: list[bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(session, "is_active", lambda: False)
+    monkeypatch.setattr(session, "is_session_alive", lambda: False)
 
     result = await browse("closenow")
 

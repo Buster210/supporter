@@ -186,6 +186,42 @@ async def test_closenow_force_on_inactive_session() -> None:
     assert result == "Browser already closed."
 
 
+async def test_closenow_closes_live_context_without_agent_page() -> None:
+    # Regression: browser process is up (_CONTEXT live) but THIS agent has no
+    # recorded page — e.g. its tab was released at a prior task end. The old
+    # is_active() gate reported "already closed" and skipped teardown, leaving a
+    # real Chrome window open. Close must act on session liveness, not page.
+    _fake_session()
+    session._PAGES.pop("main", None)
+    assert not session.is_active()
+    assert session.is_session_alive()
+    result = await browser_supervise("closenow")
+    assert result == "Browser closed."
+    assert not session.is_session_alive()
+
+
+async def test_close_closes_live_context_without_agent_page() -> None:
+    _fake_session()
+    session._PAGES.pop("main", None)
+
+    async def _confirm(title: str, detail: str) -> bool:
+        return True
+
+    session.guardrails.browse_confirmation_callback = _confirm
+    result = await browser_supervise("close")
+    assert result == "Browser closed."
+    assert not session.is_session_alive()
+
+
+async def test_status_reports_session_alive_without_agent_page() -> None:
+    _fake_session()
+    session._PAGES.pop("main", None)
+    result = await browser_supervise("status")
+    data = json.loads(result)
+    assert data["session_alive"] is True
+    assert data["active"] is False
+
+
 async def test_close_denied_by_user() -> None:
     _fake_session()
 

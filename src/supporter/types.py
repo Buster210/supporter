@@ -91,8 +91,9 @@ class AppConfig:
     browser_parallel_pilots: bool = True
     browser_diff_threshold: int = 40
     # Auto-close the browser after this many seconds with no interaction.
-    # 0 disables idle auto-close (browser persists until explicit close).
-    browser_idle_close_seconds: int = 300
+    # Any browser interaction resets the clock; 0 disables idle auto-close
+    # (browser persists until explicit close).
+    browser_idle_close_seconds: int = 600
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2

@@ -431,7 +431,7 @@ async def test_prewarm_clone_logs_on_failure(
     await session.prewarm_clone()
 
 
-async def test_launch_or_lock_error_returns_context(
+async def test_launch_with_recovery_returns_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sentinel = object()
@@ -441,24 +441,32 @@ async def test_launch_or_lock_error_returns_context(
 
     monkeypatch.setattr(session, "_launch_context", fake_launch)
 
-    result = await session._launch_or_lock_error(None, Path("/d"), "Default")
+    result = await session._launch_with_recovery(
+        None, Path("/d"), "Default", can_kill=False
+    )
 
     assert result is sentinel
 
 
-async def test_launch_or_lock_error_translates_lock_error(
+async def test_launch_with_recovery_translates_unclearable_lock_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_launch(pws: Any, launch_dir: Path, profile: str) -> Any:
         raise RuntimeError("SingletonLock present")
 
     monkeypatch.setattr(session, "_launch_context", fake_launch)
+    # Lock held by a process we may not kill -> clear refuses -> help message.
+    monkeypatch.setattr(
+        session, "_force_clear_profile_lock", lambda d, *, can_kill: False
+    )
 
     with pytest.raises(RuntimeError, match="already using this profile"):
-        await session._launch_or_lock_error(None, Path("/d"), "Default")
+        await session._launch_with_recovery(
+            None, Path("/d"), "Default", can_kill=False
+        )
 
 
-async def test_launch_or_lock_error_reraises_other_errors(
+async def test_launch_with_recovery_reraises_other_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_launch(pws: Any, launch_dir: Path, profile: str) -> Any:
@@ -467,7 +475,9 @@ async def test_launch_or_lock_error_reraises_other_errors(
     monkeypatch.setattr(session, "_launch_context", fake_launch)
 
     with pytest.raises(ValueError, match="unrelated boom"):
-        await session._launch_or_lock_error(None, Path("/d"), "Default")
+        await session._launch_with_recovery(
+            None, Path("/d"), "Default", can_kill=False
+        )
 
 
 class _FakeChromium:
@@ -590,7 +600,7 @@ def _wire_launch(monkeypatch: pytest.MonkeyPatch, pws: Any, launch: Any) -> None
     monkeypatch.setattr(session, "_resolve_profile_name", resolve)
     monkeypatch.setattr("supporter.config.config.browser_profile_path", "/profile/dir")
     monkeypatch.setattr(session, "_profile_dir", lambda: Path("/profile/dir"))
-    monkeypatch.setattr(session, "_launch_or_lock_error", launch)
+    monkeypatch.setattr(session, "_launch_with_recovery", launch)
     session._PAGES.pop("main", None)
     session._CONTEXT = None
     session._PWS = None
@@ -603,7 +613,7 @@ async def test_get_session_launches_with_new_page(
     _log, context, page = make_session()
     pws = _StoppablePws()
 
-    async def launch(p: Any, d: Path, prof: str) -> Any:
+    async def launch(p: Any, d: Path, prof: str, *, can_kill: bool = False) -> Any:
         return context
 
     _wire_launch(monkeypatch, pws, launch)
@@ -624,7 +634,7 @@ async def test_get_session_reuses_existing_blank_page(
     _log, context, page = make_session(url="about:blank")
     pws = _StoppablePws()
 
-    async def launch(p: Any, d: Path, prof: str) -> Any:
+    async def launch(p: Any, d: Path, prof: str, *, can_kill: bool = False) -> Any:
         return context
 
     _wire_launch(monkeypatch, pws, launch)
@@ -641,7 +651,7 @@ async def test_get_session_cleans_up_when_launch_fails(
 ) -> None:
     pws = _StoppablePws()
 
-    async def launch(p: Any, d: Path, prof: str) -> Any:
+    async def launch(p: Any, d: Path, prof: str, *, can_kill: bool = False) -> Any:
         raise RuntimeError("launch boom")
 
     _wire_launch(monkeypatch, pws, launch)
@@ -674,7 +684,7 @@ async def test_get_session_closes_context_when_page_setup_fails(
 
     boom_context = _BoomContext()
 
-    async def launch(p: Any, d: Path, prof: str) -> Any:
+    async def launch(p: Any, d: Path, prof: str, *, can_kill: bool = False) -> Any:
         return boom_context
 
     _wire_launch(monkeypatch, pws, launch)
@@ -735,7 +745,7 @@ async def test_get_session_clones_profile_when_no_path(
     _log, context, page = make_session(url="about:blank")
     pws = _StoppablePws()
 
-    async def launch(p: Any, d: Path, prof: str) -> Any:
+    async def launch(p: Any, d: Path, prof: str, *, can_kill: bool = False) -> Any:
         return context
 
     _wire_launch(monkeypatch, pws, launch)
@@ -777,7 +787,7 @@ async def test_get_session_logs_when_cleanup_steps_also_fail(
     context = _DoubleBoomContext()
     pws = _BoomStopPws()
 
-    async def launch(p: Any, d: Path, prof: str) -> Any:
+    async def launch(p: Any, d: Path, prof: str, *, can_kill: bool = False) -> Any:
         return context
 
     _wire_launch(monkeypatch, pws, launch)

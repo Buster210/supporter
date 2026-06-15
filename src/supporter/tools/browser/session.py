@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import os
 import shutil
+import signal
 import sqlite3
+import subprocess
 import sys
 import time
 from collections import deque
@@ -336,6 +339,19 @@ def is_active() -> bool:
     return _PAGES.get(current_agent_id()) is not None
 
 
+def is_session_alive() -> bool:
+    """True when the shared browser context is live, regardless of whether the
+    *current agent* holds a page.
+
+    Close decisions MUST use this, not is_active(): the Chrome process persists
+    across task ends (release_agent leaves it running) and is shared by all
+    agents, so a live browser with no page for the calling agent is still open
+    and still closable. Gating close on is_active() is what made the agent
+    report the browser already closed while a real window stayed up.
+    """
+    return _CONTEXT is not None
+
+
 def active_page() -> Any:
     """Get the active page for the current agent, dropping a dead reference.
 
@@ -370,6 +386,7 @@ async def session_status() -> dict[str, Any]:
             title = await page.title()
     return {
         "active": page is not None,
+        "session_alive": _CONTEXT is not None,
         "launching": _LAUNCHING,
         "url": url,
         "title": title,
@@ -584,17 +601,181 @@ def _is_profile_lock_error(exc: Exception) -> bool:
     return any(marker in msg for marker in _LOCK_ERROR_MARKERS)
 
 
-async def _launch_or_lock_error(pws: Any, launch_dir: Path, profile: str) -> Any:
+_LOCK_HELP_MESSAGE = (
+    "Chrome is already using this profile. Fully quit Chrome and try again, or "
+    "set BROWSER_PROFILE_PATH to a separate profile directory to run alongside "
+    "it."
+)
+
+# Chromium's POSIX ProcessSingleton writes these symlinks into the user-data
+# dir; a SingletonLock left behind by an orphaned/crashed Chrome is what makes a
+# relaunch fail with a lock error, so we clear them to self-heal.
+_SINGLETON_FILES: tuple[str, ...] = (
+    "SingletonLock",
+    "SingletonSocket",
+    "SingletonCookie",
+)
+
+# Grace between SIGTERM and SIGKILL when reaping an orphaned Chrome.
+_TERM_GRACE_S = 0.2
+# Settle pause after clearing a lock so the OS releases the socket/symlink
+# before the retry launch recreates them.
+_LOCK_RETRY_SETTLE_S = 0.5
+# Chars that may terminate a profile-dir path component in a process command
+# line (separator, end of a quoted/space-delimited arg); used to reject
+# sibling-path prefix collisions when matching a lock holder's --user-data-dir.
+_PATH_BOUNDARY_CHARS = " \t/'\""
+
+
+def _pid_from_singleton_lock(lock: Path) -> int | None:
+    """Parse the holder PID from a Chromium SingletonLock symlink.
+
+    The symlink target is ``<hostname>-<pid>``; the hostname itself may contain
+    '-', so the PID is the trailing integer after the last '-'. Returns None
+    when the path is not a readable symlink or the target isn't shaped so.
+    """
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return None
+    _, _, tail = target.rpartition("-")
+    try:
+        pid = int(tail)
+    except ValueError:
+        return None
+    return pid if pid > 1 else None
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when a process with this PID exists (POSIX signal-0 probe)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but owned by another user
+    except OSError:
+        return False
+    return True
+
+
+def _process_cmdline(pid: int) -> str | None:
+    """Best-effort full command line of a PID via ``ps``; None if unavailable.
+
+    Used to positively tie a lock holder to the profile dir we're recovering
+    before signaling it. Returns None when ``ps`` is missing, errors, or the
+    process is gone — callers treat None as "cannot confirm".
+    """
+    ps = shutil.which("ps")
+    if ps is None:
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603
+            [ps, "-ww", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _process_holds_profile_dir(pid: int, launch_dir: Path) -> bool:
+    """True only when PID's command line references this exact profile dir.
+
+    Positive-identity guard before killing a live lock holder: defeats PID
+    reuse. A recycled PID belonging to some unrelated process — including the
+    user's real Chrome running a different profile — won't carry our
+    ``--user-data-dir`` and so is left untouched. The dir must appear as a whole
+    path token (followed by a separator, quote, or end of arg) so a sibling like
+    ``<dir>-2`` is never mistaken for ours.
+    """
+    cmdline = _process_cmdline(pid)
+    if cmdline is None:
+        return False
+    needle = str(launch_dir)
+    idx = cmdline.find(needle)
+    while idx != -1:
+        rest = cmdline[idx + len(needle) :]
+        if rest == "" or rest[0] in _PATH_BOUNDARY_CHARS:
+            return True
+        idx = cmdline.find(needle, idx + 1)
+    return False
+
+
+def _kill_lock_holder(pid: int) -> None:
+    """Best-effort terminate an orphaned Chrome by PID (POSIX only).
+
+    SIGTERM first for a clean exit, then SIGKILL if it lingers. Never raises: a
+    dead PID (ProcessLookupError) or one we can't signal (PermissionError) is a
+    no-op. Refuses to signal our own process or run where SIGKILL is absent.
+    """
+    if pid == os.getpid() or not hasattr(signal, "SIGKILL"):
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.kill(pid, signal.SIGTERM)
+    time.sleep(_TERM_GRACE_S)
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.kill(pid, signal.SIGKILL)
+
+
+def _force_clear_profile_lock(launch_dir: Path, *, can_kill: bool) -> bool:
+    """Clear a stale Chromium profile lock so a relaunch can succeed.
+
+    Returns True when the lock was cleared (or there was nothing to clear), and
+    False when a live process still holds it but we may not kill it.
+
+    ``can_kill`` is True only for the tool's dedicated clone dir, where a lock
+    holder bound to that dir is an orphaned Chrome we spawned. For a
+    user-supplied profile dir it is False: a live holder may be the user's own
+    Chrome, so we refuse rather than risk killing their browser or corrupting
+    their profile. Even when ``can_kill``, we only signal a holder whose command
+    line references this exact dir, so a reused PID is never the target.
+    """
+    lock = launch_dir / "SingletonLock"
+    pid = _pid_from_singleton_lock(lock)
+    if pid is not None and _pid_alive(pid):
+        if not can_kill or not _process_holds_profile_dir(pid, launch_dir):
+            return False
+        _kill_lock_holder(pid)
+    for name in _SINGLETON_FILES:
+        with contextlib.suppress(OSError):
+            (launch_dir / name).unlink(missing_ok=True)
+    return True
+
+
+async def _launch_with_recovery(
+    pws: Any, launch_dir: Path, profile: str, *, can_kill: bool
+) -> Any:
+    """Launch the persistent context, self-healing a stale profile lock once.
+
+    On a profile-lock error we clear the lock (killing the orphaned Chrome that
+    holds the clone dir when ``can_kill``) and retry exactly once. If the lock
+    is held by a process we must not kill, or the retry still fails, we raise an
+    actionable error so the caller surfaces guidance instead of looping.
+    """
     try:
         return await _launch_context(pws, launch_dir, profile)
     except Exception as e:
-        if _is_profile_lock_error(e):
-            raise RuntimeError(
-                "Chrome is already using this profile. Fully quit Chrome and "
-                "try again, or set BROWSER_PROFILE_PATH to a separate profile "
-                "directory to run alongside it."
-            ) from e
-        raise
+        if not _is_profile_lock_error(e):
+            raise
+        cleared = await asyncio.to_thread(
+            _force_clear_profile_lock, launch_dir, can_kill=can_kill
+        )
+        if not cleared:
+            raise RuntimeError(_LOCK_HELP_MESSAGE) from e
+        logger.warning("Chrome profile lock was stale; cleared it and relaunching.")
+        await asyncio.sleep(_LOCK_RETRY_SETTLE_S)
+        try:
+            return await _launch_context(pws, launch_dir, profile)
+        except Exception as e2:
+            if _is_profile_lock_error(e2):
+                raise RuntimeError(_LOCK_HELP_MESSAGE) from e2
+            raise
 
 
 async def _launch_context(
@@ -741,6 +922,7 @@ async def get_session() -> tuple[Any, Any, Any]:
                         exc,
                     )
                 _LAST_ACTION_TS[aid] = time.monotonic()
+                note_activity()
                 return _PWS, _CONTEXT, agent_page
         finally:
             # Reset _LAUNCHING on ALL exit paths: success return, exception,
@@ -760,10 +942,14 @@ async def get_session() -> tuple[Any, Any, Any]:
         profile = await _resolve_profile_name()
 
         if config.browser_profile_path:
-            _CONTEXT = await _launch_or_lock_error(_PWS, _profile_dir(), profile)
+            _CONTEXT = await _launch_with_recovery(
+                _PWS, _profile_dir(), profile, can_kill=False
+            )
         else:
             clone_dir = await _clone_profile(profile)
-            _CONTEXT = await _launch_or_lock_error(_PWS, clone_dir, profile)
+            _CONTEXT = await _launch_with_recovery(
+                _PWS, clone_dir, profile, can_kill=True
+            )
 
         if blocklist.should_block_resources():
             try:

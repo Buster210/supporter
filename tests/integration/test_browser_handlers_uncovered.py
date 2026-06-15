@@ -64,18 +64,18 @@ async def test_tab_handler_negative_index(fake_session: FakeSession) -> None:
 async def test_close_handler_browser_already_closed(fake_session: FakeSession) -> None:
     import supporter.tools.browser.session as session_module
 
-    original_is_active_fn = session_module.is_active
+    original_is_alive_fn = session_module.is_session_alive
 
-    def mock_is_active() -> bool:
+    def mock_is_session_alive() -> bool:
         return False
 
-    session_module.is_active = mock_is_active
+    session_module.is_session_alive = mock_is_session_alive
 
     try:
         result = await browse("close")
         assert "Browser already closed." in result
     finally:
-        session_module.is_active = original_is_active_fn
+        session_module.is_session_alive = original_is_alive_fn
 
 
 async def test_close_handler_confirmation_callback_none(

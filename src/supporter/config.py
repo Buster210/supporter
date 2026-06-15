@@ -222,7 +222,7 @@ def load_config() -> AppConfig:
         browser_debug_overlay=_bool_env("BROWSER_DEBUG_OVERLAY", False),
         browser_parallel_pilots=_bool_env("BROWSER_PARALLEL_PILOTS", True),
         browser_diff_threshold=_int_env("BROWSER_DIFF_THRESHOLD", 40),
-        browser_idle_close_seconds=_int_env("BROWSER_IDLE_CLOSE_SECONDS", 300),
+        browser_idle_close_seconds=_int_env("BROWSER_IDLE_CLOSE_SECONDS", 600),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),
