@@ -27,9 +27,13 @@ _LAUNCHING: bool = False
 _LAUNCH_LOOP: object | None = None
 _CLONE_LOCK: asyncio.Lock | None = None
 _RATE_WINDOW_SECONDS: float = 60.0
-_KEEP_OPEN: bool | None = None
-_LIFECYCLE_TASK: asyncio.Task[None] | None = None
 _CLEANUP_TASK: asyncio.Task[None] | None = None
+
+# Idle auto-close: a single context-level monotonic timestamp of the last
+# browser interaction (any agent), plus the background monitor task that closes
+# the whole session after config.browser_idle_close_seconds of inactivity.
+_LAST_ACTIVITY_TS: float = 0.0
+_IDLE_TASK: asyncio.Task[None] | None = None
 
 # Per-agent identity via contextvar (default "main" for backward-compat)
 _AGENT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -225,47 +229,60 @@ _SESSION_DIRS: tuple[str, ...] = (
 _ROOT_SESSION_FILES: tuple[str, ...] = ("Local State",)
 
 
-async def _prompt_lifecycle() -> None:
-    global _KEEP_OPEN
+def note_activity() -> None:
+    """Record a browser interaction for the idle auto-close monitor."""
+    global _LAST_ACTIVITY_TS
+    _LAST_ACTIVITY_TS = time.monotonic()
 
-    if _KEEP_OPEN is not None:
+
+async def _idle_monitor() -> None:
+    """Close the whole session after a stretch of no browser interaction.
+
+    Context-level (not per-agent): any agent's action refreshes the shared
+    _LAST_ACTIVITY_TS. After config.browser_idle_close_seconds with no activity
+    the browser is torn down. A value <= 0 disables the monitor entirely, so the
+    browser persists until an explicit model/user close.
+    """
+    idle_limit = config.browser_idle_close_seconds
+    if idle_limit <= 0:
         return
-
-    cb = guardrails.browse_confirmation_callback
-    if cb is None:
-        _KEEP_OPEN = True
-        return
-
-    keep = await cb(
-        "Keep browser open after task?",
-        "Yes = leave it open until app exits; "
-        "No = you'll be asked to close it when the task is done",
-    )
-    _KEEP_OPEN = keep
-
-
-def _start_lifecycle_prompt() -> None:
-    global _LIFECYCLE_TASK
-
-    if _KEEP_OPEN is not None or _LIFECYCLE_TASK is not None:
-        return
-
-    async def run() -> None:
+    # Poll at a fraction of the limit so we close within ~one tick of the
+    # deadline without busy-waiting; floor keeps tests/short limits responsive.
+    interval = max(1.0, min(30.0, idle_limit / 10.0))
+    while True:
         try:
-            await _prompt_lifecycle()
+            await asyncio.sleep(interval)
+            if _CONTEXT is None:
+                return
+            idle_for = time.monotonic() - _LAST_ACTIVITY_TS
+            should_close = idle_for >= idle_limit
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning(f"Browser lifecycle prompt failed: {e}")
+            logger.warning(f"Browser idle monitor failed: {e}")
+            return
+        if should_close:
+            logger.info(
+                f"Browser idle for {idle_for:.0f}s "
+                f"(limit {idle_limit}s) — auto-closing session."
+            )
+            await close_session()
+            return
 
-    task = asyncio.ensure_future(run())
-    _LIFECYCLE_TASK = task
-    task.add_done_callback(_clear_lifecycle_task)
+
+def _start_idle_monitor() -> None:
+    global _IDLE_TASK
+    if _IDLE_TASK is not None or config.browser_idle_close_seconds <= 0:
+        return
+    note_activity()
+    task = asyncio.ensure_future(_idle_monitor())
+    _IDLE_TASK = task
+    task.add_done_callback(_clear_idle_task)
 
 
-def _clear_lifecycle_task(_task: object) -> None:
-    global _LIFECYCLE_TASK
-    _LIFECYCLE_TASK = None
+def _clear_idle_task(_task: object) -> None:
+    global _IDLE_TASK
+    _IDLE_TASK = None
 
 
 def _clear_cleanup_task(_task: object) -> None:
@@ -298,53 +315,20 @@ async def cleanup_blank_tabs() -> None:
             logger.debug(f"cleanup_blank_tabs: failed to close tab: {e}")
 
 
-async def _await_lifecycle_answer() -> None:
-    global _KEEP_OPEN
-    if _KEEP_OPEN is not None:
-        return
-    if _LIFECYCLE_TASK is not None:
-        try:
-            await _LIFECYCLE_TASK
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"Browser lifecycle prompt failed: {e}")
-    if _KEEP_OPEN is None:
-        _KEEP_OPEN = True
-
-
 async def resolve_close_at_task_end() -> str:
-    """Called at task end; releases the current agent's pages.
+    """Called at task end; releases the current agent's pages, leaving the
+    browser running.
 
-    For "main" agent (single-agent mode or last agent), prompts for close.
-    For parallel agents, delegates to release_agent() which handles ref-counting.
+    The browser is never closed at task end any more — it persists until the
+    idle monitor fires (config.browser_idle_close_seconds) or an explicit
+    model/user close. This only frees the finished agent's tabs (keeping at
+    least one tab open in the shared context).
     """
     aid = current_agent_id()
     if not is_active():
         return ""
-
-    # For main agent or last agent, prompt for close
-    await _await_lifecycle_answer()
-    if pinned_open():
-        return "Browser left open (persistent session)."
-    cb = guardrails.browse_confirmation_callback
-    if cb is None:
-        # No callback = auto-release, no close prompt
-        return ""
-    if not await cb("Close browser now?", "Task done — close browser now?"):
-        return "Browser left open; will ask again when the next task finishes."
-
-    # Release this agent's pages (may or may not close browser)
     await release_agent(aid)
-    return "Browser closed." if not _PAGES else "Browser left open."
-
-
-def keep_open() -> bool:
-    return _KEEP_OPEN is not False
-
-
-def pinned_open() -> bool:
-    return _KEEP_OPEN is True
+    return "Browser left open (closes after idle timeout or on explicit close)."
 
 
 def is_active() -> bool:
@@ -391,7 +375,7 @@ async def session_status() -> dict[str, Any]:
         "title": title,
         "tabs": tab_count,
         "idle_seconds": round(idle_s, 2) if idle_s >= 0 else None,
-        "pinned_open": pinned_open(),
+        "idle_close_seconds": config.browser_idle_close_seconds,
     }
 
 
@@ -700,8 +684,6 @@ async def get_session() -> tuple[Any, Any, Any]:
     _LAUNCHING = True
 
     try:
-        _start_lifecycle_prompt()
-
         from patchright.async_api import async_playwright
 
         _PWS = await async_playwright().start()
@@ -729,6 +711,8 @@ async def get_session() -> tuple[Any, Any, Any]:
 
         _LAST_ACTION_TS[aid] = time.monotonic()
         logger.info("Browser session launched")
+
+        _start_idle_monitor()
 
         global _CLEANUP_TASK
         _CLEANUP_TASK = asyncio.ensure_future(cleanup_blank_tabs())
@@ -770,11 +754,15 @@ _FORCE_CLOSE_TIMEOUT_S = 5.0
 async def close_session(*, force: bool = False) -> None:
     """Full teardown of browser context. Clears ALL per-agent state."""
     global _PWS, _CONTEXT, _LAUNCH_LOOP, _CLONE_LOCK, _ALLOC_LOCK
-    global _LIFECYCLE_TASK, _CLEANUP_TASK, _KEEP_OPEN
+    global _IDLE_TASK, _CLEANUP_TASK, _LAST_ACTIVITY_TS
 
-    if _LIFECYCLE_TASK is not None:
-        _LIFECYCLE_TASK.cancel()
-        _LIFECYCLE_TASK = None
+    # Cancel the idle monitor — but never cancel ourselves, since the monitor
+    # itself calls close_session() on timeout (self-cancel would raise inside
+    # the teardown awaits below).
+    current = asyncio.current_task()
+    if _IDLE_TASK is not None and _IDLE_TASK is not current:
+        _IDLE_TASK.cancel()
+    _IDLE_TASK = None
 
     if _CLEANUP_TASK is not None:
         _CLEANUP_TASK.cancel()
@@ -810,7 +798,7 @@ async def close_session(*, force: bool = False) -> None:
     _TEMPO.clear()
     _ACTION_TIMES.clear()
     _LAUNCH_LOOP = None
-    _KEEP_OPEN = None
+    _LAST_ACTIVITY_TS = 0.0
     _CLONE_LOCK = None
     _ALLOC_LOCK = None
     humanize.reset_cursor()
@@ -864,6 +852,7 @@ async def pace() -> None:
         await asyncio.sleep(idle_gap)
 
     _LAST_ACTION_TS[aid] = time.monotonic()
+    note_activity()
     _ACTION_COUNT[aid] += 1
     if _ACTION_CAP_CEILING[aid] == 0:
         _ACTION_CAP_CEILING[aid] = guardrails.action_cap()
@@ -889,18 +878,46 @@ async def pace() -> None:
 async def release_agent(aid: str) -> None:
     """Release an agent's pages and clean up its state.
 
-    Closes the agent's owned tabs (suppressing per-tab errors), drops its
-    entries from per-agent dicts, then tears down the browser if no agents
-    remain and not pinned open.
+    Closes the agent's owned tabs (suppressing per-tab errors) and drops its
+    entries from the per-agent dicts. The browser process is NEVER torn down
+    here — it persists until the idle monitor fires or an explicit close. To
+    avoid leaving a context with zero pages (which some Chromium builds treat
+    as a quit), at least one tab is always kept open.
     """
-    # Close owned pages (suppress errors like cleanup does)
     owned = _OWNED_PAGES.get(aid, set())
-    for page in list(owned):
+
+    # Compute how many live tabs would remain across the whole context after we
+    # close this agent's owned tabs, so we can keep one alive if it's the last.
+    live_owned = [p for p in owned if not _is_page_closed(p)]
+    other_live_tabs = 0
+    if _CONTEXT is not None:
+        owned_set = set(live_owned)
+        other_live_tabs = sum(
+            1 for p in _CONTEXT.pages if p not in owned_set and not _is_page_closed(p)
+        )
+
+    keep_one = other_live_tabs == 0
+    for page in live_owned:
+        if keep_one:
+            # Leave one tab open; blank it so it isn't tied to this task.
+            keep_one = False
+            try:
+                await page.goto("about:blank")
+            except Exception as e:
+                logger.debug(f"release_agent: failed to blank kept tab: {e}")
+            continue
         try:
-            if not _is_page_closed(page):
-                await page.close()
+            await page.close()
         except Exception as e:
             logger.debug(f"release_agent: failed to close page: {e}")
+
+    # If we intended to keep one tab but had no live owned page to keep,
+    # open a fresh blank tab so the context never reaches zero pages.
+    if keep_one and _CONTEXT is not None:
+        try:
+            await _CONTEXT.new_page()
+        except Exception as e:
+            logger.debug(f"release_agent: failed to open replacement tab: {e}")
 
     # Drop per-agent state
     _PAGES.pop(aid, None)
@@ -917,7 +934,3 @@ async def release_agent(aid: str) -> None:
         recorder.discard(aid)
     except Exception as e:
         logger.debug(f"release_agent: recorder discard failed: {e}")
-
-    # Close browser only if no live agents and not pinned
-    if not _OWNED_PAGES and not pinned_open():
-        await close_session()

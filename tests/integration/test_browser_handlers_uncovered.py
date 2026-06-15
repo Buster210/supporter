@@ -78,23 +78,6 @@ async def test_close_handler_browser_already_closed(fake_session: FakeSession) -
         session_module.is_active = original_is_active_fn
 
 
-async def test_close_handler_pinned_open(fake_session: FakeSession) -> None:
-    import supporter.tools.browser.session as session_module
-
-    original_pinned_open_fn = session_module.pinned_open
-
-    def mock_pinned_open() -> bool:
-        return True
-
-    session_module.pinned_open = mock_pinned_open
-
-    try:
-        result = await browse("close")
-        assert "Browser left open (you chose to keep it open)." in result
-    finally:
-        session_module.pinned_open = original_pinned_open_fn
-
-
 async def test_close_handler_confirmation_callback_none(
     fake_session: FakeSession,
 ) -> None:

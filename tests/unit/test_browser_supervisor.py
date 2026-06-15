@@ -22,8 +22,8 @@ _SCALAR_GLOBALS = (
     "_LAUNCHING",
     "_LAUNCH_LOOP",
     "_CLONE_LOCK",
-    "_KEEP_OPEN",
-    "_LIFECYCLE_TASK",
+    "_LAST_ACTIVITY_TS",
+    "_IDLE_TASK",
     "_CLEANUP_TASK",
 )
 _DICT_GLOBALS = (
@@ -138,7 +138,7 @@ async def test_status_returns_json_with_session_fields() -> None:
     assert data["launching"] is False
     assert data["tabs"] == 3
     assert isinstance(data["idle_seconds"], (int, float))
-    assert isinstance(data["pinned_open"], bool)
+    assert isinstance(data["idle_close_seconds"], int)
 
 
 async def test_status_active_false_when_no_session() -> None:
@@ -295,12 +295,12 @@ async def test_session_status_inactive_session() -> None:
 
 async def test_close_session_force_resets_globals() -> None:
     _fake_session()
-    session._KEEP_OPEN = True
     session._FRAME_SELECTORS["main"] = "iframe"
     await session.close_session(force=True)
     assert not session.is_active()
-    assert session._KEEP_OPEN is None
     assert session._FRAME_SELECTORS.get("main") is None
+    assert session._LAST_ACTIVITY_TS == 0.0
+    assert session._IDLE_TASK is None
 
 
 async def test_close_session_force_swallows_close_error() -> None:

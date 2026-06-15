@@ -39,20 +39,6 @@ async def test_close_denied_leaves_open(
     assert close_calls == []
 
 
-async def test_close_pinned_open_skips_prompt(
-    fake_session: FakeSession,
-    close_calls: list[bool],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(session, "pinned_open", lambda: True)
-
-    result = await browse("close")
-
-    assert result == "Browser left open (you chose to keep it open)."
-    assert close_calls == []
-    assert fake_session.confirm.calls == []
-
-
 async def test_close_when_inactive_reports_already_closed(
     fake_session: FakeSession,
     close_calls: list[bool],

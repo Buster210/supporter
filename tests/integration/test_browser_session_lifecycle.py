@@ -17,8 +17,8 @@ _SCALAR_GLOBALS = (
     "_LAUNCHING",
     "_LAUNCH_LOOP",
     "_CLONE_LOCK",
-    "_KEEP_OPEN",
-    "_LIFECYCLE_TASK",
+    "_LAST_ACTIVITY_TS",
+    "_IDLE_TASK",
 )
 _DICT_GLOBALS = (
     "_PAGES",
@@ -88,7 +88,6 @@ class _FakeAsyncioTask:
 
 async def test_close_session_resets_all_globals() -> None:
     _log, context, page = make_session()
-    task_stub = _FakeAsyncioTask()
     lock_stub = object()
 
     session._PAGES["main"] = cast("Any", page)
@@ -97,10 +96,8 @@ async def test_close_session_resets_all_globals() -> None:
     session._LAUNCH_LOOP = cast("Any", object())
     session._ACTION_COUNT["main"] = 42
     session._LAST_ACTION_TS["main"] = 12345.0
-    session._KEEP_OPEN = True
     session._FRAME_SELECTORS["main"] = "iframe#main"
     session._CLONE_LOCK = cast("Any", lock_stub)
-    session._LIFECYCLE_TASK = cast("Any", task_stub)
 
     assert session.is_active() is True
 
@@ -112,11 +109,10 @@ async def test_close_session_resets_all_globals() -> None:
     assert session._LAUNCH_LOOP is None
     assert session._ACTION_COUNT == {}
     assert session._LAST_ACTION_TS == {}
-    assert session._KEEP_OPEN is None
     assert session._FRAME_SELECTORS == {}
     assert session._CLONE_LOCK is None
-    assert session._LIFECYCLE_TASK is None
-    assert task_stub.cancelled is True
+    assert session._IDLE_TASK is None
+    assert session._LAST_ACTIVITY_TS == 0.0
     assert session.is_active() is False
 
 

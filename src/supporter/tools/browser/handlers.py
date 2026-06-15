@@ -78,11 +78,6 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     )
     if has_turnstile:
         result = "[Turnstile detected] — call solve_cloudflare to proceed.\n\n" + result
-    if not session.keep_open():
-        result += (
-            "\n(When the task is finished, call finish_task to wrap up; "
-            "you'll be asked whether to close the browser.)"
-        )
     return result
 
 
@@ -464,8 +459,6 @@ async def _handle_status(_req: BrowseRequest) -> str:
 async def _handle_close(req: BrowseRequest) -> str:
     if not session.is_active():
         return "Browser already closed."
-    if session.pinned_open():
-        return "Browser left open (you chose to keep it open)."
     cb = guardrails.browse_confirmation_callback
     if cb is None:
         return "Error: browser confirmation not wired."

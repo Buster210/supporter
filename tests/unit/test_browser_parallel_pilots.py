@@ -41,6 +41,9 @@ class _FakePage:
     def is_closed(self) -> bool:
         return self._closed
 
+    async def goto(self, url: str) -> None:
+        self.url = url
+
     async def close(self) -> None:
         self._closed = True
         if self in self.ctx.pages:
@@ -76,7 +79,6 @@ def _reset_globals(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     saved_active = dict(recorder._ACTIVE)
     saved_pws = session._PWS
     saved_context = session._CONTEXT
-    saved_keep = session._KEEP_OPEN
     token = session._AGENT_ID.set("main")
     try:
         yield
@@ -89,7 +91,7 @@ def _reset_globals(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         recorder._ACTIVE.update(saved_active)
         session._PWS = saved_pws
         session._CONTEXT = saved_context
-        session._KEEP_OPEN = saved_keep
+        session._LAST_ACTIVITY_TS = 0.0
         session._AGENT_ID.reset(token)
 
 
@@ -179,12 +181,11 @@ async def test_strict_own_tab_enforcement() -> None:
     assert b1 not in a_pages
 
 
-async def test_release_one_keeps_others_then_last_tears_down() -> None:
+async def test_release_one_keeps_others_and_last_keeps_browser_open() -> None:
     ctx = _FakeContext()
     pws = _FakePWS()
     session._CONTEXT = ctx  # type: ignore[assignment]
     session._PWS = pws  # type: ignore[assignment]
-    session._KEEP_OPEN = None
     a1 = await ctx.new_page()
     b1 = await ctx.new_page()
 
@@ -208,11 +209,16 @@ async def test_release_one_keeps_others_then_last_tears_down() -> None:
 
     await session.release_agent("b")
 
-    assert b1.is_closed()
-    assert session._CONTEXT is None
-    assert session._PWS is None
-    assert ctx.closed
-    assert pws.stopped
+    # release_agent never tears the browser down any more — the idle monitor
+    # or an explicit close owns that. The last owned tab is kept open (blanked)
+    # rather than closed, so the context never drops to zero pages.
+    assert not b1.is_closed()
+    assert b1.url == "about:blank"
+    assert "b" not in session._OWNED_PAGES
+    assert session._CONTEXT is ctx  # type: ignore[comparison-overlap]
+    assert session._PWS is pws  # type: ignore[comparison-overlap]
+    assert not ctx.closed
+    assert not pws.stopped
 
 
 async def test_blank_page_reuse_race_yields_distinct_pages() -> None:

@@ -21,8 +21,8 @@ _SCALAR_GLOBALS = (
     "_LAUNCHING",
     "_LAUNCH_LOOP",
     "_CLONE_LOCK",
-    "_KEEP_OPEN",
-    "_LIFECYCLE_TASK",
+    "_LAST_ACTIVITY_TS",
+    "_IDLE_TASK",
     "_SELECTED_PROFILE",
 )
 
@@ -78,59 +78,11 @@ def _set_main_page(page: Any | None) -> None:
         session._PAGES["main"] = page
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(None, True), (True, True), (False, False)],
-)
-def test_keep_open_defaults_to_true_unless_explicitly_false(
-    value: bool | None, expected: bool
-) -> None:
-    session._KEEP_OPEN = value
-    assert session.keep_open() is expected
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(None, False), (True, True), (False, False)],
-)
-def test_pinned_open_only_when_keep_open_explicitly_true(
-    value: bool | None, expected: bool
-) -> None:
-    session._KEEP_OPEN = value
-    assert session.pinned_open() is expected
-
-
 def test_is_active_reflects_session_presence() -> None:
     session._PAGES.pop("main", None)
     assert session.is_active() is False
     session._PAGES["main"] = cast("Any", object())
     assert session.is_active() is True
-
-
-async def test_prompt_lifecycle_is_asked_once() -> None:
-    session._KEEP_OPEN = None
-    calls: list[tuple[str, str]] = []
-
-    async def cb(title: str, detail: str) -> bool:
-        calls.append((title, detail))
-        return False
-
-    guardrails.browse_confirmation_callback = cb
-    try:
-        await session._prompt_lifecycle()
-        await session._prompt_lifecycle()
-    finally:
-        guardrails.browse_confirmation_callback = None
-
-    assert len(calls) == 1
-    assert session._KEEP_OPEN is False
-
-
-async def test_prompt_lifecycle_fails_open_when_unwired() -> None:
-    session._KEEP_OPEN = None
-    guardrails.browse_confirmation_callback = None
-    await session._prompt_lifecycle()
-    assert session._KEEP_OPEN is True
 
 
 def test_active_page_returns_current_page() -> None:
@@ -229,10 +181,10 @@ async def test_get_session_returns_existing_when_active() -> None:
     assert result == (pws, context, page)
 
 
-def test_clear_lifecycle_task_sets_global_to_none() -> None:
-    session._LIFECYCLE_TASK = cast("Any", object())
-    session._clear_lifecycle_task(object())
-    assert session._LIFECYCLE_TASK is None
+def test_clear_idle_task_sets_global_to_none() -> None:
+    session._IDLE_TASK = cast("Any", object())
+    session._clear_idle_task(object())
+    assert session._IDLE_TASK is None
 
 
 @pytest.mark.parametrize(
@@ -600,7 +552,7 @@ async def test_close_session_resets_pace_globals(
     session._PAGES.clear()
     session._CONTEXT = None
     session._PWS = None
-    session._LIFECYCLE_TASK = None
+    session._IDLE_TASK = None
     await session.close_session()
     assert session._SESSION_START_TS == {}
     assert session._TEMPO == {}

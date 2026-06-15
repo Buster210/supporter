@@ -36,6 +36,8 @@ class LLMOptions(TypedDict, total=False):
     max_output_tokens: int
     config: GenerateContentConfig
     user_content: Any
+    response_mime_type: str
+    response_schema: Any
 
 
 @dataclass
@@ -87,6 +89,10 @@ class AppConfig:
     browser_profile_name: str | None = None
     browser_debug_overlay: bool = False
     browser_parallel_pilots: bool = True
+    browser_diff_threshold: int = 40
+    # Auto-close the browser after this many seconds with no interaction.
+    # 0 disables idle auto-close (browser persists until explicit close).
+    browser_idle_close_seconds: int = 300
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2
@@ -101,6 +107,11 @@ class AppConfig:
     keepalive_enabled: bool = True
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
+
+    # WI-3: Generalized trust gating
+    browser_trusted_hosts: str = ""
+    browser_micro_behavior_rate: float = 0.06
+    browser_promotion_threshold: int = 5
 
 
 @dataclass

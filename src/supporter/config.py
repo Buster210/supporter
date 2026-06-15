@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,7 @@ from .prompts import (
 )
 from .types import AppConfig
 
-__all__ = ["AppConfig", "config", "reload_config"]
+__all__ = ["AppConfig", "config"]
 
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
@@ -222,6 +221,8 @@ def load_config() -> AppConfig:
         browser_profile_name=os.getenv("BROWSER_PROFILE_NAME"),
         browser_debug_overlay=_bool_env("BROWSER_DEBUG_OVERLAY", False),
         browser_parallel_pilots=_bool_env("BROWSER_PARALLEL_PILOTS", True),
+        browser_diff_threshold=_int_env("BROWSER_DIFF_THRESHOLD", 40),
+        browser_idle_close_seconds=_int_env("BROWSER_IDLE_CLOSE_SECONDS", 300),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),
@@ -230,24 +231,16 @@ def load_config() -> AppConfig:
         reconnect_backoff_base=float(os.getenv("RECONNECT_BACKOFF_BASE", "0.5")),
         reconnect_backoff_cap=float(os.getenv("RECONNECT_BACKOFF_CAP", "8.0")),
         prewarm_safety_margin=float(os.getenv("PREWARM_SAFETY_MARGIN", "5.0")),
+        keepalive_enabled=_bool_env("KEEPALIVE_ENABLED", True),
         idle_monitor_enabled=_bool_env(
             "IDLE_MONITOR_ENABLED",
             _bool_env("KEEPALIVE_ENABLED", True),
         ),
         empty_resume_policy=os.getenv("EMPTY_RESUME_POLICY", "trust").lower(),
+        browser_trusted_hosts=os.getenv("BROWSER_TRUSTED_HOSTS", ""),
+        browser_micro_behavior_rate=float(os.getenv("MICRO_BEHAVIOR_RATE", "0.06")),
+        browser_promotion_threshold=_int_env("BROWSER_PROMOTION_THRESHOLD", 5),
     )
 
 
 config = load_config()
-
-
-def reload_config() -> AppConfig:
-    """Reload config from env, mutating the existing module-global ``config``
-    object in place so all importers that did ``from .config import config``
-    automatically see the updated values without rebinding.
-    """
-    global config
-    fresh = load_config()
-    for f in dataclasses.fields(AppConfig):
-        setattr(config, f.name, getattr(fresh, f.name))
-    return config

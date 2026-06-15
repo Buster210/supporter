@@ -56,8 +56,6 @@ def fake_session(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSession]:
     monkeypatch.setattr(session, "is_active", lambda: True)
     monkeypatch.setattr(session, "active_page", lambda: active[0])
     monkeypatch.setattr(session, "list_pages", lambda: list(context.pages))
-    monkeypatch.setattr(session, "pinned_open", lambda: False)
-    monkeypatch.setattr(session, "keep_open", lambda: True)
 
     def fake_set_active(target: Any) -> None:
         active[0] = target
