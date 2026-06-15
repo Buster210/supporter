@@ -23,6 +23,7 @@ _SCALAR_GLOBALS = (
     "_CLONE_LOCK",
     "_LAST_ACTIVITY_TS",
     "_IDLE_TASK",
+    "_CLEANUP_TASK",
     "_SELECTED_PROFILE",
 )
 
@@ -47,6 +48,31 @@ class _FakePage:
 
     def is_closed(self) -> bool:
         return False
+
+
+class _LaunchReachedError(Exception):
+    """Sentinel: raised at the launch block's first await to prove control got
+    there without standing up a real browser."""
+
+
+class _Starter:
+    """Stand-in for async_playwright(): its start() runs the injected coroutine."""
+
+    def __init__(self, start_fn: Any) -> None:
+        self._start_fn = start_fn
+
+    async def start(self) -> Any:
+        return await self._start_fn()
+
+
+class _FakeTask:
+    """Stand-in for an asyncio.Task that records cancellation."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
 
 
 @pytest.fixture(autouse=True)
@@ -179,6 +205,263 @@ async def test_get_session_returns_existing_when_active() -> None:
     result = await session.get_session()
 
     assert result == (pws, context, page)
+
+
+async def test_get_session_reuses_live_context_when_agent_has_no_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Reproduces the "won't reuse, must quit Chrome" bug: a prior task released
+    # this agent's page (release_agent) but left the browser running. get_session
+    # must reuse the live context — allocate a page on it — not launch a second
+    # Chrome on the same locked profile.
+    pws = cast("Any", object())
+    context = cast("Any", object())
+    session._PWS = pws
+    session._CONTEXT = context
+    session._PAGES.pop("main", None)
+    session._LAUNCHING = False
+    session._LAUNCH_LOOP = asyncio.get_running_loop()
+
+    adopted = _FakePage()
+
+    async def fake_bring_to_front() -> None:
+        adopted.brought_to_front = True  # type: ignore[attr-defined]
+
+    adopted.bring_to_front = fake_bring_to_front  # type: ignore[attr-defined]
+    acquired_for: list[str] = []
+
+    async def fake_acquire(aid: str) -> Any:
+        acquired_for.append(aid)
+        return adopted
+
+    monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
+
+    result = await session.get_session()
+
+    assert result == (pws, context, adopted)
+    assert acquired_for == ["main"]
+    assert getattr(adopted, "brought_to_front", False) is True
+    # Same objects: the live context was reused, not relaunched.
+    assert session._PWS is pws
+    assert session._CONTEXT is context
+
+
+async def test_get_session_discards_stale_context_then_relaunches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If the live-context reuse path hits a dead handle, it must discard the
+    # stale globals and fall through to a fresh launch rather than surfacing the
+    # adopt error to the caller.
+    session._PWS = cast("Any", object())
+    session._CONTEXT = cast("Any", object())
+    session._PAGES.pop("main", None)
+    session._LAUNCHING = False
+    session._LAUNCH_LOOP = asyncio.get_running_loop()
+
+    async def boom(_aid: str) -> Any:
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    discarded: list[bool] = []
+
+    async def fake_discard() -> None:
+        discarded.append(True)
+        session._PWS = None
+        session._CONTEXT = None
+
+    monkeypatch.setattr(session, "_acquire_agent_page", boom)
+    monkeypatch.setattr(session, "_discard_stale_session", fake_discard)
+
+    # Intercept the launch block at its first await so we assert the discard
+    # ran (globals cleared) without standing up real Chrome.
+    async def fake_start() -> Any:
+        assert discarded == [True]
+        assert session._CONTEXT is None
+        raise _LaunchReachedError
+
+    import patchright.async_api as pw
+
+    starter = cast("Any", _Starter(fake_start))
+    monkeypatch.setattr(pw, "async_playwright", lambda: starter)
+
+    with pytest.raises(_LaunchReachedError):
+        await session.get_session()
+
+    assert discarded == [True]
+
+
+async def test_discard_stale_session_clears_state_and_cancels_tasks() -> None:
+    stopped: list[bool] = []
+
+    class _Pws:
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    idle = _FakeTask()
+    cleanup = _FakeTask()
+    session._PWS = cast("Any", _Pws())
+    session._CONTEXT = cast("Any", object())
+    session._PAGES["main"] = cast("Any", _FakePage())
+    session._OWNED_PAGES["main"] = {cast("Any", _FakePage())}
+    session._IDLE_TASK = cast("Any", idle)
+    session._CLEANUP_TASK = cast("Any", cleanup)
+    session._LAUNCH_LOOP = asyncio.get_running_loop()
+    session._LAST_ACTION_TS["main"] = time.monotonic()
+
+    await session._discard_stale_session()
+
+    assert session._PWS is None
+    assert session._CONTEXT is None
+    assert session._PAGES == {}
+    assert session._OWNED_PAGES == {}
+    # Stale monitor tasks cancelled + cleared so the relaunch can restart them.
+    assert idle.cancelled is True
+    assert cleanup.cancelled is True
+    assert session._IDLE_TASK is None
+    assert session._CLEANUP_TASK is None
+    assert session._LAUNCH_LOOP is None
+    assert session._LAST_ACTION_TS == {}
+    assert stopped == [True]
+
+
+async def test_get_session_bring_to_front_failure_returns_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # FIX 2: bring_to_front failure after successful page acquisition must NOT
+    # discard the session — the page is live and usable.
+    pws = cast("Any", object())
+    context = cast("Any", object())
+    session._PWS = pws
+    session._CONTEXT = context
+    session._PAGES.pop("main", None)
+    session._LAUNCHING = False
+    session._LAUNCH_LOOP = asyncio.get_running_loop()
+
+    page = _FakePage()
+
+    async def boom_bring() -> None:
+        raise RuntimeError("window manager unavailable")
+
+    page.bring_to_front = boom_bring  # type: ignore[attr-defined]
+
+    async def fake_acquire(aid: str) -> Any:
+        session._PAGES[aid] = page
+        return page
+
+    monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
+    discard_called: list[bool] = []
+
+    async def fake_discard() -> None:
+        discard_called.append(True)
+
+    monkeypatch.setattr(session, "_discard_stale_session", fake_discard)
+
+    result = await session.get_session()
+
+    # Page returned despite bring_to_front failure.
+    assert result == (pws, context, page)
+    # Session NOT discarded.
+    assert discard_called == []
+    assert session._PWS is pws
+    assert session._CONTEXT is context
+
+
+async def test_get_session_reuse_path_sets_launching_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # FIX 1: concurrent callers on a live context must serialize via _LAUNCHING
+    # so the reuse path does not fall through to a second launch.
+    pws = cast("Any", object())
+    context = cast("Any", object())
+    session._PWS = pws
+    session._CONTEXT = context
+    session._PAGES.pop("main", None)
+    session._LAUNCHING = False
+    session._LAUNCH_LOOP = asyncio.get_running_loop()
+
+    page = _FakePage()
+
+    async def fake_acquire(aid: str) -> Any:
+        session._PAGES[aid] = page
+        return page
+
+    monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
+
+    launching_values: list[bool] = []
+    original_get = session.get_session
+
+    async def tracked_get() -> Any:
+        # Snapshot _LAUNCHING just before calling get_session to see the guard.
+        launching_values.append(session._LAUNCHING)
+        return await original_get()
+
+    result = await tracked_get()
+
+    assert result == (pws, context, page)
+    # _LAUNCHING was False when we entered (no prior launch), and is False
+    # after get_session returns.
+    assert session._LAUNCHING is False
+
+
+async def test_get_session_concurrent_reuse_does_not_double_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two concurrent callers hitting a live context must not both launch Chrome.
+
+    FIX 1: the reuse path must hold _LAUNCHING so a second caller waits
+    instead of racing through to the launch block and colliding on the
+    Chromium Singleton lock.
+    """
+    pws = cast("Any", object())
+    context = cast("Any", object())
+    session._PWS = pws
+    session._CONTEXT = context
+    session._PAGES.pop("main", None)
+    session._LAUNCHING = False
+    session._LAUNCH_LOOP = asyncio.get_running_loop()
+
+    pages = [_FakePage(), _FakePage()]
+    acquire_count = 0
+
+    async def fake_acquire(aid: str) -> Any:
+        nonlocal acquire_count
+        acquire_count += 1
+        page = pages[acquire_count - 1]
+        session._PAGES[aid] = page
+        return page
+
+    monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
+
+    launch_attempted = False
+
+    async def fake_start() -> Any:
+        nonlocal launch_attempted
+        launch_attempted = True
+        raise _LaunchReachedError("should not launch")
+
+    import patchright.async_api as pw
+
+    starter = cast("Any", _Starter(fake_start))
+    monkeypatch.setattr(pw, "async_playwright", lambda: starter)
+
+    # Fire two concurrent get_session() calls. Both should hit the reuse path
+    # (since _CONTEXT and _PWS are live) and serialize via _LAUNCHING.
+    results = await asyncio.gather(
+        session.get_session(),
+        session.get_session(),
+        return_exceptions=True,
+    )
+
+    # Neither caller should have fallen through to the launch block.
+    assert not launch_attempted
+    # Both got valid (pws, context, page) tuples.
+    for r in results:
+        assert not isinstance(r, Exception), f"Unexpected exception: {r}"
+        assert r[0] is pws
+        assert r[1] is context
+    # The second caller reused the first caller's page (no double launch).
+    assert results[0][2] is results[1][2]
+    # _LAUNCHING was properly reset.
+    assert session._LAUNCHING is False
 
 
 def test_clear_idle_task_sets_global_to_none() -> None:

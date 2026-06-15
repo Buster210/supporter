@@ -38,6 +38,13 @@ def _reset_session() -> Generator[None]:
     token = session._AGENT_ID.set("main")
     yield
     session._IDLE_TASK = None
+    # Reset launch-lifecycle globals so a test that set them (e.g. _LAUNCH_LOOP
+    # to a now-closed loop) can't leak into another test file and trip
+    # get_session's per-loop singleton guard.
+    session._CONTEXT = None
+    session._PWS = None
+    session._LAUNCHING = False
+    session._LAUNCH_LOOP = None
     session._AGENT_ID.reset(token)
 
 

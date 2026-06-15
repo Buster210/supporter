@@ -643,6 +643,34 @@ async def _acquire_agent_page(aid: str) -> Any:
         return page
 
 
+async def _discard_stale_session() -> None:
+    """Drop a context whose browser died without clearing globals, best-effort
+    stopping the Playwright driver, so the next launch starts clean instead of
+    reusing a dead handle."""
+    global _PWS, _CONTEXT, _IDLE_TASK, _CLEANUP_TASK, _LAUNCH_LOOP, _LAST_ACTION_TS
+    # Cancel the monitor tasks (never self-cancel) so the relaunch's
+    # _start_idle_monitor() isn't skipped by a lingering task handle, leaving the
+    # fresh session without an idle-close monitor. Mirrors close_session().
+    current = asyncio.current_task()
+    if _IDLE_TASK is not None and _IDLE_TASK is not current:
+        _IDLE_TASK.cancel()
+    _IDLE_TASK = None
+    if _CLEANUP_TASK is not None:
+        _CLEANUP_TASK.cancel()
+        _CLEANUP_TASK = None
+    pws = _PWS
+    _PWS = None
+    _CONTEXT = None
+    _PAGES.clear()
+    _OWNED_PAGES.clear()
+    _LAST_ACTION_TS.clear()
+    _LAUNCH_LOOP = None
+    if pws is not None:
+        try:
+            await pws.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping playwright for stale session: {e}")
+
 async def get_session() -> tuple[Any, Any, Any]:
     global _PWS, _CONTEXT, _LAUNCHING, _LAUNCH_LOOP
 
@@ -678,6 +706,47 @@ async def get_session() -> tuple[Any, Any, Any]:
             agent_page = await _acquire_agent_page(aid)
             return _PWS, _CONTEXT, agent_page
         raise RuntimeError("Browser session launch failed")
+
+    # The shared context can be live even though THIS agent has no page: a prior
+    # task released its page (release_agent) but deliberately left the browser
+    # open, or the agent's own tab was closed while sibling tabs live on. Reuse
+    # that context by allocating a page on it. Relaunching instead spins up a
+    # second Chrome on the same profile dir, collides on Chromium's Singleton
+    # lock, and forces the user to quit the first window before anything works.
+    if _CONTEXT is not None and _PWS is not None:
+        if _LAUNCH_LOOP is not None and _LAUNCH_LOOP is not asyncio.get_running_loop():
+            raise RuntimeError(
+                "Browser session launched on a different event loop. "
+                "Expected singleton per loop."
+            )
+        # Serialize concurrent get_session() callers — same guard as the
+        # launch path below.
+        _LAUNCHING = True
+        try:
+            try:
+                agent_page = await _acquire_agent_page(aid)
+            except Exception as exc:
+                # Stale handle: the browser died without clearing globals. Discard it
+                # and fall through to a fresh launch.
+                logger.warning(f"Existing browser context unusable; relaunching: {exc}")
+                await _discard_stale_session()
+            else:
+                try:
+                    await agent_page.bring_to_front()
+                except Exception as exc:
+                    # bring_to_front is best-effort — the page is live and
+                    # usable even if we can't raise its window.
+                    logger.warning(
+                        "bring_to_front failed; returning page without focusing: %s",
+                        exc,
+                    )
+                _LAST_ACTION_TS[aid] = time.monotonic()
+                return _PWS, _CONTEXT, agent_page
+        finally:
+            # Reset _LAUNCHING on ALL exit paths: success return, exception,
+            # and fall-through to the launch block below.
+            _LAUNCHING = False
+
 
     loop = asyncio.get_running_loop()
     _LAUNCH_LOOP = loop
