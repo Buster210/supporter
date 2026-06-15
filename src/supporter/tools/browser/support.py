@@ -521,7 +521,7 @@ async def _dom_select(locator: Any, *, value: str = "", label: str = "") -> str:
     Playwright ``evaluate`` accepts a single ``arg``; pass ``[value, label]`` as
     one array and destructure it in the page function.
     """
-    return await locator.evaluate(_DOM_SELECT_JS, [value, label])
+    return str(await locator.evaluate(_DOM_SELECT_JS, [value, label]))
 
 
 def _render_script_result(result: Any) -> str:

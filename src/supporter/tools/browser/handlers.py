@@ -104,6 +104,8 @@ async def _handle_forward(req: BrowseRequest) -> str:
         page, lambda: page.go_forward(timeout=30_000, wait_until="commit")
     )
     await asyncio.sleep(req.delay_ms / 1000.0)
+    if not await _effective_fast(page):
+        await humanize.reading_pause(page)
     return await _snapshot_full(page, req)
 
 
