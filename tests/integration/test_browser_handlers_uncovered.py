@@ -61,36 +61,18 @@ async def test_tab_handler_negative_index(fake_session: FakeSession) -> None:
     assert "Closed the last tab" in result or "no tabs remain open" in result
 
 
-async def test_close_handler_browser_already_closed(fake_session: FakeSession) -> None:
-    import supporter.tools.browser.session as session_module
-
-    original_is_alive_fn = session_module.is_session_alive
-
-    def mock_is_session_alive() -> bool:
-        return False
-
-    session_module.is_session_alive = mock_is_session_alive
-
-    try:
-        result = await browse("close")
-        assert "Browser already closed." in result
-    finally:
-        session_module.is_session_alive = original_is_alive_fn
-
-
-async def test_close_handler_confirmation_callback_none(
+async def test_close_handler_rejected_as_orchestrator_only(
     fake_session: FakeSession,
 ) -> None:
-    import supporter.tools.browser.guardrails as guardrails
+    result = await browse("close")
+    assert "orchestrator-only" in result
 
-    original_callback = guardrails.browse_confirmation_callback
-    guardrails.browse_confirmation_callback = None
 
-    try:
-        result = await browse("close")
-        assert "Error: browser confirmation not wired." in result
-    finally:
-        guardrails.browse_confirmation_callback = original_callback
+async def test_closenow_handler_rejected_as_orchestrator_only(
+    fake_session: FakeSession,
+) -> None:
+    result = await browse("closenow")
+    assert "orchestrator-only" in result
 
 
 async def test_upload_handler_no_ref(fake_session: FakeSession) -> None:

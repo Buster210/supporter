@@ -10,6 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Input, Label, Static
 
+from ..config import config
 from ..logger import init_logger, logger, shutdown_logger
 from ..tools.base import ToolError
 from ..types import ModeChanged
@@ -36,6 +37,58 @@ if TYPE_CHECKING:
     from textual.widgets import Button, Input
 
     from ..agent import ChatAgent
+
+
+_TRIVIAL_RESPONSES = frozenset(
+    {
+        "hi",
+        "hello",
+        "hey",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "sure",
+        "cool",
+        "great",
+        "awesome",
+        "nice",
+        "got it",
+        "understood",
+        "perfect",
+        "sounds good",
+        "will do",
+        "on it",
+        "yep",
+        "nah",
+        "nope",
+        "gotcha",
+        "roger",
+        "ack",
+        "k",
+        "👍",
+    }
+)
+
+
+def _is_substantive_task(text: str) -> bool:
+    """Return True when *text* is a real task that benefits from planning."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # System/delegation re-injections — never plan on these
+    if "DELEGATION_CAPSULE_RESULT" in stripped or "MILESTONE_RESULT" in stripped:
+        return False
+    # Slash commands — handled separately, not tasks
+    if stripped.startswith("/"):
+        return False
+    lower = stripped.lower().rstrip(".!?\n")
+    if lower in _TRIVIAL_RESPONSES:
+        return False
+    # Very short non-actionable fragments
+    return len(stripped) >= 5
 
 
 class SupporterApp(App[None]):
@@ -304,8 +357,22 @@ class SupporterApp(App[None]):
         try:
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
+
+            # Feature A: plan-before-act for substantive user tasks
+            exec_text = text
+            if (
+                role == "user"
+                and getattr(config, "plan_before_act", False)
+                and _is_substantive_task(text)
+            ):
+                exec_text = await self._run_planner_and_inject(text, chat_view)
+
             await self._process_streaming_execution(
-                text, target_container, start_time, self.agent, exclude_from_history
+                exec_text,
+                target_container,
+                start_time,
+                self.agent,
+                exclude_from_history,
             )
         except ToolError as e:
             await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
@@ -355,6 +422,50 @@ class SupporterApp(App[None]):
             text, target, start_time, agent, exclude_from_history
         )
 
+    async def _run_planner_and_inject(self, text: str, chat_view: ChatContainer) -> str:
+        """Run the orchestration planner and prepend the plan to *text*.
+
+        On failure or timeout, returns *text* unchanged — planner failure
+        MUST NOT block the task.
+        """
+        import asyncio as _asyncio
+
+        from ..prompts import DELEGATE_AGENT_ROSTER, ORCHESTRATION_PLANNER_PERSONA
+        from ..worker import make_plan
+
+        profile = DELEGATE_AGENT_ROSTER.get("planner", {})
+        model = profile.get("model", "gemma-4-31b-it")
+        try:
+            plan = await _asyncio.wait_for(
+                make_plan(text, ORCHESTRATION_PLANNER_PERSONA, model),
+                timeout=15.0,
+            )
+        except TimeoutError:
+            logger.warning("planner timed out — proceeding without plan")
+            return text
+        except Exception as exc:
+            logger.warning(f"planner error: {exc} — proceeding without plan")
+            return text
+
+        if not plan:
+            return text
+
+        # Show the plan to the user as a system message
+        await chat_view.mount(
+            MessageBubble(
+                role="system",
+                content=f"PLAN (from planner — route accordingly):\n{plan}",
+            )
+        )
+        chat_view.jump_to_bottom()
+
+        # Prepend the plan to the user's text for the orchestrator
+        return (
+            f"PLAN (from planner — route accordingly):\n"
+            f"```\n{plan}\n```\n\n"
+            f"USER REQUEST:\n{text}"
+        )
+
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
 
@@ -399,6 +510,8 @@ class SupporterApp(App[None]):
         return result[0]
 
     async def _confirm_browse(self, title: str, detail: str) -> bool:
+        if getattr(config, "browser_auto_approve", False):
+            return True
         return await self.push_screen_wait(
             ConfirmationModal(title=title, content=detail, language="text")
         )

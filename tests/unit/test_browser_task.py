@@ -237,3 +237,67 @@ def test_normalize_name_collapses_punctuation_and_space() -> None:
 def test_recordable_actions_include_navigation_steps() -> None:
     for action in ("back", "forward", "newtab", "frame"):
         assert action in RECORDABLE_ACTIONS
+
+async def _run_replay_with_snapshot(monkeypatch: pytest.MonkeyPatch, snap: str) -> str:
+    """Drive replay_playbook with a one-step playbook, mocking the live page.
+
+    Returns the success message so callers can assert the final-page payload.
+    """
+    import time
+
+    from supporter.tools.browser import support, task, tool
+    from supporter.tools.browser.playbook_store import Playbook, build_step
+
+    pb = Playbook(
+        host="example.com",
+        goal="do thing",
+        created_ts=time.time(),
+        steps=[build_step("click", selector="#btn")],
+    )
+
+    async def _host(_page: object) -> str:
+        return "example.com"
+
+    async def _browse(_action: str, **_kwargs: object) -> str:
+        return "step-ok"
+
+    async def _snapshot(_page: object) -> str:
+        return snap
+
+    async def _save(_pb: object) -> None:
+        return None
+
+    monkeypatch.setattr(task.session, "active_page", lambda: object())
+    monkeypatch.setattr(task, "_page_host", _host)
+    monkeypatch.setattr(task, "load_playbook", lambda host, goal: pb)
+    monkeypatch.setattr(task, "save_playbook", _save)
+    monkeypatch.setattr(tool, "browse", _browse)
+    monkeypatch.setattr(support, "_live_refs_snapshot", _snapshot)
+
+    from supporter.tools.browser.task import replay_playbook
+
+    return await replay_playbook("do thing")
+
+
+@pytest.mark.asyncio
+async def test_replay_playbook_success_return_includes_final_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D2: success return carries the collected final-page data, not just status."""
+    result = await _run_replay_with_snapshot(monkeypatch, "FINAL_SNAPSHOT_XYZ")
+    assert "1/1 steps succeeded" in result
+    assert "Final page:" in result
+    assert "FINAL_SNAPSHOT_XYZ" in result
+
+
+@pytest.mark.asyncio
+async def test_replay_playbook_final_page_truncates_loudly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D2: an oversized final snapshot is capped with a visible truncation marker."""
+    from supporter.config import config
+
+    big = "z" * (config.browse_page_chars_cap + 5000)
+    result = await _run_replay_with_snapshot(monkeypatch, big)
+    assert "…(truncated:" in result
+    assert "more chars)" in result

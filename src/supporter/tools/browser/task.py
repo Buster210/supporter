@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Any
 
+from ...config import config
 from ...logger import logger
 from . import session
 from .core import _page_host
@@ -173,7 +174,22 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
     await save_playbook(playbook)
 
     n = len(playbook.steps)
-    return f"Replayed playbook {goal!r} on {host}: {n}/{n} steps succeeded."
+    # D2: Include final page state in success return
+    live_page = session.active_page()
+    final_snapshot = (
+        await _live_refs_snapshot(live_page) if live_page is not None else ""
+    )
+    char_cap = config.browse_page_chars_cap
+    if len(final_snapshot) > char_cap:
+        final_snapshot = (
+            final_snapshot[:char_cap]
+            + f"\n\n…(truncated: {len(final_snapshot) - char_cap} more chars)"
+        )
+    final_page = f"\n\nFinal page:\n{final_snapshot}"
+    return (
+        f"Replayed playbook {goal!r} on {host}: {n}/{n} steps succeeded."
+        + final_page
+    )
 
 
 async def query_playbook(goal: str) -> str:

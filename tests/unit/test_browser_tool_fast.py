@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from supporter.tools.browser import support
+from supporter.tools.browser import guardrails, support
 
 
 def _run_effective_fast(host: str) -> bool:
     async def fake_host(_page: object) -> str:
         return host
 
+    mock_store = MagicMock()
+    mock_store.is_confirmed.return_value = False
+
     with (
         patch.object(support, "_page_host", fake_host),
         patch.object(support.config, "browser_debug_overlay", False),
+        patch.object(guardrails, "_get_trust_store", return_value=mock_store),
     ):
         return asyncio.run(support._effective_fast(object()))
 

@@ -69,7 +69,7 @@ DELEGATE_DEFAULT_PARALLEL = 3
 DELEGATE_DEFAULT_TIMEOUT = 180
 DELEGATE_MAX_TIMEOUT = 600
 DELEGATE_MAX_TASKS = 10
-DELEGATE_MAX_OUTPUT_CHARS = 10000
+DELEGATE_MAX_OUTPUT_CHARS = 30000
 DELEGATE_MAX_RETRIES = 2
 
 DELEGATE_RESULT_REPAIR = True
@@ -191,7 +191,9 @@ def load_config() -> AppConfig:
         delegate_default_timeout=DELEGATE_DEFAULT_TIMEOUT,
         delegate_max_timeout=DELEGATE_MAX_TIMEOUT,
         delegate_max_tasks=DELEGATE_MAX_TASKS,
-        delegate_max_output_chars=DELEGATE_MAX_OUTPUT_CHARS,
+        delegate_max_output_chars=_int_env(
+            "DELEGATE_MAX_OUTPUT_CHARS", DELEGATE_MAX_OUTPUT_CHARS
+        ),
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
         delegate_max_retries=_int_env("DELEGATE_MAX_RETRIES", DELEGATE_MAX_RETRIES),
@@ -223,6 +225,11 @@ def load_config() -> AppConfig:
         browser_parallel_pilots=_bool_env("BROWSER_PARALLEL_PILOTS", True),
         browser_diff_threshold=_int_env("BROWSER_DIFF_THRESHOLD", 40),
         browser_idle_close_seconds=_int_env("BROWSER_IDLE_CLOSE_SECONDS", 600),
+        # D1: Browser output caps - env overrides
+        browse_page_chars_cap=_int_env("BROWSE_PAGE_CHARS_CAP", 50_000),
+        browse_batch_chars_cap=_int_env("BROWSE_BATCH_CHARS_CAP", 150_000),
+        browse_max_links=_int_env("BROWSE_MAX_LINKS", 100),
+        browse_eval_chars_cap=_int_env("BROWSE_EVAL_CHARS_CAP", 16_000),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),
@@ -240,6 +247,8 @@ def load_config() -> AppConfig:
         browser_trusted_hosts=os.getenv("BROWSER_TRUSTED_HOSTS", ""),
         browser_micro_behavior_rate=float(os.getenv("MICRO_BEHAVIOR_RATE", "0.06")),
         browser_promotion_threshold=_int_env("BROWSER_PROMOTION_THRESHOLD", 5),
+        browser_auto_approve=_bool_env("BROWSER_AUTO_APPROVE", True),
+        plan_before_act=_bool_env("PLAN_BEFORE_ACT", True),
     )
 
 

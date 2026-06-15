@@ -17,8 +17,8 @@ _EVIDENCE_LABELS = {
     "commands_run": "Commands run",
     "sources": "Sources",
 }
-_ITEM_PREVIEW_CHARS = 200
-_MAX_ITEMS = 20
+_ITEM_PREVIEW_CHARS = 600  # ponytail: raised from 200 for fuller findings
+_MAX_ITEMS = 50  # ponytail: raised from 20 for more evidence/findings
 
 
 def _render_items(items: list[Any]) -> tuple[str, int]:

@@ -114,7 +114,7 @@ async def test_select_by_label_text(fake_session: FakeSession) -> None:
 
 async def test_closenow(fake_session: FakeSession) -> None:
     result = await browse("closenow")
-    assert "Browser closed" in result
+    assert "orchestrator-only" in result
 
 
 async def test_cookies_with_key(fake_session: FakeSession) -> None:

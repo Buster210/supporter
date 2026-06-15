@@ -422,8 +422,9 @@ async def mark_capsule_metrics(
 def extract_task_capsule_fields(output: str) -> dict[str, Any]:
     parsed = _parse_delegation_result(output)
     if parsed is None:
+        # D3: no structured block — use a generous preview, not just the first paragraph
         return {
-            "summary": first_compact_paragraph(output),
+            "summary": preview(output, 3000) if output else "",
             "evidence": default_evidence(),
             "findings": [],
             "handoff": "",
@@ -431,10 +432,10 @@ def extract_task_capsule_fields(output: str) -> dict[str, Any]:
         }
 
     evidence = parsed.get("evidence")
+    # D3: prefer full output for summary fallback over first paragraph
+    summary_fallback = preview(output, 3000) if output else ""
     return {
-        "summary": _string_or_default(
-            parsed.get("summary"), first_compact_paragraph(output)
-        ),
+        "summary": _string_or_default(parsed.get("summary"), summary_fallback),
         "evidence": _normalize_evidence(evidence),
         "findings": parsed.get("findings")
         if isinstance(parsed.get("findings"), list)
@@ -482,7 +483,7 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
         task_id = str(task.get("id", ""))
         status = status_value(task.get("status", ""))
         summary = str(
-            task.get("summary") or first_compact_paragraph(task.get("output", ""))
+            task.get("summary") or preview(task.get("output", ""), 3000)
         )
         if summary:
             answer_parts.append(f"{task_id}: {summary}")
@@ -627,7 +628,8 @@ def _parse_delegation_result(output: str) -> dict[str, Any] | None:
     return None
 
 
-def first_compact_paragraph(output: Any, limit: int = 500) -> str:
+def first_compact_paragraph(output: Any, limit: int = 1500) -> str:
+    """Extract first paragraph, capped at limit chars (default 1500)."""
     text = str(output or "").strip()
     if not text:
         return ""

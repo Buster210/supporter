@@ -216,3 +216,58 @@ class TestIntEnv:
         monkeypatch.setenv("_TEST_INT_ENV_BAD", "not-a-number")
         with pytest.raises(ValueError, match="must be an integer"):
             _int_env("_TEST_INT_ENV_BAD", 42)
+
+class TestBrowserCapsConfig:
+    """D1: Browser output caps are env-backed config fields with sane defaults."""
+
+    def test_browser_caps_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        c = load_config()
+        assert c.browse_page_chars_cap == 50_000
+        assert c.browse_batch_chars_cap == 150_000
+        assert c.browse_max_links == 100
+        assert c.browse_eval_chars_cap == 16_000
+
+    def test_browser_caps_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("BROWSE_PAGE_CHARS_CAP", "8000")
+        monkeypatch.setenv("BROWSE_BATCH_CHARS_CAP", "20000")
+        monkeypatch.setenv("BROWSE_MAX_LINKS", "50")
+        monkeypatch.setenv("BROWSE_EVAL_CHARS_CAP", "4000")
+        c = load_config()
+        assert c.browse_page_chars_cap == 8000
+        assert c.browse_batch_chars_cap == 20000
+        assert c.browse_max_links == 50
+        assert c.browse_eval_chars_cap == 4000
+
+    def test_delegate_max_output_chars_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("DELEGATE_MAX_OUTPUT_CHARS", "50000")
+        c = load_config()
+        assert c.delegate_max_output_chars == 50000
+
+    def test_delegate_max_output_chars_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        c = load_config()
+        assert c.delegate_max_output_chars == 30000
+
+class TestD7OrchestratorPrompt:
+    """D7: orchestrator prompt instructs presenting collected data for browser tasks."""
+
+    def test_orchestrator_prompt_mentions_presenting_data(self) -> None:
+        from supporter.prompts import DEFAULT_SYSTEM_INSTRUCTION
+
+        assert "PRESENT the collected data" in DEFAULT_SYSTEM_INSTRUCTION
+        assert "browser/research" in DEFAULT_SYSTEM_INSTRUCTION
+
+    def test_page_pilot_prompt_mentions_data_return_contract(self) -> None:
+        from supporter.prompts import DELEGATE_AGENT_ROSTER
+
+        pp = DELEGATE_AGENT_ROSTER["page-pilot"]
+        assert "Data Return Contract" in pp["persona"]
+        assert "findings" in pp["persona"]
+        assert "evidence.sources" in pp["persona"]

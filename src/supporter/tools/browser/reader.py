@@ -4,18 +4,15 @@ import asyncio
 import re
 from typing import Any
 
+from ...config import config
 from ...logger import logger
 from .core import BrowseRequest
 from .support import _navigate_with_retry, _page_or_error, _wrap_action_errors
 
 __all__ = ["_handle_links", "_handle_read"]
 
-# Per-page and whole-batch caps on returned markdown, plus a link cap. Reading
-# is for getting the substance into context, not mirroring the page -- bound it
-# so a single huge page can't blow the window.
-_PAGE_CHARS_CAP = 12_000
-_BATCH_CHARS_CAP = 40_000
-_MAX_LINKS = 40
+# ponytail: defaults overridden by config (BROWSE_PAGE_CHARS_CAP, etc.)
+# Constants below are unused; values come from config.browse_* settings.
 _AUTOSCROLL_STEPS = 12
 _AUTOSCROLL_PAUSE = 0.4
 _URL_RE = re.compile(r"https?://[^\s]+")
@@ -122,8 +119,11 @@ def _parse_urls(raw: str) -> list[str]:
     return _URL_RE.findall(raw or "")
 
 
-def _format_read(data: dict[str, Any], *, char_cap: int = _PAGE_CHARS_CAP) -> str:
+def _format_read(data: dict[str, Any], *, char_cap: int | None = None) -> str:
     """Render one extracted page as a clean, citable text block."""
+    # ponytail: char_cap defaults from config (BROWSE_PAGE_CHARS_CAP)
+    if char_cap is None:
+        char_cap = config.browse_page_chars_cap
     if not isinstance(data, dict):
         return "Error: reader returned no content."
     header: list[str] = []
@@ -208,8 +208,10 @@ async def _autoscroll(page: Any) -> None:
 async def _extract(page: Any, req: BrowseRequest) -> dict[str, Any]:
     if req.full_page:
         await _autoscroll(page)
+    # ponytail: maxLinks from config (BROWSE_MAX_LINKS)
+    max_links = config.browse_max_links
     data = await page.evaluate(
-        _READER_JS, {"maxLinks": _MAX_LINKS, "selector": req.selector or ""}
+        _READER_JS, {"maxLinks": max_links, "selector": req.selector or ""}
     )
     return data if isinstance(data, dict) else {}
 
@@ -226,7 +228,8 @@ async def _handle_read(req: BrowseRequest) -> str:
         return _format_read(data)
 
     blocks: list[str] = []
-    budget = _BATCH_CHARS_CAP
+    # ponytail: batch cap from config (BROWSE_BATCH_CHARS_CAP)
+    budget = config.browse_batch_chars_cap
     for i, url in enumerate(urls, 1):
         try:
             await _navigate_with_retry(
@@ -237,7 +240,8 @@ async def _handle_read(req: BrowseRequest) -> str:
             )
             await asyncio.sleep(req.delay_ms / 1000.0)
             data = await _extract(page, req)
-            per_cap = min(_PAGE_CHARS_CAP, max(0, budget))
+            # ponytail: per-page cap from config (BROWSE_PAGE_CHARS_CAP)
+            per_cap = min(config.browse_page_chars_cap, max(0, budget))
             rendered = _format_read(data, char_cap=per_cap)
         except Exception as exc:  # one bad URL must not sink the batch
             rendered = f"Error reading {url}: {exc}"
@@ -267,7 +271,9 @@ async def _handle_links(req: BrowseRequest) -> str:
                 ),
             )
             await asyncio.sleep(req.delay_ms / 1000.0)
+    # ponytail: maxLinks from config (BROWSE_MAX_LINKS)
     data = await page.evaluate(
-        _READER_JS, {"maxLinks": _MAX_LINKS, "selector": req.selector or ""}
+        _READER_JS,
+        {"maxLinks": config.browse_max_links, "selector": req.selector or ""},
     )
     return _format_links(data if isinstance(data, dict) else {})

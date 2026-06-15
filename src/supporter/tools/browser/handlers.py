@@ -15,6 +15,9 @@ from .support import (
     _confirm_or_block,
     _confirm_script,
     _diff_text,
+    _dom_click,
+    _dom_select,
+    _dom_set_value,
     _effective_fast,
     _navigate_with_retry,
     _page_baseline_key,
@@ -317,7 +320,7 @@ async def _handle_click(req: BrowseRequest) -> str:
         await session.pace()
         await humanize.human_click(page, req.ref, locator=locator)
     else:
-        await locator.click()
+        await _dom_click(locator)
         await _overlay_mark(page, locator, "click")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
@@ -346,7 +349,7 @@ async def _handle_type(req: BrowseRequest) -> str:
             page, req.ref, req.text, sensitive=sensitive, locator=locator
         )
     else:
-        await locator.fill(req.text)
+        await _dom_set_value(locator, req.text)
         await _overlay_mark(page, locator, "move")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
@@ -439,10 +442,12 @@ async def _handle_select(req: BrowseRequest) -> str:
 
     if not await _effective_fast(page):
         await session.pace()
-    if req.value:
-        await locator.select_option(value=req.value)
+        if req.value:
+            await locator.select_option(value=req.value)
+        else:
+            await locator.select_option(label=req.text)
     else:
-        await locator.select_option(label=req.text)
+        await _dom_select(locator, value=req.value or "", label=req.text or "")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
 
@@ -457,6 +462,11 @@ async def _handle_status(_req: BrowseRequest) -> str:
 
 @_wrap_action_errors("close")
 async def _handle_close(req: BrowseRequest) -> str:
+    if session.current_agent_id() != "main":
+        return (
+            "Only the main orchestrator can close the browser; left open "
+            "so other agents can keep using it."
+        )
     if not session.is_session_alive():
         return "Browser already closed."
     cb = guardrails.browse_confirmation_callback
@@ -470,6 +480,11 @@ async def _handle_close(req: BrowseRequest) -> str:
 
 @_wrap_action_errors("closenow")
 async def _handle_closenow(req: BrowseRequest) -> str:
+    if session.current_agent_id() != "main":
+        return (
+            "Only the main orchestrator can close the browser; left open "
+            "so other agents can keep using it."
+        )
     if not session.is_session_alive():
         return "Browser already closed."
     await session.close_session(force=req.force)

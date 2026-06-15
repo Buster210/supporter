@@ -152,10 +152,10 @@ def test_render_script_result_falls_back_to_str() -> None:
     assert "OPAQUE" in support._render_script_result(NotJson())
 
 
-def test_render_script_result_truncates_over_2000() -> None:
-    out = support._render_script_result("z" * 5000)
-    assert out.endswith("...(truncated)")
-    assert len(out) == 2000 + len("...(truncated)")
+def test_render_script_result_truncates_over_config_cap() -> None:
+    out = support._render_script_result("z" * 50_000)
+    assert "…(truncated:" in out
+    assert out.endswith(" more chars)")
 
 
 def test_render_script_result_fallback_on_json_failure() -> None:

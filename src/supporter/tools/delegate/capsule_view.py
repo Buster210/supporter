@@ -8,14 +8,13 @@ from .capsule import (
     capsule_relative_path,
     default_evidence,
     effective_status,
-    first_compact_paragraph,
     load_capsule,
     preview,
 )
 from .capsule_query import task_totals
 from .capsule_render import render_evidence, render_findings
 
-OUTPUT_PREVIEW_CHARS = 1200
+OUTPUT_PREVIEW_CHARS = 3600  # ponytail: raised from 1200 for fuller task output
 RECENT_DECISIONS_LIMIT = 20
 
 
@@ -97,7 +96,7 @@ def inspect_task(job_id: str, task_id: str) -> str:
 
     evidence = task.get("evidence", default_evidence())
     findings = task.get("findings", [])
-    summary = first_compact_paragraph(str(task.get("output", "")))
+    summary = task.get("summary") or preview(str(task.get("output", "")), 3000)
     depends_on = task.get("depends_on", [])
     depends_on_text = ", ".join(depends_on) if isinstance(depends_on, list) else "none"
     lines = [

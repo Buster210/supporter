@@ -36,6 +36,9 @@ __all__ = [
     "_confirm_script",
     "_diff_header",
     "_diff_text",
+    "_dom_click",
+    "_dom_select",
+    "_dom_set_value",
     "_effective_fast",
     "_is_transient_nav_error",
     "_live_refs_snapshot",
@@ -442,12 +445,96 @@ async def _resolve_role_and_name(locator: Any, ref: str) -> tuple[str, str]:
         return "", ""
 
 
+_DOM_CLICK_JS = "(el) => { el.click(); return 'clicked'; }"
+
+_DOM_SET_VALUE_JS = """
+(el, text) => {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+        // Use the prototype's native value setter matching the element type, so
+        // React/Vue controlled inputs observe the change (a plain el.value = ...
+        // is swallowed by their value trackers). Wrong-prototype setters raise
+        // "Illegal invocation", so the proto MUST match the tag.
+        const proto = tag === 'textarea'
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc && desc.set) {
+            desc.set.call(el, text);
+        } else {
+            el.value = text;
+        }
+    } else if (el.isContentEditable || el.contentEditable === 'true') {
+        el.textContent = text;
+    } else {
+        throw new Error('not an input/textarea/contenteditable: ' + tag);
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'set';
+}
+"""
+
+_DOM_SELECT_JS = """
+(el, [value, label]) => {
+    const options = Array.from(el.options);
+    let target = null;
+    if (label) {
+        target = options.find(o => o.text.trim() === label.trim());
+    }
+    if (!target && value) {
+        target = options.find(o => o.value === value);
+    }
+    if (!target) {
+        const v = value || label;
+        throw new Error('option not found: ' + v);
+    }
+    el.value = target.value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return target.value;
+}
+"""
+
+
+async def _dom_click(locator: Any) -> None:
+    """Click an element via direct DOM dispatch (fast trusted path)."""
+    await locator.evaluate(_DOM_CLICK_JS)
+
+
+async def _dom_set_value(locator: Any, text: str) -> None:
+    """Set a value on an input/textarea/contenteditable via direct DOM (fast path).
+
+    Covers input, textarea, and contenteditable elements. Dispatches bubbling
+    ``input`` and ``change`` events so framework listeners see the update.
+    Raises if the element is not a recognizable input target."""
+    result = await locator.evaluate(_DOM_SET_VALUE_JS, text)
+    if result != "set":
+        raise RuntimeError(f"unexpected DOM set result: {result!r}")
+
+
+async def _dom_select(locator: Any, *, value: str = "", label: str = "") -> str:
+    """Select an option via direct DOM (fast path).
+
+    Matches by visible label first (when ``label`` is given), then by value
+    attribute. Returns the resolved value. Raises if no matching option exists.
+
+    Playwright ``evaluate`` accepts a single ``arg``; pass ``[value, label]`` as
+    one array and destructure it in the page function.
+    """
+    return await locator.evaluate(_DOM_SELECT_JS, [value, label])
+
+
 def _render_script_result(result: Any) -> str:
+    # ponytail: cap from config (BROWSE_EVAL_CHARS_CAP)
+    char_cap = config.browse_eval_chars_cap
     try:
         text = json.dumps(result, default=str)
     except Exception:
         text = str(result)
-    return text if len(text) <= 2000 else text[:2000] + "...(truncated)"
+    if len(text) <= char_cap:
+        return text
+    omitted = len(text) - char_cap
+    return text[:char_cap] + f"…(truncated: {omitted} more chars)"
 
 
 def _validate_path_or_error(path: str) -> tuple[Any, str | None]:
