@@ -80,7 +80,7 @@ _TREMOR_MIN_SCALE: Final = 0.2
 _MID_MOVE_PAUSE_PROBABILITY: Final = 0.015
 _ORIGIN_SETTLE_JITTER: Final = 3.0
 
-MICRO_BEHAVIOR_RATE: Final = 0.06
+MICRO_BEHAVIOR_RATE: Final = config.browser_micro_behavior_rate
 _CURSOR_DRIFT_MAX: Final = 40.0
 _SCROLL_DRIFT_MIN: Final = 20
 _SCROLL_DRIFT_MAX: Final = 80
@@ -121,6 +121,19 @@ _QWERTY_NEIGHBORS: Final[dict[str, str]] = {
     "n": "bhjm",
     "m": "njk",
 }
+
+
+def _clamp_to_viewport(
+    x: float, y: float, viewport: ViewportSize | None, margin: float = 2.0
+) -> tuple[float, float]:
+    if viewport is None:
+        return (x, y)
+    w = viewport.get("width", 800)
+    h = viewport.get("height", 600)
+    return (
+        max(margin, min(w - margin, x)),
+        max(margin, min(h - margin, y)),
+    )
 
 
 def reset_cursor() -> None:
@@ -185,10 +198,12 @@ async def _move_cursor(
     page: Page | None = None,
 ) -> None:
     global _LAST_POS
-    start = _origin_for(viewport)
+    start = _clamp_to_viewport(*_origin_for(viewport), viewport)
     dbg = page is not None and config.browser_debug_overlay
 
-    control_points = random_control_points(start, target, count=3)
+    control_points = random_control_points(
+        start, _clamp_to_viewport(*target, viewport), count=3
+    )
     duration_ms = fitts_duration(start, target) + random.uniform(*_MOVE_OVERHEAD_MS)
     steps = max(10, int(duration_ms / 16.0))
     step_delay = duration_ms / 1000.0 / steps
@@ -198,8 +213,11 @@ async def _move_cursor(
         jt = minimum_jerk(step / steps, 0.0, 1.0)
         mx, my = bezier_2d(jt, control_points)
         sigma = _tremor_sigma(mx - prev_x, my - prev_y, step_delay)
-        nx = mx + random.gauss(0.0, sigma)
-        ny = my + random.gauss(0.0, sigma)
+        nx, ny = _clamp_to_viewport(
+            mx + random.gauss(0.0, sigma),
+            my + random.gauss(0.0, sigma),
+            viewport,
+        )
         await mouse.move(nx, ny)
         if dbg:
             await debug_overlay.overlay_move(page, nx, ny)
@@ -208,8 +226,9 @@ async def _move_cursor(
         if random.random() < _MID_MOVE_PAUSE_PROBABILITY:
             await asyncio.sleep(random.uniform(0.015, 0.040))
 
+    target = _clamp_to_viewport(*target, viewport)
     if random.random() < _OVERSHOOT_PROBABILITY:
-        await _overshoot_correction(mouse, start, target)
+        await _overshoot_correction(mouse, start, target, viewport)
 
     await mouse.move(*target)
     if dbg:
@@ -224,7 +243,10 @@ def _tremor_sigma(dx: float, dy: float, step_delay: float) -> float:
 
 
 async def _overshoot_correction(
-    mouse: Mouse, start: tuple[float, float], target: tuple[float, float]
+    mouse: Mouse,
+    start: tuple[float, float],
+    target: tuple[float, float],
+    viewport: ViewportSize | None,
 ) -> None:
     dx, dy = target[0] - start[0], target[1] - start[1]
     distance = math.hypot(dx, dy)
@@ -235,6 +257,24 @@ async def _overshoot_correction(
         target[0] + dx / distance * overshoot,
         target[1] + dy / distance * overshoot,
     )
+    # Reflect overshoot inward if it would exit the viewport
+    if viewport is not None:
+        w = viewport.get("width", 800)
+        h = viewport.get("height", 600)
+        margin = 2.0
+        if past[0] > w - margin:
+            overshoot_amount = past[0] - (w - margin)
+            past = (target[0] - overshoot_amount, past[1])
+        elif past[0] < margin:
+            overshoot_amount = margin - past[0]
+            past = (target[0] + overshoot_amount, past[1])
+        if past[1] > h - margin:
+            overshoot_amount = past[1] - (h - margin)
+            past = (past[0], target[1] - overshoot_amount)
+        elif past[1] < margin:
+            overshoot_amount = margin - past[1]
+            past = (past[0], target[1] + overshoot_amount)
+        past = _clamp_to_viewport(*past, viewport, margin=2.0)
     for _ in range(random.randint(1, 3)):
         await mouse.move(*past)
         await asyncio.sleep(_lognormal_delay(0.012, 0.3, 0.004, 0.04))
@@ -245,9 +285,10 @@ async def _idle_cursor_drift(page: Page) -> None:
     if _LAST_POS is None:
         return
     ox, oy = _LAST_POS
-    drift = (
+    drift = _clamp_to_viewport(
         ox + random.uniform(-_CURSOR_DRIFT_MAX, _CURSOR_DRIFT_MAX),
         oy + random.uniform(-_CURSOR_DRIFT_MAX, _CURSOR_DRIFT_MAX),
+        page.viewport_size,
     )
     await _move_cursor(page.mouse, drift, page.viewport_size, page=page)
 
@@ -269,9 +310,10 @@ async def _idle_hover_reconsider(page: Page) -> None:
     if _LAST_POS is None:
         return
     ox, oy = _LAST_POS
-    away = (
+    away = _clamp_to_viewport(
         ox + random.uniform(-_RECONSIDER_REACH, _RECONSIDER_REACH),
         oy + random.uniform(-_RECONSIDER_REACH, _RECONSIDER_REACH),
+        page.viewport_size,
     )
     await _move_cursor(page.mouse, away, page.viewport_size, page=page)
     await asyncio.sleep(_lognormal_delay(0.2, 0.4, 0.08, 0.8))
@@ -324,19 +366,26 @@ async def human_click(
     locator: Locator | None = None,
 ) -> None:
     await idle_flourish(page)
+    if locator is None:
+        locator = page.locator(f"aria-ref={ref}")
+    await locator.scroll_into_view_if_needed()
     target = await _element_target(page, ref, locator)
     mouse: Mouse = page.mouse
 
     await _move_cursor(mouse, target, page.viewport_size, page=page)
+    clamped = _clamp_to_viewport(*target, page.viewport_size)
     await asyncio.sleep(_lognormal_delay(0.04, 0.3, 0.02, 0.08))
-    await mouse.click(target[0], target[1], button=button)
+    await mouse.click(clamped[0], clamped[1], button=button)
     if config.browser_debug_overlay:
-        await debug_overlay.overlay_click(page, target[0], target[1])
+        await debug_overlay.overlay_click(page, clamped[0], clamped[1])
     await asyncio.sleep(_lognormal_delay(0.07, 0.3, 0.03, 0.13))
 
 
 async def human_hover(page: Page, ref: str, *, locator: Locator | None = None) -> None:
     await idle_flourish(page)
+    if locator is None:
+        locator = page.locator(f"aria-ref={ref}")
+    await locator.scroll_into_view_if_needed()
     target = await _element_target(page, ref, locator)
     await _move_cursor(page.mouse, target, page.viewport_size, page=page)
     await asyncio.sleep(_lognormal_delay(0.04, 0.3, 0.02, 0.08))
@@ -484,6 +533,7 @@ async def human_type(
 ) -> None:
     if locator is None:
         locator = page.locator(f"aria-ref={ref}")
+    await locator.scroll_into_view_if_needed()
     await locator.click()
     await asyncio.sleep(random.uniform(0.1, 0.3))
 

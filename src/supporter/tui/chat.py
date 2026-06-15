@@ -8,13 +8,13 @@ if TYPE_CHECKING:
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.events import Click, MouseScrollDown, MouseScrollUp
+from textual.events import Click
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widgets import Label, Static
 
 from .bubble import MessageBubble
-from .constants import SCROLL_STEP, SPINNER_FRAMES
+from .constants import SPINNER_FRAMES
 from .utils import apply_crystal_gradient
 
 _AT_BOTTOM_THRESHOLD = 4
@@ -46,14 +46,6 @@ class WelcomeBanner(Static):
 
 
 class ChatContainer(Vertical):
-    def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
-        self.scroll_to(y=self.scroll_y + SCROLL_STEP, animate=False)
-        event.prevent_default()
-
-    def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
-        self.scroll_to(y=self.scroll_y - SCROLL_STEP, animate=False)
-        event.prevent_default()
-
     def watch_scroll_y(self, _old_value: float, new_value: float) -> None:
         self._was_at_bottom = new_value >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
         self._update_scroll_btn()
@@ -113,10 +105,6 @@ class ChatTurn(Vertical):
         if is_active:
             self.collapsed = False
 
-    def auto_collapse(self) -> None:
-        if not self.manually_expanded:
-            self.collapsed = True
-
     def watch_is_active(self, value: bool) -> None:
         self.user_bubble.is_active = value
         for bubble in self.agent_bubbles:
@@ -131,6 +119,11 @@ class ChatTurn(Vertical):
             self.collapsed = False
         else:
             self.manually_expanded = False
+            self.collapsed = True
+
+    def auto_collapse(self) -> None:
+        """Collapse the turn unless user has manually expanded it."""
+        if not self.manually_expanded:
             self.collapsed = True
 
     def expand_turn(self) -> None:

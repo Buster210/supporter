@@ -31,6 +31,7 @@ class BrowseRequest:
     variable: str = ""
     force: bool = False
     full_page: bool = False
+    brief: bool = False
 
 
 async def _page_host(page: Any) -> str:

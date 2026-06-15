@@ -6,7 +6,13 @@ from typing import Any
 
 from ...logger import logger
 from .core import BrowseRequest, _page_host
-from .playbook_store import _RECORD_PARAMS, _REF_RESOLVABLE_ACTIONS, Step, build_step
+from .playbook_store import (
+    _RECORD_PARAMS,
+    _REF_RESOLVABLE_ACTIONS,
+    Playbook,
+    Step,
+    build_step,
+)
 
 __all__ = [
     "RECORDABLE_ACTIONS",
@@ -16,9 +22,13 @@ __all__ = [
     "discard",
     "discard_all",
     "finish",
+    "finish_repair",
+    "get_repair_context",
     "is_recording",
+    "is_repair_recording",
     "record",
     "start",
+    "start_repair",
 ]
 
 
@@ -55,6 +65,10 @@ class _ActiveTask:
 # Per-agent active task dict (lazy import from session to avoid cycles)
 _ACTIVE: dict[str, _ActiveTask] = {}
 
+# WI-2: Auto-repair recording buffer
+_repair_steps: list[Step] | None = None
+_repair_context: dict[str, Any] | None = None
+
 
 def _get_agent_id() -> str:
     """Helper to get current agent ID (lazy import to avoid cycle)."""
@@ -80,7 +94,9 @@ def _record_locator(page: Any, req: BrowseRequest) -> Any:
 
 
 def start(goal: str, host: str = "", variables: list[str] | None = None) -> str:
-    global _ACTIVE
+    global _ACTIVE, _repair_steps, _repair_context
+    _repair_steps = None
+    _repair_context = None
     goal = goal.strip()
     if not goal:
         return "Error: a task goal is required."
@@ -106,6 +122,36 @@ def discard_all() -> None:
 def is_recording() -> bool:
     aid = _get_agent_id()
     return aid in _ACTIVE
+
+
+# ── WI-2: Repair recording ───────────────────────────────────────────────────
+
+
+def start_repair(playbook: Playbook, good_prefix: list[Step]) -> None:
+    """Start repair recording with context about the original playbook."""
+    global _repair_steps, _repair_context
+    _repair_steps = []
+    _repair_context = {
+        "original_playbook": playbook,
+        "good_prefix": good_prefix,
+    }
+
+
+def is_repair_recording() -> bool:
+    return _repair_steps is not None
+
+
+def get_repair_context() -> dict[str, Any] | None:
+    return _repair_context
+
+
+def finish_repair() -> tuple[list[Step], dict[str, Any] | None]:
+    global _repair_steps, _repair_context
+    steps = _repair_steps or []
+    ctx = _repair_context
+    _repair_steps = None
+    _repair_context = None
+    return steps, ctx
 
 
 def record(step: Step) -> None:
@@ -149,7 +195,7 @@ async def finish(success: bool, host: str = "") -> str:
             if var and var not in variables:
                 variables.append(var)
 
-    from .playbook_store import Playbook, save_playbook
+    from .playbook_store import Playbook, _normalize_url_path, save_playbook
 
     playbook = Playbook(
         host=final_host,
@@ -158,13 +204,20 @@ async def finish(success: bool, host: str = "") -> str:
         steps=task.steps,
         variables=variables,
     )
+    # Derive url_template from first navigate step's URL
+    url_template = "/*"
+    for step in task.steps:
+        if step.action in {"navigate", "newtab"} and step.params.get("url"):
+            url_template = _normalize_url_path(step.params["url"])
+            break
+    playbook.url_template = url_template
     await save_playbook(playbook)
     stepped_count = len(task.steps)
     return f"Saved playbook for {task.goal!r} on {final_host} ({stepped_count} steps)."
 
 
 async def _record_step(req: BrowseRequest, result: str) -> None:
-    if not is_recording():
+    if not is_recording() and not is_repair_recording():
         return
     try:
         from .session import active_page
@@ -192,5 +245,10 @@ async def _record_step(req: BrowseRequest, result: str) -> None:
             variable=req.variable,
         )
         record(step)
+        # WI-2: Also record to repair buffer if active
+        if is_repair_recording() and req.action in RECORDABLE_ACTIONS:
+            global _repair_steps
+            if _repair_steps is not None:
+                _repair_steps.append(step)
     except Exception:
         logger.debug("Failed to record task step", exc_info=True)

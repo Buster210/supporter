@@ -178,14 +178,10 @@ class TestDefaultSystemInstruction:
         )
         assert "## Delegation Strategy" in DEFAULT_SYSTEM_INSTRUCTION
 
-    def test_includes_completion_signal_query_contract(self) -> None:
-        assert "completion signal" in DEFAULT_SYSTEM_INSTRUCTION
-        assert (
-            "call query_delegation(job_id=..., task_id=...)"
-            in DEFAULT_SYSTEM_INSTRUCTION
-        )
-        assert "before answering" in DEFAULT_SYSTEM_INSTRUCTION
-        assert "not a report" in DEFAULT_SYSTEM_INSTRUCTION
+    def test_delegation_is_capsule_only_no_per_task_to_model(self) -> None:
+        assert "you do NOT receive per-task events" in DEFAULT_SYSTEM_INSTRUCTION
+        assert "There are no per-task messages." in DEFAULT_SYSTEM_INSTRUCTION
+        assert "DELEGATION_CAPSULE_RESULT" in DEFAULT_SYSTEM_INSTRUCTION
 
     def test_no_longer_puts_assigned_task_in_completion_signal(self) -> None:
         assert "assigned_task only" not in DEFAULT_SYSTEM_INSTRUCTION

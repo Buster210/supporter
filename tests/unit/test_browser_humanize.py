@@ -231,6 +231,9 @@ class _FakeLocator:
     async def click(self) -> None:
         pass
 
+    async def scroll_into_view_if_needed(self) -> None:
+        pass
+
 
 class _FakePage:
     def __init__(self, *, geometry: dict[str, int] | None = None) -> None:

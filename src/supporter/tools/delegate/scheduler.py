@@ -724,7 +724,6 @@ async def resume_milestone(job_id: str) -> bool:
         # Create the bus only when there is live work; seed its snapshot with
         # every task's last-known state so the resumed run renders in full.
         bus = get_bus(job_id, milestone)
-        bus.notify_per_task = True
         _register_capsule_tasks_on_bus(bus, tasks_by_id, terminal_statuses)
 
         job_semaphore = asyncio.Semaphore(parallel_cap)

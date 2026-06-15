@@ -131,8 +131,12 @@ def _format_read(data: dict[str, Any], *, char_cap: int | None = None) -> str:
     if title:
         header.append(f"# {title}")
     meta_bits = []
-    for label, key in (("Source", "url"), ("Site", "siteName"), ("By", "byline"),
-                       ("Published", "published")):
+    for label, key in (
+        ("Source", "url"),
+        ("Site", "siteName"),
+        ("By", "byline"),
+        ("Published", "published"),
+    ):
         val = str(data.get(key, "")).strip()
         if val:
             meta_bits.append(f"{label}: {val}")
@@ -189,7 +193,7 @@ def _format_links(data: dict[str, Any]) -> str:
 async def _autoscroll(page: Any) -> None:
     """Scroll to the bottom in steps to trigger lazy-loaded content, stopping
     once the page height stabilizes or the step cap is hit."""
-    prev = -1
+    prev: int | float = -1
     for _ in range(_AUTOSCROLL_STEPS):
         height = await page.evaluate(
             "() => { window.scrollTo(0, document.body.scrollHeight); "
@@ -232,12 +236,11 @@ async def _handle_read(req: BrowseRequest) -> str:
     budget = config.browse_batch_chars_cap
     for i, url in enumerate(urls, 1):
         try:
-            await _navigate_with_retry(
-                page,
-                lambda u=url: page.goto(
-                    u, wait_until="domcontentloaded", timeout=30_000
-                ),
-            )
+
+            async def _goto(u: str = url) -> Any:
+                return await page.goto(u, wait_until="domcontentloaded", timeout=30_000)
+
+            await _navigate_with_retry(page, _goto)
             await asyncio.sleep(req.delay_ms / 1000.0)
             data = await _extract(page, req)
             # ponytail: per-page cap from config (BROWSE_PAGE_CHARS_CAP)

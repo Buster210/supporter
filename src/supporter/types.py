@@ -90,15 +90,6 @@ class AppConfig:
     browser_debug_overlay: bool = False
     browser_parallel_pilots: bool = True
     browser_diff_threshold: int = 40
-    # Auto-close the browser after this many seconds with no interaction.
-    # Any browser interaction resets the clock; 0 disables idle auto-close
-    # (browser persists until explicit close).
-    browser_idle_close_seconds: int = 600
-    # D1: Browser output caps for page read, batch read, links, and eval results
-    browse_page_chars_cap: int = 50_000
-    browse_batch_chars_cap: int = 150_000
-    browse_max_links: int = 100
-    browse_eval_chars_cap: int = 16_000
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2
@@ -118,10 +109,6 @@ class AppConfig:
     browser_trusted_hosts: str = ""
     browser_micro_behavior_rate: float = 0.06
     browser_promotion_threshold: int = 5
-    # Auto-approve browser actions (files remain gated)
-    browser_auto_approve: bool = True
-    # Plan before act in interactive orchestrator
-    plan_before_act: bool = True
 
 
 @dataclass
