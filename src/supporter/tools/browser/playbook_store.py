@@ -54,12 +54,15 @@ class Playbook:
     goal: str
     created_ts: float
     steps: list[Step]
+    url_template: str = "/*"
     schema_version: int = SCHEMA_VERSION  # v1->v2 additive
     variables: list[str] = field(default_factory=list)  # B: template variables
+    version: int = 1  # WI-2: auto-repair version counter
+    previous_version_ref: str = ""  # WI-2: archive filename of prior version
     success_count: int = 0  # D: replay success metric
     fail_count: int = 0  # D: replay failure metric
     last_used_ts: float = 0.0  # D: last replay timestamp
-    last_outcome: str = ""  # D: "success", "drift", or "error"
+    last_outcome: str = ""  # D: "success", "drift", "error", or "repaired"
 
 
 def _slug(goal: str) -> str:
@@ -103,6 +106,40 @@ async def save_playbook(playbook: Playbook) -> None:
     await asyncio.to_thread(_save_playbook_sync, playbook)
 
 
+# ── WI-2: Versioned archive helpers ──────────────────────────────────────────
+
+
+def _archive_playbook_sync(host: str, goal: str) -> str | None:
+    """Archive current playbook before repair; returns archive path or None."""
+    try:
+        path = _safe_path(host, goal)
+        if not path.is_file():
+            return None
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        ver = data.get("version", 1)
+        archive_path = path.parent / f"{_slug(goal)}.v{ver}.json"
+        import shutil
+
+        shutil.copy2(str(path), str(archive_path))
+        return str(archive_path)
+    except Exception as exc:
+        logger.warning(f"Failed to archive playbook {host}/{goal}: {exc}")
+        return None
+
+
+async def save_playbook_version(playbook: Playbook) -> str:
+    """Save a new version of a playbook, archiving the current one first.
+
+    Returns the archive path or empty string if no archive was needed.
+    """
+    archive_path = await asyncio.to_thread(
+        _archive_playbook_sync, playbook.host, playbook.goal
+    )
+    await save_playbook(playbook)
+    return archive_path or ""
+
+
 def load_playbook(host: str, goal: str) -> Playbook | None:
     try:
         path = _safe_path(host, goal)
@@ -127,6 +164,9 @@ def load_playbook(host: str, goal: str) -> Playbook | None:
             fail_count=data.get("fail_count", 0),
             last_used_ts=data.get("last_used_ts", 0.0),
             last_outcome=data.get("last_outcome", ""),
+            url_template=data.get("url_template", "/*"),
+            version=data.get("version", 1),
+            previous_version_ref=data.get("previous_version_ref", ""),
         )
     except (
         FileNotFoundError,
@@ -207,6 +247,8 @@ def _list_playbooks_sync(host: str) -> list[dict[str, Any]]:
                     "slug": _slug(pb.goal),
                     "step_count": len(data.get("steps", [])),
                     "variables": pb.variables,
+                    "url_template": data.get("url_template", "/*"),
+                    "version": data.get("version", 1),
                     "success_count": pb.success_count,
                     "fail_count": pb.fail_count,
                     "last_used_ts": pb.last_used_ts,
@@ -235,6 +277,138 @@ def _delete_playbook_sync(host: str, goal: str) -> bool:
         return False
     path.unlink(missing_ok=True)
     return True
+
+
+# ── WI-1: URL pattern matching ──────────────────────────────────────────────
+
+
+def _normalize_url_path(url: str) -> str:
+    """Normalize a URL path by replacing volatile segments with wildcards.
+
+    Example: /search?q=foo&page=2 → /search?q=*&page=*
+             /profile/123/edit → /profile/*/edit
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(url)
+    path = parsed.path
+    segments = path.split("/")
+    normalized_segments = []
+    for seg in segments:
+        if seg.isdigit():
+            normalized_segments.append("*")
+        else:
+            normalized_segments.append(seg)
+    normalized_path = "/".join(normalized_segments)
+    if parsed.query:
+        params = parse_qs(parsed.query)
+        normalized_query = "&".join(f"{k}=*" for k in params)
+    else:
+        normalized_query = ""
+    return (
+        f"{normalized_path}?{normalized_query}" if normalized_query else normalized_path
+    )
+
+
+def url_pattern_match(current_url: str, template: str) -> bool:
+    """Check if a current URL matches a template pattern.
+
+    Template uses * as wildcard for path segments and query values.
+    Examples:
+        url_pattern_match("https://example.com/search?q=hello", "/search?q=*") → True
+        url_pattern_match("https://example.com/about", "/search?q=*") → False
+    """
+    import re
+    from urllib.parse import urlparse
+
+    current = urlparse(current_url)
+    current_path = current.path
+
+    # Sort query params for order-independent matching
+    if current.query:
+        current_params = sorted(current.query.split("&"))
+        current_path += "?" + "&".join(current_params)
+
+    if "?" in template:
+        tmpl_path, tmpl_query = template.split("?", 1)
+    else:
+        tmpl_path, tmpl_query = template, ""
+
+    if tmpl_path == "/*":
+        regex_path = "/.*"
+    else:
+        regex_path = re.escape(tmpl_path).replace(r"\*", "[^/]*")
+
+    if tmpl_query:
+        query_parts = sorted(tmpl_query.split("&"))
+        regex_parts = []
+        for part in query_parts:
+            if "=" in part:
+                key, val = part.split("=", 1)
+                if val == "*":
+                    regex_parts.append(re.escape(key) + r"=[^&]+")
+                else:
+                    regex_parts.append(re.escape(part))
+            else:
+                regex_parts.append(re.escape(part))
+        regex_query = "&".join(regex_parts)
+        regex = regex_path + r"\?" + regex_query
+    else:
+        regex = regex_path
+
+    return bool(re.fullmatch(regex, current_path))
+
+
+# ── WI-1: In-memory host index ──────────────────────────────────────────────
+
+_HOST_INDEX: dict[str, dict[str, list[dict[str, Any]]]] = {}
+_HOST_INDEX_TTL: float = 60.0
+_HOST_INDEX_TS: dict[str, float] = {}
+
+
+def _get_or_build_host_index(host: str) -> dict[str, list[dict[str, Any]]]:
+    import time
+
+    now = time.time()
+    cached_ts = _HOST_INDEX_TS.get(host, 0.0)
+    if host in _HOST_INDEX and now - cached_ts < _HOST_INDEX_TTL:
+        return _HOST_INDEX[host]
+    descriptors = _list_playbooks_sync(host)
+    index: dict[str, list[dict[str, Any]]] = {}
+    for desc in descriptors:
+        pb = load_playbook(host, desc["goal"])
+        tmpl = (pb.url_template or "/*") if pb is not None else "/*"
+        index.setdefault(tmpl, []).append(desc)
+    _HOST_INDEX[host] = index
+    _HOST_INDEX_TS[host] = now
+    return index
+
+
+def find_cookbook_hints(url: str, max_hints: int = 3) -> list[str]:
+    """Find playbook hints for a URL across all templates on the host.
+
+    Returns formatted hint strings for the model to decide whether to replay.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").removeprefix("www.")
+    if not host:
+        return []
+    index = _get_or_build_host_index(host)
+    hints: list[str] = []
+    for tmpl, descs in index.items():
+        if url_pattern_match(url, tmpl):
+            for desc in descs[: max_hints - len(hints)]:
+                stats = f"{desc['success_count']}✓/{desc['fail_count']}✗"
+                hints.append(
+                    f"cookbook: '{desc['goal']}' "
+                    f"({desc['step_count']} steps, {stats}) — "
+                    f"replay_playbook('{desc['goal']}')"
+                )
+                if len(hints) >= max_hints:
+                    return hints
+    return hints
 
 
 # Phase 5: Self-prune

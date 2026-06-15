@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Any
 
+from ...config import config
 from ...logger import logger
 from . import session
 from .core import _page_host
@@ -15,6 +16,7 @@ from .playbook_match import (
 from .playbook_store import (
     _RECORD_PARAMS,
     _REF_RESOLVABLE_ACTIONS,
+    Playbook,
     Step,
     _delete_playbook_sync,
     _list_playbooks_sync,
@@ -25,7 +27,10 @@ from .playbook_store import (
 )
 from .recorder import (
     finish,
+    finish_repair,
+    is_repair_recording,
     start,
+    start_repair,
 )
 
 __all__ = [
@@ -71,6 +76,9 @@ async def finish_task(success: bool = True) -> str:
     applies the user's keep-open choice: a persistent session is left untouched,
     while an atomic one prompts to close the browser now.
 
+    When in auto-repair mode (triggered by replay_playbook drift), this saves
+    a versioned repaired playbook instead.
+
     Args:
         success: Whether the task completed successfully. False discards it.
 
@@ -79,12 +87,75 @@ async def finish_task(success: bool = True) -> str:
     """
     logger.info(f"Tool: finish_task — success={success}")
 
+    # WI-2: Handle repair mode completion
+    if is_repair_recording():
+        repair_steps, ctx = finish_repair()
+        if success and repair_steps and ctx:
+            original = ctx["original_playbook"]
+            good_prefix = ctx["good_prefix"]
+            repaired_steps = good_prefix + repair_steps
+
+            from .playbook_store import Playbook, _slug, save_playbook_version
+
+            new_playbook = Playbook(
+                host=original.host,
+                goal=original.goal,
+                created_ts=original.created_ts,
+                steps=repaired_steps,
+                url_template=original.url_template,
+                version=original.version + 1,
+                previous_version_ref=f"{_slug(original.goal)}.v{original.version}.json",
+                variables=original.variables,
+                success_count=original.success_count,
+                fail_count=0,
+                last_used_ts=time.time(),
+                last_outcome="repaired",
+            )
+            await save_playbook_version(new_playbook)
+            page = session.active_page()
+            host = await _page_host(page) if page is not None else ""
+            return (
+                f"Repaired playbook '{original.goal}' on {host}. "
+                f"Model completed {len(repair_steps)} steps after drift. "
+                f"New version v{new_playbook.version} saved. "
+                f"Prior version archived."
+            )
+        return "Repair mode ended without saving."
+
     page = session.active_page()
     host = await _page_host(page) if page is not None else ""
     saved = await finish(success, host)
 
     lifecycle = await session.resolve_close_at_task_end()
     return f"{saved}\n{lifecycle}" if lifecycle else saved
+
+
+async def _enter_repair_mode(
+    playbook: Playbook,
+    step_index: int,
+    failing_step: Step,
+    completed: list[str],
+    page_state: str,
+    reason: str,
+) -> str:
+    """Enter auto-repair mode when replay drifts or errors.
+
+    Starts repair recording, returns a repair prompt so the model continues
+    driving browse() to complete the task. Call finish_task when done.
+    """
+    good_prefix = playbook.steps[: step_index - 1]
+    start_repair(playbook, good_prefix)
+    return (
+        f"⚠️ Playbook repair mode activated.\n"
+        f"Goal: {playbook.goal!r}\n"
+        f"Completed {len(completed)}/{len(playbook.steps)} steps: "
+        f"{'; '.join(completed) or 'none'}.\n"
+        f"Drifted at step {step_index}: {failing_step.action} → {reason}.\n\n"
+        f"Current page:\n{page_state}\n\n"
+        f"Drive browse() to complete the remaining task. "
+        f"Steps you take will be recorded for repair. "
+        f"Call finish_task(success=True) when the goal is reached."
+    )
 
 
 async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) -> str:
@@ -143,12 +214,14 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
                 playbook.fail_count += 1
                 playbook.last_outcome = "drift"
                 await save_playbook(playbook)
-                return (
-                    f"Replayed {len(done)}/{len(playbook.steps)} step(s): "
-                    f"{'; '.join(done) or 'none'}.\n"
-                    f"Stopped at step {i} ({step.action} → {target}): element not "
-                    f"found on the current page. Continue from here yourself.\n"
-                    f"Current page:\n{snapshot_text}"
+                # WI-2: Auto-repair on drift
+                return await _enter_repair_mode(
+                    playbook=playbook,
+                    step_index=i,
+                    failing_step=step,
+                    completed=done,
+                    page_state=snapshot_text or "",
+                    reason=f"element not found ({target})",
                 )
             kwargs["ref"] = ref
 
@@ -158,11 +231,18 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
             playbook.fail_count += 1
             playbook.last_outcome = "error"
             await save_playbook(playbook)
-            return (
-                f"Replayed {len(done)}/{len(playbook.steps)} step(s): "
-                f"{'; '.join(done) or 'none'}.\n"
-                f"Stopped at step {i} ({step.action}): {result}\n"
-                f"Continue from here yourself."
+            # WI-2: Auto-repair on error with current page state
+            live_page = session.active_page()
+            page_state = (
+                await _live_refs_snapshot(live_page) if live_page is not None else ""
+            )
+            return await _enter_repair_mode(
+                playbook=playbook,
+                step_index=i,
+                failing_step=step,
+                completed=done,
+                page_state=page_state,
+                reason=f"Error: {result}",
             )
         done.append(f"{i}.{step.action}")
 
@@ -173,7 +253,22 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
     await save_playbook(playbook)
 
     n = len(playbook.steps)
-    return f"Replayed playbook {goal!r} on {host}: {n}/{n} steps succeeded."
+    # D2: Include final page state in success return
+    live_page = session.active_page()
+    final_snapshot = (
+        await _live_refs_snapshot(live_page) if live_page is not None else ""
+    )
+    char_cap = config.browse_page_chars_cap
+    if len(final_snapshot) > char_cap:
+        final_snapshot = (
+            final_snapshot[:char_cap]
+            + f"\n\n…(truncated: {len(final_snapshot) - char_cap} more chars)"
+        )
+    final_page = f"\n\nFinal page:\n{final_snapshot}"
+    return (
+        f"Replayed playbook {goal!r} on {host}: {n}/{n} steps succeeded."
+        + final_page
+    )
 
 
 async def query_playbook(goal: str) -> str:

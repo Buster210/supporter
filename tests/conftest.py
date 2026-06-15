@@ -1,5 +1,6 @@
 import os
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -47,6 +48,27 @@ def clear_project_root_cache() -> Generator[None, None, None]:
     _resolve_path.cache_clear()
     yield
     _resolve_path.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def isolate_trust_store(tmp_path: Path) -> Generator[None, None, None]:
+    """Give each test a fresh, tmp-backed browser TrustStore.
+
+    The store is a module-level singleton that persists to ~/.supporter; without
+    isolation, a test that promotes/confirms a host (e.g. finish() recording a
+    clean interaction) leaks into later tests' host_is_fast() checks and writes
+    to the developer's real trusted.json.
+    """
+    from supporter.tools.browser import guardrails
+
+    fresh = guardrails.TrustStore.__new__(guardrails.TrustStore)
+    fresh._store_path = tmp_path / "trusted.json"
+    fresh._data = {}
+    fresh._dirty = False
+    saved = guardrails._trust_store
+    guardrails._trust_store = fresh
+    yield
+    guardrails._trust_store = saved
 
 
 @pytest.fixture

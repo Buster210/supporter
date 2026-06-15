@@ -42,6 +42,11 @@ def _cache_key(task: dict[str, Any]) -> tuple[str, str, bool] | None:
     role = task.get("agent")
     if not role or role == "custom":
         return None
+    # page-pilots run concurrently against their own browser tabs; a shared
+    # cache key would serialize them under role_lock, so force a fresh
+    # per-instance agent (nullcontext, no serialization) for each pilot.
+    if role == "page-pilot":
+        return None
     return (role, task["model"], bool(task.get("live")))
 
 

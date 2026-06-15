@@ -448,9 +448,9 @@ async def test_diff_header_empty() -> None:
 
 
 async def test_render_script_result_truncates_long_output() -> None:
-    out = support._render_script_result("z" * 5000)
-    assert out.endswith("...(truncated)")
-    assert len(out) == 2000 + len("...(truncated)")
+    out = support._render_script_result("z" * 50_000)
+    assert "…(truncated:" in out
+    assert out.endswith(" more chars)")
 
 
 async def test_validate_path_or_error_rejects_traversal() -> None:

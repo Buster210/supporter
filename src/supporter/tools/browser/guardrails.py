@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
+import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, Final
 
+from ...config import config
 from . import humanize
 
 _UNSET: Final = object()
@@ -33,14 +37,14 @@ def _env_float(name: str, default: float) -> float:
 
 ACTION_CAP: Final = 25
 ACTION_CAP_JITTER: Final = 15
-GAP_MIN: Final = 0.8
-GAP_MAX: Final = 4.5
+GAP_MIN: Final = 0.4
+GAP_MAX: Final = 2.5
 
-ACTIONS_PER_MINUTE_MAX: Final = _env_int("BROWSER_ACTIONS_PER_MIN", 24)
-SESSION_IDLE_GAP_PROBABILITY: Final = 0.04
+ACTIONS_PER_MINUTE_MAX: Final = _env_int("BROWSER_ACTIONS_PER_MIN", 36)
+SESSION_IDLE_GAP_PROBABILITY: Final = 0.02
 SESSION_IDLE_GAP_RANGE: Final = (
-    _env_float("BROWSER_IDLE_GAP_MIN", 5.0),
-    60.0,
+    _env_float("BROWSER_IDLE_GAP_MIN", 3.0),
+    15.0,
 )
 
 FATIGUE_MAX_BONUS: Final = 0.5
@@ -66,6 +70,8 @@ FAST_HOSTS: Final[frozenset[str]] = frozenset(
         "gemini.google.com",
     }
 )
+
+HOST_PROMOTION_THRESHOLD: Final = 5
 
 SENSITIVE_ACTION_PATTERNS: Final = (
     "submit",
@@ -155,6 +161,87 @@ def register_browse_callback(
         browse_profile_select_callback = profile_select  # type: ignore[assignment]
 
 
+class TrustStore:
+    """Persistent per-host trust state backed by ``~/.supporter/trusted.json``.
+
+    Tracks clean-interaction counts, promotion status, and user decisions so
+    that hosts can be auto-promoted (or suppressed) across browser sessions.
+    """
+
+    _store_path: Path
+    _data: dict[str, dict[str, Any]]
+    _dirty: bool
+
+    def __init__(self) -> None:
+        self._store_path = Path.home() / ".supporter" / "trusted.json"
+        self._data = {}
+        self._dirty = False
+        self._load()
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _load(self) -> None:
+        try:
+            raw = self._store_path.read_text()
+            self._data = json.loads(raw)
+        except FileNotFoundError, json.JSONDecodeError:
+            self._data = {}
+
+    def _save(self) -> None:
+        if not self._dirty:
+            return
+        self._store_path.parent.mkdir(parents=True, exist_ok=True)
+        self._store_path.write_text(json.dumps(self._data, indent=2, default=str))
+        self._dirty = False
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def is_confirmed(self, host: str) -> bool:
+        return bool(self._data.get(host, {}).get("user_confirmed", False))
+
+    def is_suppressed(self, host: str) -> bool:
+        return bool(self._data.get(host, {}).get("suppressed", False))
+
+    def clean_success_count(self, host: str) -> int:
+        return int(self._data.get(host, {}).get("clean_success_count", 0))
+
+    # ------------------------------------------------------------------
+    # Mutations
+    # ------------------------------------------------------------------
+
+    def record_clean(self, host: str) -> None:
+        entry = self._data.setdefault(host, {})
+        entry["clean_success_count"] = entry.get("clean_success_count", 0) + 1
+        self._dirty = True
+
+    def set_confirmed(self, host: str) -> None:
+        entry = self._data.setdefault(host, {})
+        entry["user_confirmed"] = True
+        entry["suppressed"] = False
+        self._dirty = True
+        self._save()
+
+    def set_suppressed(self, host: str) -> None:
+        entry = self._data.setdefault(host, {})
+        entry["suppressed"] = True
+        self._dirty = True
+        self._save()
+
+
+_trust_store: TrustStore | None = None
+
+
+def _get_trust_store() -> TrustStore:
+    global _trust_store
+    if _trust_store is None:
+        _trust_store = TrustStore()
+    return _trust_store
+
+
 def host_from_url(url: str) -> str:
     try:
         from urllib.parse import urlparse
@@ -167,9 +254,82 @@ def host_from_url(url: str) -> str:
 
 
 def host_is_fast(host: str) -> bool:
+    """Return ``True`` when the host is considered "fast" (skip humanization).
+
+    Trust sources (in order):
+    1. Hardcoded ``FAST_HOSTS`` set.
+    2. ``config.browser_trusted_hosts`` (comma-separated env allowlist).
+    3. User-confirmed hosts in the persistent ``TrustStore``.
+    """
     if not host:
         return False
-    return host.removeprefix("www.") in FAST_HOSTS
+    clean = host.removeprefix("www.")
+
+    # 1. Built-in fast hosts
+    if clean in FAST_HOSTS:
+        return True
+
+    # 2. Config/env allowlist
+    raw = config.browser_trusted_hosts
+    if raw:
+        for h in raw.split(","):
+            if h.strip() == clean:
+                return True
+
+    # 3. User-confirmed via dialog (persisted trust store)
+    return _get_trust_store().is_confirmed(clean)
+
+
+async def record_clean_interaction(host: str) -> None:
+    """Record one successful non-confirmation interaction for *host*.
+
+    After ``browser_promotion_threshold`` clean interactions a dialog fires
+    asking the user whether to trust this host. Accepting persists the
+    decision to ``trusted.json``; declining suppresses further re-asking.
+    """
+    if not host:
+        return
+    clean = host.removeprefix("www.")
+
+    # Fast hosts and already-confirmed hosts don't need promotion tracking
+    if clean in FAST_HOSTS or _get_trust_store().is_confirmed(clean):
+        return
+
+    store = _get_trust_store()
+    store.record_clean(clean)
+
+    count = store.clean_success_count(clean)
+    threshold = config.browser_promotion_threshold
+
+    if count < threshold:
+        store._save()
+        return
+
+    if store.is_suppressed(clean):
+        store._save()
+        return
+
+    # Record the promotion attempt timestamp
+    store._data.setdefault(clean, {})["last_promoted"] = time.time()
+    store._save()
+
+    # Fire the promotion dialog
+    cb = browse_confirmation_callback
+    if cb is None:
+        return
+
+    accepted = await cb(
+        f"Trust browser host {clean}?",
+        f"After {count} clean interactions, do you want to treat {clean} "
+        f"as a trusted host? This skips human-like delays and reduces "
+        f"confirmation prompts on this host. You can change this later in "
+        f"~/.supporter/trusted.json.",
+    )
+
+    if accepted:
+        store.set_confirmed(clean)
+    else:
+        store.set_suppressed(clean)
 
 
 def needs_confirmation(
@@ -202,7 +362,7 @@ def needs_confirmation(
 
 
 def random_gap() -> float:
-    return humanize._lognormal_delay(median=1.2, sigma=0.5, lo=GAP_MIN, hi=GAP_MAX)
+    return humanize._lognormal_delay(median=0.7, sigma=0.5, lo=GAP_MIN, hi=GAP_MAX)
 
 
 def action_cap() -> int:

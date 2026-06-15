@@ -1,5 +1,4 @@
 import asyncio
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,8 +8,8 @@ from textual.containers import Vertical
 from supporter.tui import SupporterApp
 from supporter.tui.delegation_listener import (
     DelegationListener,
-    format_completed_task_signal,
     format_delegation_progress,
+    format_task_signal,
 )
 from supporter.types import (
     MilestoneCancelled,
@@ -31,10 +30,8 @@ class FakeDelegationBus:
         self,
         events: list[Any],
         *,
-        notify_per_task: bool = True,
         snapshot: dict[str, dict[str, Any]] | None = None,
     ) -> None:
-        self.notify_per_task = notify_per_task
         self._events = events
         self._snapshot = snapshot or {}
 
@@ -52,27 +49,30 @@ class FakeDelegationBus:
         return queue
 
 
-def test_completed_task_signal_contains_only_ids() -> None:
-    signal = format_completed_task_signal("job123", "get_time")
+def test_task_signal_contains_status_agent_and_goal() -> None:
+    bus = MagicMock()
+    bus.get_snapshot.return_value = {
+        "get_time": {
+            "agent_label": "explorer",
+            "task_goal": "Find current time in India.",
+        }
+    }
+
+    signal = format_task_signal("job123", "DONE", "get_time", bus)
 
     assert signal.startswith("<br/>\n")
     assert signal.endswith("\n<br/>")
     assert "Delegation task completed" in signal
-    assert "job_id: `job123`" in signal
-    assert "task_id: `get_time`" in signal
-    assert "Summary" not in signal
-    assert "Confidence" not in signal
-    assert "Evidence" not in signal
-    assert "More" not in signal
+    assert "`get_time`" in signal
+    assert "[explorer]" in signal
+    assert "Find current time in India." in signal
     assert "query_delegation" not in signal
-    assert "explorer" not in signal
-    assert "Find current time in India." not in signal
+    assert "DELEGATION_TASK_DONE:" not in signal
 
 
 @pytest.mark.asyncio
-async def test_task_event_injects_explicit_completion_signal() -> None:
+async def test_task_event_renders_signal_without_model_injection() -> None:
     bus = MagicMock()
-    bus.notify_per_task = True
     bus.get_snapshot.return_value = {
         "get_time": {
             "agent_label": "explorer",
@@ -81,25 +81,21 @@ async def test_task_event_injects_explicit_completion_signal() -> None:
     }
     upsert_progress = AsyncMock()
     inject_message = MagicMock()
+    render_signal = MagicMock()
     listener = DelegationListener(
         inject_message=inject_message,
         upsert_progress=upsert_progress,
         drop_progress=MagicMock(),
+        render_signal=render_signal,
     )
-    signal = format_completed_task_signal("job123", "get_time")
 
-    await listener._emit_task_event(
-        bus,
-        "job123",
-        "DONE",
-        "get_time",
-        sys_body=signal,
-    )
+    await listener._emit_task_event(bus, "job123", "DONE", "get_time")
 
     upsert_progress.assert_awaited_once_with("job123", bus)
-    system_call = inject_message.call_args.args[0]
-    assert system_call == signal
-    assert "DELEGATION_TASK_DONE:" not in system_call
+    rendered = render_signal.call_args.args[0]
+    assert "Delegation task completed" in rendered
+    assert "[explorer]" in rendered
+    inject_message.assert_not_called()
 
 
 def test_delegation_progress_omits_task_details_and_summaries() -> None:
@@ -179,23 +175,27 @@ async def test_listener_emits_anomaly_and_completed_task(
     )
     monkeypatch.setattr("supporter.tools.delegate.bus.get_bus", lambda job_id: bus)
     inject_message = MagicMock()
+    render_signal = MagicMock()
     upsert_progress = AsyncMock()
     listener = DelegationListener(
         inject_message=inject_message,
         upsert_progress=upsert_progress,
         drop_progress=MagicMock(),
+        render_signal=render_signal,
     )
 
     await listener.listen("job123")
 
-    injected = [call.args[0] for call in inject_message.call_args_list]
-    assert "AGENT ALERT: Task `task1` [agent-a]" in injected[0]
-    assert injected[1] == format_completed_task_signal("job123", "task1")
+    rendered = [call.args[0] for call in render_signal.call_args_list]
+    assert "AGENT ALERT: Task `task1` [agent-a]" in rendered[0]
+    assert "Delegation task completed" in rendered[1]
+    assert "`task1`" in rendered[1]
+    inject_message.assert_not_called()
     upsert_progress.assert_awaited_once_with("job123", bus)
 
 
 @pytest.mark.asyncio
-async def test_listener_emits_terminal_task_signals_with_inspect_hints(
+async def test_listener_renders_terminal_task_signals_to_ui(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bus = FakeDelegationBus(
@@ -212,49 +212,51 @@ async def test_listener_emits_terminal_task_signals_with_inspect_hints(
     )
     monkeypatch.setattr("supporter.tools.delegate.bus.get_bus", lambda job_id: bus)
     inject_message = MagicMock()
+    render_signal = MagicMock()
     listener = DelegationListener(
         inject_message=inject_message,
         upsert_progress=AsyncMock(),
         drop_progress=MagicMock(),
+        render_signal=render_signal,
     )
 
     await listener.listen("job123")
 
-    injected = [call.args[0] for call in inject_message.call_args_list]
-    assert len(injected) == 3
-    assert injected[0].startswith("DELEGATION_TASK_FAIL:")
-    assert injected[1].startswith("DELEGATION_TASK_TIMEOUT:")
-    assert injected[2].startswith("DELEGATION_TASK_SKIP:")
-    assert all('query_delegation(job_id="job123"' in msg for msg in injected)
-    payload = json.loads(injected[0].split(": ", 1)[1].split("\n\nMore:", 1)[0])
-    assert payload == {
-        "job_id": "job123",
-        "task_id": "failed",
-        "agent": "agent-a",
-        "assigned_task": "Fail task",
-    }
+    rendered = [call.args[0] for call in render_signal.call_args_list]
+    assert len(rendered) == 3
+    assert "Delegation task failed" in rendered[0]
+    assert "`failed`" in rendered[0] and "[agent-a]" in rendered[0]
+    assert "Fail task" in rendered[0]
+    assert "Delegation task timed out" in rendered[1]
+    assert "Delegation task skipped" in rendered[2]
+    assert all("query_delegation" not in msg for msg in rendered)
+    assert all("DELEGATION_TASK_" not in msg for msg in rendered)
+    inject_message.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_listener_suppresses_per_task_messages_when_disabled(
+async def test_listener_never_injects_per_task_to_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bus = FakeDelegationBus(
         [TaskFailed("job123", "failed", 1.0, "boom")],
-        notify_per_task=False,
+        snapshot={"failed": {"agent_label": "agent-a", "task_goal": "Fail task"}},
     )
     monkeypatch.setattr("supporter.tools.delegate.bus.get_bus", lambda job_id: bus)
     inject_message = MagicMock()
+    render_signal = MagicMock()
     upsert_progress = AsyncMock()
     listener = DelegationListener(
         inject_message=inject_message,
         upsert_progress=upsert_progress,
         drop_progress=MagicMock(),
+        render_signal=render_signal,
     )
 
     await listener.listen("job123")
 
     upsert_progress.assert_awaited_once_with("job123", bus)
+    render_signal.assert_called_once()
     inject_message.assert_not_called()
 
 
@@ -279,6 +281,7 @@ async def test_listener_merges_output_tail_without_wiping_state(
         inject_message=MagicMock(),
         upsert_progress=upsert_progress,
         drop_progress=MagicMock(),
+        render_signal=MagicMock(),
     )
 
     await listener.listen("job123")
@@ -316,6 +319,7 @@ async def test_listener_clears_tail_on_terminal_keeps_state(
         inject_message=MagicMock(),
         upsert_progress=AsyncMock(),
         drop_progress=MagicMock(),
+        render_signal=MagicMock(),
     )
 
     await listener.listen("job123")
@@ -345,6 +349,7 @@ async def test_listener_injects_capsule_result_on_milestone_completed(
         inject_message=inject_message,
         upsert_progress=AsyncMock(),
         drop_progress=drop_progress,
+        render_signal=MagicMock(),
     )
 
     await listener.listen("job123")
@@ -384,6 +389,7 @@ async def test_listener_falls_back_for_completed_milestone(
         inject_message=inject_message,
         upsert_progress=AsyncMock(),
         drop_progress=MagicMock(),
+        render_signal=MagicMock(),
     )
 
     await listener.listen("job123")
@@ -413,6 +419,7 @@ async def test_listener_falls_back_for_cancelled_milestone(
         inject_message=inject_message,
         upsert_progress=AsyncMock(),
         drop_progress=MagicMock(),
+        render_signal=MagicMock(),
     )
 
     await listener.listen("job123")
@@ -434,6 +441,7 @@ async def test_listener_logs_get_bus_failure(monkeypatch: pytest.MonkeyPatch) ->
         inject_message=MagicMock(),
         upsert_progress=AsyncMock(),
         drop_progress=MagicMock(),
+        render_signal=MagicMock(),
     )
 
     await listener.listen("job123")
@@ -444,20 +452,33 @@ async def test_listener_logs_get_bus_failure(monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
-@pytest.mark.asyncio
-async def test_delegation_signal_renders_immediately_and_queues_for_agent() -> None:
+def test_inject_system_message_queues_when_processing() -> None:
     app = MagicMock()
     app._is_processing = True
     app._user_message_queue = []
     app.run_worker = MagicMock()
     app.query_one = MagicMock()
 
-    signal = format_completed_task_signal("job123", "get_time")
     bound = SupporterApp._inject_system_message.__get__(app, SupporterApp)
-    bound(signal)
+    bound("a system message")
 
-    app.run_worker.assert_called_once()
-    assert app._user_message_queue == [(signal, True)]
+    app.run_worker.assert_not_called()
+    assert app._user_message_queue == [("a system message", True)]
+
+
+@pytest.mark.asyncio
+async def test_capsule_result_reaches_model_without_raw_bubble() -> None:
+    app = MagicMock()
+    app.active_turn = None
+    app._process_message_cycle = AsyncMock()
+
+    msg = "DELEGATION_CAPSULE_RESULT (json):\n```json\n{}\n```"
+    bound = SupporterApp._process_system_message.__get__(app, SupporterApp)
+    await bound(msg)
+
+    app._process_message_cycle.assert_awaited_once_with(
+        msg, mount_user=False, role="agent"
+    )
 
 
 @pytest.mark.asyncio
@@ -468,16 +489,20 @@ async def test_render_delegation_signal_mounts_centered_label() -> None:
     chat_view.scroll_end = MagicMock()
     app.query_one = MagicMock(return_value=chat_view)
     app.active_turn = None
+    bus = MagicMock()
+    bus.get_snapshot.return_value = {
+        "get_time": {"agent_label": "explorer", "task_goal": "Find time"}
+    }
 
     bound = SupporterApp._render_delegation_signal.__get__(app, SupporterApp)
-    await bound(format_completed_task_signal("job123", "get_time"))
+    await bound(format_task_signal("job123", "DONE", "get_time", bus))
 
     chat_view.mount.assert_awaited_once()
     label = chat_view.mount.call_args.args[0]
     assert label.has_class("delegation-signal")
     rendered = str(label.render())
     assert "Delegation task completed" in rendered
-    assert "job_id: job123" in rendered
+    assert "get_time" in rendered
     assert "<br/>" not in rendered
     assert "`" not in rendered
 

@@ -135,12 +135,10 @@ async def browse(
             by CSS `selector` (not ref — refs are page-scoped). Call with no
             selector to clear it and act on the top page again.
         waitnetwork: wait until network activity goes idle, then snapshot.
-        close: proactively close the browser when the task is done. Leaves it
-            open with no prompt if the user chose to keep it open; otherwise
-            asks for confirmation first. Use this when YOU decide the task is
-            finished, not because the user asked.
-        closenow: close the browser immediately, no confirmation. Use ONLY when
-            the user explicitly asks to close it.
+        close: ORCHESTRATOR-ONLY — not available via browse for sub-agents.
+            The orchestrator uses browser_supervise for browser teardown.
+        closenow: ORCHESTRATOR-ONLY — not available via browse for sub-agents.
+            The orchestrator uses browser_supervise for immediate teardown.
         solve_cloudflare: attempt to solve a Cloudflare Turnstile challenge on
             the current page. Call this when a snapshot shows
             "[Turnstile detected]". May fail on invisible/managed challenges
@@ -190,6 +188,13 @@ async def browse(
         f"depth={depth}, compact={compact}"
     )
 
+    # Feature B: close/closenow are orchestrator-only via browser_supervise
+    if action in {"close", "closenow"}:
+        return (
+            "Error: close/closenow actions are orchestrator-only. Use "
+            "browser_supervise to tear down the browser session."
+        )
+
     if action not in HANDLERS:
         names = ", ".join(sorted(HANDLERS))
         return f"Error: Unknown action '{action}'. Valid actions: {names}"
@@ -229,7 +234,7 @@ async def browse(
     if (
         success
         and action not in guardrails._ALWAYS_CONFIRM_ACTIONS
-        and not _last_confirmation_needed.get()
+        and not _last_confirmation_needed
     ):
         page = session.active_page()
         if page is not None:

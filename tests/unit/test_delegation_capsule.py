@@ -82,10 +82,10 @@ DELEGATION_RESULT:
 
 
 def test_extract_task_capsule_fields_invalid_block_falls_back() -> None:
-    fields = extract_task_capsule_fields(
-        "First useful paragraph.\n\nDELEGATION_RESULT:\n{bad json"
-    )
-    assert fields["summary"] == "First useful paragraph."
+    output = "First useful paragraph.\n\nDELEGATION_RESULT:\n{bad json"
+    fields = extract_task_capsule_fields(output)
+    # D3: fallback uses preview(output, 3000), not first paragraph
+    assert "First useful paragraph." in fields["summary"]
     assert fields["evidence"]["files_read"] == []
     assert fields["confidence"] == "unknown"
 
@@ -550,7 +550,7 @@ async def test_formatters_for_empty_and_non_dict_tasks() -> None:
 @pytest.mark.asyncio
 async def test_display_capsule_truncates_output_and_dependency_context() -> None:
     await create_capsule("disp0001", "Disp", [_task("a")], 1)
-    long_text = "x" * 2000
+    long_text = "x" * 5000
     await mark_task_started("disp0001", "a", dependency_context=long_text)
     await mark_task_completed("disp0001", "a", long_text, 0.1)
     capsule = load_capsule("disp0001")

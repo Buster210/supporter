@@ -9,11 +9,15 @@ from ...logger import logger
 from .. import resolved_project_root
 from . import cloudflare, debug_overlay, guardrails, humanize, session, snapshot
 from .core import BrowseRequest, _page_host
+from .reader import _handle_links, _handle_read
 from .support import (
     _confirm_always,
     _confirm_or_block,
     _confirm_script,
     _diff_text,
+    _dom_click,
+    _dom_select,
+    _dom_set_value,
     _effective_fast,
     _navigate_with_retry,
     _page_baseline_key,
@@ -77,11 +81,6 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     )
     if has_turnstile:
         result = "[Turnstile detected] — call solve_cloudflare to proceed.\n\n" + result
-    if not session.keep_open():
-        result += (
-            "\n(When the task is finished, call finish_task to wrap up; "
-            "you'll be asked whether to close the browser.)"
-        )
     return result
 
 
@@ -105,6 +104,8 @@ async def _handle_forward(req: BrowseRequest) -> str:
         page, lambda: page.go_forward(timeout=30_000, wait_until="commit")
     )
     await asyncio.sleep(req.delay_ms / 1000.0)
+    if not await _effective_fast(page):
+        await humanize.reading_pause(page)
     return await _snapshot_full(page, req)
 
 
@@ -187,6 +188,7 @@ async def _handle_closetab(req: BrowseRequest) -> str:
     closed_key = _page_baseline_key(target)
     await target.close()
     snapshot.forget_snapshot(closed_key)
+    session.drop_page(target)
 
     remaining = session.list_pages()
     if not remaining:
@@ -320,7 +322,7 @@ async def _handle_click(req: BrowseRequest) -> str:
         await session.pace()
         await humanize.human_click(page, req.ref, locator=locator)
     else:
-        await locator.click()
+        await _dom_click(locator)
         await _overlay_mark(page, locator, "click")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
@@ -349,7 +351,7 @@ async def _handle_type(req: BrowseRequest) -> str:
             page, req.ref, req.text, sensitive=sensitive, locator=locator
         )
     else:
-        await locator.fill(req.text)
+        await _dom_set_value(locator, req.text)
         await _overlay_mark(page, locator, "move")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
@@ -442,10 +444,12 @@ async def _handle_select(req: BrowseRequest) -> str:
 
     if not await _effective_fast(page):
         await session.pace()
-    if req.value:
-        await locator.select_option(value=req.value)
+        if req.value:
+            await locator.select_option(value=req.value)
+        else:
+            await locator.select_option(label=req.text)
     else:
-        await locator.select_option(label=req.text)
+        await _dom_select(locator, value=req.value or "", label=req.text or "")
     await asyncio.sleep(req.delay_ms / 1000.0)
     return await _post_action_snapshot(page, req)
 
@@ -460,10 +464,13 @@ async def _handle_status(_req: BrowseRequest) -> str:
 
 @_wrap_action_errors("close")
 async def _handle_close(req: BrowseRequest) -> str:
-    if not session.is_active():
+    if session.current_agent_id() != "main":
+        return (
+            "Only the main orchestrator can close the browser; left open "
+            "so other agents can keep using it."
+        )
+    if not session.is_session_alive():
         return "Browser already closed."
-    if session.pinned_open():
-        return "Browser left open (you chose to keep it open)."
     cb = guardrails.browse_confirmation_callback
     if cb is None:
         return "Error: browser confirmation not wired."
@@ -475,7 +482,12 @@ async def _handle_close(req: BrowseRequest) -> str:
 
 @_wrap_action_errors("closenow")
 async def _handle_closenow(req: BrowseRequest) -> str:
-    if not session.is_active():
+    if session.current_agent_id() != "main":
+        return (
+            "Only the main orchestrator can close the browser; left open "
+            "so other agents can keep using it."
+        )
+    if not session.is_session_alive():
         return "Browser already closed."
     await session.close_session(force=req.force)
     return "Browser closed."
@@ -614,6 +626,8 @@ HANDLERS: dict[str, Callable[[BrowseRequest], Awaitable[str]]] = {
     "back": _handle_back,
     "forward": _handle_forward,
     "snapshot": _handle_snapshot,
+    "read": _handle_read,
+    "links": _handle_links,
     "diff": _handle_diff,
     "screenshot": _handle_screenshot,
     "click": _handle_click,

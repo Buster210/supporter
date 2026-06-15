@@ -14,15 +14,15 @@ if TYPE_CHECKING:
 _SESSION_GLOBALS = (
     "_PWS",
     "_CONTEXT",
-    "_PAGE",
+    "_PAGES",
     "_LAUNCHING",
     "_LAUNCH_LOOP",
     "_CLONE_LOCK",
     "_ACTION_COUNT",
     "_LAST_ACTION_TS",
-    "_KEEP_OPEN",
-    "_LIFECYCLE_TASK",
-    "_FRAME_SELECTOR",
+    "_LAST_ACTIVITY_TS",
+    "_IDLE_TASK",
+    "_FRAME_SELECTORS",
     "_SELECTED_PROFILE",
 )
 
@@ -164,7 +164,7 @@ async def test_prewarm_noop_when_profile_path_set(
         return Path("/")
 
     monkeypatch.setattr(session, "_clone_profile", fail)
-    session._PAGE = None
+    session._PAGES = {}
     await session.prewarm_clone()
     assert called is False
 
@@ -181,7 +181,7 @@ async def test_prewarm_noop_when_session_live(
         return Path("/")
 
     monkeypatch.setattr(session, "_clone_profile", fail)
-    session._PAGE = cast("Any", object())
+    session._PAGES = {"main": cast("Any", object())}
     await session.prewarm_clone()
     assert called is False
 
@@ -191,7 +191,7 @@ async def test_prewarm_builds_clone_when_cold(
 ) -> None:
     monkeypatch.setattr(session.config, "browser_profile_path", None)  # type: ignore[attr-defined]
     monkeypatch.setattr(session.config, "browser_profile_name", "Profile2")  # type: ignore[attr-defined]
-    session._PAGE = None
+    session._PAGES = {}
     built = False
 
     async def build(profile: str) -> Path:
@@ -206,7 +206,7 @@ async def test_prewarm_builds_clone_when_cold(
 
 async def test_prewarm_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session.config, "browser_profile_path", None)  # type: ignore[attr-defined]
-    session._PAGE = None
+    session._PAGES = {}
 
     async def boom(profile: str) -> Path:
         raise OSError("disk gone")
@@ -245,7 +245,7 @@ async def test_prewarm_noop_when_no_profile_name(
 ) -> None:
     monkeypatch.setattr(session.config, "browser_profile_path", None)  # type: ignore[attr-defined]
     monkeypatch.setattr(session.config, "browser_profile_name", None)  # type: ignore[attr-defined]
-    session._PAGE = None
+    session._PAGES = {}
     called = False
 
     async def fail(profile: str) -> Path:

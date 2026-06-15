@@ -46,6 +46,9 @@ class _FakeLocator:
     def __init__(self, box: dict[str, float] | None = None) -> None:
         self._box = box
 
+    async def scroll_into_view_if_needed(self) -> None:
+        pass
+
     async def click(self) -> None:
         pass
 
@@ -144,7 +147,9 @@ def test_wrong_key_preserves_case() -> None:
 
 async def test_overshoot_correction_short_distance() -> None:
     mouse = _FakeMouse()
-    await humanize._overshoot_correction(cast("Mouse", mouse), (0.0, 0.0), (0.5, 0.5))
+    await humanize._overshoot_correction(
+        cast("Mouse", mouse), (0.0, 0.0), (0.5, 0.5), {"width": 800, "height": 600}
+    )
     assert mouse.moves == []
 
 
@@ -153,7 +158,10 @@ async def test_overshoot_correction_normal() -> None:
     mouse = _FakeMouse()
     with _no_sleep():
         await humanize._overshoot_correction(
-            cast("Mouse", mouse), (0.0, 0.0), (100.0, 100.0)
+            cast("Mouse", mouse),
+            (0.0, 0.0),
+            (100.0, 100.0),
+            {"width": 800, "height": 600},
         )
     assert len(mouse.moves) >= 1
 

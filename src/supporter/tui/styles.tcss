@@ -10,7 +10,7 @@ $text-dim-alt: #888;
 $modal-bg: #111;
 $modal-border: #333;
 
-#main-container, #chat-view, .chat-turn, #main-content, .main-content, #elements-container, #queue-display, .queue-badge {
+#chat-view, .chat-turn, #main-content, .main-content, #elements-container, #queue-display, .queue-badge {
     width: 100%;
     height: auto;
 }
@@ -22,7 +22,11 @@ $modal-border: #333;
 #chat-view {
     height: 100%;
     overflow-y: scroll;
-    scrollbar-size: 0 0;
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $bg;
+    scrollbar-color: $primary 35%;
+    scrollbar-color-hover: $primary 60%;
+    scrollbar-color-active: $primary;
 }
 
 Screen {
@@ -33,6 +37,8 @@ Screen {
 }
 
 #main-container {
+    width: 100%;
+    height: 100%;
     layout: vertical;
 }
 

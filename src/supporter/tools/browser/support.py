@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import contextvars
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -17,9 +16,7 @@ from . import guardrails, humanize, session, snapshot
 from .core import BrowseRequest, _page_host
 
 # WI-3: Track whether last _confirm_or_block needed confirmation
-_last_confirmation_needed: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "_last_confirmation_needed", default=False
-)
+_last_confirmation_needed: bool = False
 
 __all__ = [
     "_EVAL_DETAIL_MAX",
@@ -218,7 +215,8 @@ def _record_locator(page: Any, req: BrowseRequest) -> Any:
 
 async def _confirm_or_block(page: Any, req: BrowseRequest, locator: Any) -> str | None:
     # WI-3: Reset confirmation flag each invocation
-    _last_confirmation_needed.set(False)
+    global _last_confirmation_needed
+    _last_confirmation_needed = False
 
     if locator is not None:
         aria_role, aria_name = await _resolve_role_and_name(locator, req.ref)
@@ -230,7 +228,7 @@ async def _confirm_or_block(page: Any, req: BrowseRequest, locator: Any) -> str 
         return None
 
     # WI-3: Mark that confirmation was needed (for trust promotion filtering)
-    _last_confirmation_needed.set(True)
+    _last_confirmation_needed = True
 
     target = req.ref or f"frame selector {req.selector!r}"
     detail = (

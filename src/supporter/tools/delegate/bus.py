@@ -10,7 +10,6 @@ _REGISTRY: dict[str, DelegationBus] = {}
 class DelegationBus:
     def __init__(self, milestone: str) -> None:
         self.milestone = milestone
-        self.notify_per_task = False
         self._subscribers: list[asyncio.Queue[DelegationEvent | None]] = []
         self._final_event: MilestoneCompleted | None = None
         self._task_states: dict[str, dict[str, Any]] = {}

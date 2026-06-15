@@ -61,7 +61,7 @@ async def test_finish_task_unsuccessful() -> None:
 
 async def test_finish_task_failed_steps() -> None:
     start("test goal")
-    active_task = recorder._ACTIVE
+    active_task = recorder._ACTIVE.get("main")
     if active_task is not None:
         active_task.failed = True
     result = await finish(True)
@@ -70,7 +70,7 @@ async def test_finish_task_failed_steps() -> None:
 
 async def test_finish_task_no_steps() -> None:
     start("test goal")
-    active_task = recorder._ACTIVE
+    active_task = recorder._ACTIVE.get("main")
     if active_task is not None:
         active_task.steps = []
     result = await finish(True)

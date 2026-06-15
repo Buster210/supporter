@@ -19,72 +19,19 @@ def close_calls(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     return calls
 
 
-async def test_close_confirmed_closes_session(
+async def test_close_rejected_as_orchestrator_only(
     fake_session: FakeSession, close_calls: list[bool]
 ) -> None:
     result = await browse("close")
-
-    assert result == "Browser closed."
-    assert close_calls == [True]
-
-
-async def test_close_denied_leaves_open(
-    fake_session: FakeSession, close_calls: list[bool]
-) -> None:
-    fake_session.confirm.allow = False
-
-    result = await browse("close")
-
-    assert result == "Browser left open."
+    assert "orchestrator-only" in result
     assert close_calls == []
 
 
-async def test_close_pinned_open_skips_prompt(
-    fake_session: FakeSession,
-    close_calls: list[bool],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(session, "pinned_open", lambda: True)
-
-    result = await browse("close")
-
-    assert result == "Browser left open (you chose to keep it open)."
-    assert close_calls == []
-    assert fake_session.confirm.calls == []
-
-
-async def test_close_when_inactive_reports_already_closed(
-    fake_session: FakeSession,
-    close_calls: list[bool],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(session, "is_active", lambda: False)
-
-    result = await browse("close")
-
-    assert result == "Browser already closed."
-    assert close_calls == []
-    assert fake_session.confirm.calls == []
-
-
-async def test_closenow_closes_without_confirm(
+async def test_closenow_rejected_as_orchestrator_only(
     fake_session: FakeSession, close_calls: list[bool]
 ) -> None:
     result = await browse("closenow")
-
-    assert result == "Browser closed."
-    assert close_calls == [True]
-    assert fake_session.confirm.calls == []
-
-
-async def test_closenow_when_inactive_reports_already_closed(
-    fake_session: FakeSession,
-    close_calls: list[bool],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(session, "is_active", lambda: False)
-
-    result = await browse("closenow")
-
-    assert result == "Browser already closed."
+    assert "orchestrator-only" in result
     assert close_calls == []
+
+

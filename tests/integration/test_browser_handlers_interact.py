@@ -19,11 +19,22 @@ def _reset_snapshot_baselines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(support.config, "browser_debug_overlay", False)
 
 
-async def test_click_resolves_ref_and_clicks(fake_session: FakeSession) -> None:
-    await browse("click", ref="e2")
+async def test_click_uses_dom_helper_in_fast_mode(
+    fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import Any
 
-    _args, _kwargs = fake_session.log.last("click")
-    assert fake_session.log.count("click") == 1
+    from supporter.tools.browser import handlers as _handlers
+
+    monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
+    calls: list[Any] = []
+
+    async def fake_dom_click(locator: Any) -> None:
+        calls.append(locator)
+
+    monkeypatch.setattr(_handlers, "_dom_click", fake_dom_click)
+    await browse("click", ref="e2")
+    assert len(calls) == 1
 
 
 async def test_click_without_ref_errors(fake_session: FakeSession) -> None:
@@ -35,14 +46,23 @@ async def test_click_without_ref_errors(fake_session: FakeSession) -> None:
     )
 
 
-async def test_type_fills_text_in_fast_mode(
+async def test_type_uses_dom_helper_in_fast_mode(
     fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
-    await browse("type", ref="e2", text="hello")
+    from typing import Any
 
-    args, _kwargs = fake_session.log.last("fill")
-    assert args == ("hello",)
+    from supporter.tools.browser import handlers as _handlers
+
+    calls: list[tuple[Any, str]] = []
+
+    async def fake_dom_set_value(locator: Any, text: str) -> None:
+        calls.append((locator, text))
+
+    monkeypatch.setattr(_handlers, "_dom_set_value", fake_dom_set_value)
+    await browse("type", ref="e2", text="hello")
+    assert len(calls) == 1
+    assert calls[0][1] == "hello"
 
 
 async def test_type_without_text_errors(fake_session: FakeSession) -> None:
@@ -120,8 +140,21 @@ async def test_select_without_value_or_text_errors(
     assert result == "Error: select needs 'value' or 'text' (the option to choose)."
 
 
-async def test_select_by_value_chooses_option(fake_session: FakeSession) -> None:
-    await browse("select", ref="e2", value="opt1")
+async def test_select_uses_dom_helper_in_fast_mode(
+    fake_session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typing import Any
 
-    _args, kwargs = fake_session.log.last("select_option")
-    assert kwargs == {"value": "opt1"}
+    from supporter.tools.browser import handlers as _handlers
+
+    monkeypatch.setattr(guardrails, "host_is_fast", lambda _host: True)
+    calls: list[tuple[Any, str, str]] = []
+
+    async def fake_dom_select(locator: Any, *, value: str = "", label: str = "") -> str:
+        calls.append((locator, value, label))
+        return value
+
+    monkeypatch.setattr(_handlers, "_dom_select", fake_dom_select)
+    await browse("select", ref="e2", value="opt1")
+    assert len(calls) == 1
+    assert calls[0][1] == "opt1"
