@@ -36,6 +36,7 @@ async def delegate_tasks(
     milestone: str,
     tasks: str,
     max_parallel: int = config.delegate_default_parallel,
+    notify_per_task: bool = True,
     question_id: str | None = None,
 ) -> str:
     """Orchestrates background sub-agents to complete a complex milestone.
@@ -62,6 +63,9 @@ async def delegate_tasks(
             Example: '[{"id": "t1", "agent": "explorer", "task": "map src/app.py"}]'
         max_parallel: Max agents running concurrently (default 3; values above
             the hard cap of 5 are clamped).
+        notify_per_task: If true, compact completed/failed task signals are
+            fed back to the orchestrator so it can query details and adapt
+            while siblings still run. Default true.
         question_id: Stable id grouping research rounds into one evidence
             store; claims from every task under it accumulate together.
             Defaults to the job id (one store per job).

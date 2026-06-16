@@ -320,6 +320,14 @@ async def _execute_dag(
                 result.get("tokens", {}),
                 parsed_fields,
             )
+            claims = parsed_fields.get("claims") or []
+            if claims:
+                try:
+                    await asyncio.to_thread(
+                        ingest_claims, question_id, task_id, agent_label, claims
+                    )
+                except Exception as exc:
+                    logger.warning(f"claim ingest failed for {task_id}: {exc}")
             bus.update_task_state(
                 task_id,
                 {
@@ -724,6 +732,7 @@ async def resume_milestone(job_id: str) -> bool:
         # Create the bus only when there is live work; seed its snapshot with
         # every task's last-known state so the resumed run renders in full.
         bus = get_bus(job_id, milestone)
+        bus.notify_per_task = True
         _register_capsule_tasks_on_bus(bus, tasks_by_id, terminal_statuses)
 
         job_semaphore = asyncio.Semaphore(parallel_cap)

@@ -30,6 +30,11 @@ def test_catalog_exposes_current_tool_surface() -> None:
         "cancel_delegation",
         "query_delegation",
         "google_search",
+        "web_search",
+        "deep_research",
+        "research_assess",
+        "verify_claims",
+        "research_report",
         "execute_bash",
     }
     assert all(spec.name == name for name, spec in catalog.items())
@@ -48,6 +53,10 @@ def test_orchestrator_selects_root_tools_without_search_function() -> None:
         "query_delegation",
         "execute_bash",
         "browser_supervise",
+        "web_search",
+        "research_assess",
+        "verify_claims",
+        "research_report",
     }
     assert "google_search" not in registry
     assert "browse" not in registry

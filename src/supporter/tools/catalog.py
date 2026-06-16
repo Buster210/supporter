@@ -15,6 +15,10 @@ ORCHESTRATOR_TOOL_NAMES = (
     "query_delegation",
     "execute_bash",
     "browser_supervise",
+    "web_search",
+    "research_assess",
+    "verify_claims",
+    "research_report",
 )
 
 
@@ -48,6 +52,10 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
     from .delegate.api import cancel_delegation, check_delegation, delegate_tasks
     from .delegate.capsule_query import query_delegation
     from .file_ops import read_file, write_file
+    from .research.driver import deep_research
+    from .research.loop import research_assess
+    from .research.search import web_search
+    from .research.verify import research_report, verify_claims
     from .search import google_search
 
     catalog: dict[str, ToolSpec] = {
@@ -106,6 +114,11 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         "google_search": ToolSpec(
             "google_search", google_search, delegate_allowed=True
         ),
+        "web_search": ToolSpec("web_search", web_search, delegate_allowed=True),
+        "deep_research": ToolSpec("deep_research", deep_research),
+        "research_assess": ToolSpec("research_assess", research_assess),
+        "verify_claims": ToolSpec("verify_claims", verify_claims),
+        "research_report": ToolSpec("research_report", research_report),
         "execute_bash": ToolSpec(
             "execute_bash",
             execute_bash,

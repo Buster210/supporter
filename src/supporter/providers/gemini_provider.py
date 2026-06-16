@@ -11,15 +11,12 @@ if TYPE_CHECKING:
 
 
 from ..config import config
-from ..llm.types import GenOptions
-from ..llm.types import Message as NeutralMessage
 from ..logger import logger
 from ..tools.resolver import resolve_provider_tools
-from ..types import LLMChunk, LLMResult
-from .gemini_codec import (
-    afc_history_to_messages,
-    gen_options_to_config,
-    message_to_content,
+from ..types import (
+    LLMChunk,
+    LLMOptions,
+    LLMResult,
 )
 
 
@@ -57,42 +54,82 @@ class GeminiProvider:
 
     def _prepare_contents(
         self,
-        prompt: str | list[NeutralMessage],
+        prompt: str | list[Content],
+        history: list[Content] | None = None,
+        user_content: Content | None = None,
     ) -> list[Content]:
         from google.genai.types import Content, Part
 
-        if isinstance(prompt, str):
-            return [Content(role="user", parts=[Part(text=prompt)])]
-        return [message_to_content(m) for m in prompt]
+        history = history or []
+        if user_content is not None:
+            return [*history, user_content]
+        fresh_content = (
+            [Content(role="user", parts=[Part(text=prompt)])]
+            if isinstance(prompt, str)
+            else prompt
+        )
+        return history + fresh_content
 
     def _strip_gemini_only_tools(self, tools: list[Any]) -> list[Any]:
         return [t for t in tools if getattr(t, "code_execution", None) is None]
 
+    def _build_generation_config(
+        self, options: LLMOptions, transformed_tools: list[Any] | None
+    ) -> Any:
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig
+
+        is_gemma = self._is_gemma()
+        thinking = (
+            types.ThinkingConfig(thinking_level=types.ThinkingLevel.HIGH)
+            if is_gemma
+            else types.ThinkingConfig(include_thoughts=True)
+        )
+        return GenerateContentConfig(
+            system_instruction=options.get("system_instruction")
+            or config.default_system_instruction,
+            temperature=options.get("temperature"),
+            top_p=options.get("top_p"),
+            top_k=options.get("top_k"),
+            max_output_tokens=options.get("max_output_tokens"),
+            tools=transformed_tools,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            )
+            if transformed_tools
+            else None,
+            tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
+            if transformed_tools
+            else None,
+            response_mime_type=options.get("response_mime_type"),
+            response_schema=options.get("response_schema"),
+            thinking_config=thinking,
+        )
+
     def _prepare_request(
         self,
-        prompt: str | list[NeutralMessage],
-        options: GenOptions,
+        prompt: str | list[Content],
+        options: LLMOptions,
     ) -> tuple[list[Content], Any, list[Any] | None]:
         transformed_tools = self._transform_tools(options)
         if self._is_gemma() and transformed_tools:
             transformed_tools = self._strip_gemini_only_tools(transformed_tools) or None
-        contents = self._prepare_contents(prompt)
-        generation_config = gen_options_to_config(
-            options,
-            transformed_tools,
-            is_gemma=self._is_gemma(),
-            default_system_instruction=config.default_system_instruction,
+        contents = self._prepare_contents(
+            prompt,
+            options.get("history"),
+            user_content=options.get("user_content"),
         )
+        generation_config = self._build_generation_config(options, transformed_tools)
         return contents, generation_config, transformed_tools
 
-    def _transform_tools(self, options: GenOptions | None = None) -> list[Any] | None:
+    def _transform_tools(self, options: LLMOptions | None = None) -> list[Any] | None:
         if not options:
             return None
 
-        tools = options.extras.get("tools", [])
-        registry = options.extras.get("registry") or {}
-        use_search = options.use_search
-        use_code_execution = options.extras.get("use_code_execution", False)
+        tools = options.get("tools", [])
+        registry = options.get("registry") or {}
+        use_search = options.get("use_search", False)
+        use_code_execution = options.get("use_code_execution", False)
 
         def _get_tool_id(t: Any) -> Any:
             if hasattr(t, "__name__") and hasattr(t, "__module__"):
@@ -126,23 +163,25 @@ class GeminiProvider:
 
     async def generate(
         self,
-        prompt: str | list[NeutralMessage],
-        options: GenOptions | None = None,
+        prompt: str | list[Content],
+        options: LLMOptions | None = None,
     ) -> LLMResult:
-        options = options or GenOptions()
-        interaction_id = options.extras.get("interaction_id")
+        options = options or {}
+        interaction_id = options.get("interaction_id")
         contents, generation_config, transformed_tools = self._prepare_request(
             prompt, options
         )
 
         start_time = time.perf_counter()
-        prompt_turns = len(prompt) if isinstance(prompt, list) else 1
+        history = options.get("history") or []
         logger.info(
-            f"generate(): model={self.model_name}, prompt_turns={prompt_turns}, "
+            f"generate(): model={self.model_name}, history_turns={len(history)}, "
             f"tools={len(transformed_tools) if transformed_tools else 0}"
         )
         if logger.isEnabledFor(logging.DEBUG):
-            sys_inst = options.system_instruction or config.default_system_instruction
+            sys_inst = (
+                options.get("system_instruction") or config.default_system_instruction
+            )
             logger.debug(f"generate() system_instruction: {sys_inst}")
             logger.debug(f"generate() context options: {options!r}")
         result: Any = None
@@ -170,17 +209,12 @@ class GeminiProvider:
 
         end_time = time.perf_counter()
 
-        raw_afc_history = getattr(result, "automatic_function_calling_history", None)
-        if not raw_afc_history and interaction_id:
+        afc_history = getattr(result, "automatic_function_calling_history", None)
+        if not afc_history and interaction_id:
             response = getattr(result, "response", None)
-            raw_afc_history = getattr(
+            afc_history = getattr(
                 response, "automatic_function_calling_history", None
             ) or getattr(result, "history", None)
-
-        if raw_afc_history:
-            neutral_history = afc_history_to_messages(raw_afc_history)
-        else:
-            neutral_history = []
 
         usage_meta = getattr(result, "usage_metadata", None)
         usage = (
@@ -222,27 +256,26 @@ class GeminiProvider:
             model=self.model_name,
             duration=end_time - start_time,
             interaction_id=getattr(result, "id", None),
-            history=neutral_history,
             usage=usage,
             raw=result,
             candidates=getattr(result, "candidates", []),
-            automatic_function_calling_history=raw_afc_history,
+            automatic_function_calling_history=afc_history,
         )
 
     async def generate_stream(
         self,
-        prompt: str | list[NeutralMessage],
-        options: GenOptions | None = None,
+        prompt: str | list[Content],
+        options: LLMOptions | None = None,
     ) -> AsyncIterator[LLMChunk]:
-        options = options or GenOptions()
+        options = options or {}
         contents, generation_config, transformed_tools = self._prepare_request(
             prompt, options
         )
 
-        prompt_turns = len(prompt) if isinstance(prompt, list) else 1
+        history = options.get("history") or []
         logger.info(
             f"generate_stream(): model={self.model_name}, "
-            f"prompt_turns={prompt_turns}, "
+            f"history_turns={len(history)}, "
             f"tools={len(transformed_tools) if transformed_tools else 0}"
         )
         stream = await self.client.aio.models.generate_content_stream(
@@ -291,7 +324,6 @@ class GeminiProvider:
                         )
         except Exception as e:
             logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
-            raise
 
         yield LLMChunk(text="", is_last=True, model=self.model_name)
 

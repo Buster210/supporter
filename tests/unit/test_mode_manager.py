@@ -197,6 +197,10 @@ async def test_setup_agent_registry_tools() -> None:
         "cancel_delegation",
         "query_delegation",
         "execute_bash",
+        "web_search",
+        "research_assess",
+        "verify_claims",
+        "research_report",
     }
 
 

@@ -89,7 +89,6 @@ class AppConfig:
     browser_profile_name: str | None = None
     browser_debug_overlay: bool = False
     browser_parallel_pilots: bool = True
-    browser_diff_threshold: int = 40
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2
@@ -104,11 +103,6 @@ class AppConfig:
     keepalive_enabled: bool = True
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
-
-    # WI-3: Generalized trust gating
-    browser_trusted_hosts: str = ""
-    browser_micro_behavior_rate: float = 0.06
-    browser_promotion_threshold: int = 5
 
 
 @dataclass
