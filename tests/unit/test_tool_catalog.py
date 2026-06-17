@@ -36,6 +36,19 @@ def test_catalog_exposes_current_tool_surface() -> None:
         "verify_claims",
         "research_report",
         "execute_bash",
+        "memory_write",
+        "memory_read",
+        "memory_search",
+        "memory_list_kinds",
+        "memory_compact",
+        "memory_clear",
+        "memory_status",
+        "recipe_save",
+        "recipe_find",
+        "recipe_run",
+        "recipe_delete",
+        "recipe_list",
+        "recipe_status",
     }
     assert all(spec.name == name for name, spec in catalog.items())
     assert all(callable(spec.callable) for spec in catalog.values())

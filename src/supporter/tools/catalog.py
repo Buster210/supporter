@@ -52,6 +52,23 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
     from .delegate.api import cancel_delegation, check_delegation, delegate_tasks
     from .delegate.capsule_query import query_delegation
     from .file_ops import read_file, write_file
+    from .memory_tools import (
+        memory_clear,
+        memory_compact,
+        memory_list_kinds,
+        memory_read,
+        memory_search,
+        memory_status,
+        memory_write,
+    )
+    from .recipe_tools import (
+        recipe_delete,
+        recipe_find,
+        recipe_list,
+        recipe_run,
+        recipe_save,
+        recipe_status,
+    )
     from .research.driver import deep_research
     from .research.loop import research_assess
     from .research.search import web_search
@@ -125,6 +142,19 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
             default_enabled=include_bash,
             delegate_allowed=True,
         ),
+        "memory_write": ToolSpec("memory_write", memory_write),
+        "memory_read": ToolSpec("memory_read", memory_read),
+        "memory_search": ToolSpec("memory_search", memory_search),
+        "memory_list_kinds": ToolSpec("memory_list_kinds", memory_list_kinds),
+        "memory_compact": ToolSpec("memory_compact", memory_compact),
+        "memory_clear": ToolSpec("memory_clear", memory_clear),
+        "memory_status": ToolSpec("memory_status", memory_status),
+        "recipe_save": ToolSpec("recipe_save", recipe_save),
+        "recipe_find": ToolSpec("recipe_find", recipe_find),
+        "recipe_run": ToolSpec("recipe_run", recipe_run),
+        "recipe_delete": ToolSpec("recipe_delete", recipe_delete),
+        "recipe_list": ToolSpec("recipe_list", recipe_list),
+        "recipe_status": ToolSpec("recipe_status", recipe_status),
     }
     # ToolSpec is frozen=True dataclass — safe to share cached refs without copying
     _BUILTIN_CATALOG_CACHE[include_bash] = catalog
