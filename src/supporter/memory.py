@@ -51,6 +51,7 @@ __all__ = [
     "clear_memory",
     "list_notes",
     "memory_snapshot",
+    "reset_memory",
     "search_notes",
 ]
 
@@ -402,3 +403,9 @@ def memory_snapshot() -> dict[str, Any]:
     snap = memory.snapshot()
     snap["available"] = True
     return snap
+
+
+def reset_memory() -> None:
+    """Drop the process-wide WorkingMemory singleton (test isolation)."""
+    global _MEMORY_SINGLETON
+    _MEMORY_SINGLETON = None

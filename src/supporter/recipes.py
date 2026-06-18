@@ -65,6 +65,7 @@ __all__ = [
     "find_recipe",
     "get_recipe_store",
     "list_recipes",
+    "reset_recipe_store",
     "run_recipe",
     "save_recipe",
 ]
@@ -481,6 +482,12 @@ def get_recipe_store() -> RecipeStore | None:
                 )
                 return None
         return _STORE
+
+
+def reset_recipe_store() -> None:
+    """Drop the process-wide RecipeStore singleton (test isolation)."""
+    global _STORE
+    _STORE = None
 
 
 def save_recipe(

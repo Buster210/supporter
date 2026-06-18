@@ -40,7 +40,6 @@ function, and the same retry / audit / metric story applies.
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
@@ -56,7 +55,6 @@ __all__ = [
     "RecoveryAction",
     "RecoveryStatus",
     "is_recoverable",
-    "record_recovery",
     "with_recovery",
 ]
 
@@ -355,13 +353,3 @@ def with_recovery(
         metrics_tag=name,
     )
 
-
-def record_recovery(name: str) -> None:
-    """Increment a named recovery counter (for ad-hoc bookkeeping)."""
-    log_decision(
-        site="recover.generic",
-        chosen="recorded",
-        reason=name,
-    )
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"AutoRecover: external record for {name!r}")
