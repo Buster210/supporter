@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 import weakref
 from collections import OrderedDict, deque
 from collections.abc import AsyncIterator, Callable
@@ -95,10 +96,9 @@ def should_trigger_fallback(error: Any) -> bool:
 def _notify_keypool_failure(provider: LLMProvider, error: BaseException) -> None:
     """Best-effort: tell the keypool that ``provider``'s key just failed.
 
-    The keypool records cooldowns on a per-key basis; the existing
-    DynamicPool rotates per-request but does not track per-key health.
-    Hooking the two layers together means a 429 on key A is now visible
-    to the keypool so the next ``acquire()`` skips A and prefers B.
+    Failures are recorded to the keypool so DynamicPool's slot selection
+    (``_select_next_key_index``) can consult that health data and avoid
+    refilling a slot with a cooling-down key.
     Safe to call when the keypool is unconfigured (no-op) or when
     ``provider`` is not a GeminiProvider.
     """
@@ -182,9 +182,44 @@ class DynamicPool(LLMProvider):
         )
         self._instances.add(self)
 
+    def _select_next_key_index(self) -> int:
+        # Best-effort keypool consult; ANY failure -> plain round-robin (lossless).
+        pool = None
+        try:
+            from .keypool import get_key_pool
+            pool = get_key_pool()
+        except Exception:
+            pool = None
+        n = len(self.keys)
+        start = self.next_key_index % n
+        if pool is None:
+            self.next_key_index = (start + 1) % n
+            return start
+        try:
+            now = time.time()
+            best_sick_idx = start
+            best_recovery = float("inf")
+            for off in range(n):
+                idx = (start + off) % n
+                health = pool.health(self.keys[idx])
+                if health.is_available(now):
+                    self.next_key_index = (idx + 1) % n
+                    return idx
+                rec = health.seconds_to_recovery(now)
+                if rec < best_recovery:
+                    best_recovery = rec
+                    best_sick_idx = idx
+            # All keys cooling down -> least-sick (earliest recovery).
+            self.next_key_index = (best_sick_idx + 1) % n
+            return best_sick_idx
+        except Exception:
+            # keypool consult blew up mid-scan -> plain round-robin.
+            self.next_key_index = (start + 1) % n
+            return start
+
     def _fill_slot(self) -> None:
-        key = self.keys[self.next_key_index % len(self.keys)]
-        self.next_key_index = (self.next_key_index + 1) % len(self.keys)
+        idx = self._select_next_key_index()
+        key = self.keys[idx]
         provider = self._provider_factory(key, self.model_name)
         self.active_slots.append(provider)
 
