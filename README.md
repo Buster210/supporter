@@ -93,9 +93,18 @@ self-healing engineering team" — from your terminal.
   persistent live sessions with idle-reconnect and pre-warm, and self-healing metrics.
 - **Durable, compacting history** — crash-safe JSONL persistence with session rotation and
   LLM-based context compaction; interrupted delegation jobs resume on restart.
+- **Working memory + recipes** — crash-safe JSONL stores for cross-session working state
+  and parameterised, LLM-free replayable automations; the assistant reads the recent
+  working-memory block on every turn and writes recipes when it solves a multi-step
+  problem so it can replay them next time.
+- **AutoRecover + Verification** — a unifying catch-and-heal wrapper for any async call
+  site (rotates the keypool on transient 5xx) and a verification loop that retries a
+  generation against pure-Python checks (length, garble, JSON shape, files-exist,
+  recipe-passes) before persisting the result.
 - **Reactive TUI** — Textual dashboard with streamed bubbles, thought streaming, tool-call
   rendering, confirmation modals, and live delegation progress.
-- **Audit trail** — every tool-routing decision and delegation capsule is persisted for inspection.
+- **Audit trail** — every tool-routing decision, recovery attempt, and delegation capsule
+  is persisted for inspection.
 
 ---
 
@@ -326,6 +335,39 @@ shared conversation history**, seeing only the context handed to them.
 | **Test Engineer** | TDD + verification (tier-2 QA reviewer) | `read_file`, `execute_bash` |
 | **Code Reviewer** | Quality / convention enforcement (tier-2 QA reviewer) | `read_file` |
 | **page-pilot** | Stealth web research / browser automation (live) | `browse` (full browser toolset) |
+
+### Autonomous surface
+
+The assistant has three persistence / automation surfaces beyond the conversation history,
+so multi-step work survives restarts and known tasks replay without burning LLM tokens:
+
+- **Working memory** (`memory_write` / `memory_read` / `memory_search` / `memory_list_kinds` /
+  `memory_compact` / `memory_clear` / `memory_status`) — a small crash-safe JSONL store at
+  `.supporter/working_memory.jsonl` for the *current session's* working state: half-finished
+  tasks, recent URLs, the user's preferred working directory, fingerprints of the last
+  working build. Append-only with atomic writes; the assistant auto-injects a compact
+  recent-notes block into its own context.
+- **Recipes** (`recipe_save` / `recipe_find` / `recipe_run` / `recipe_delete` / `recipe_list`
+  / `recipe_status`) — named, parameterised lists of steps (`shell`, `read`, `write`,
+  `http_get`, `memory_write`, `delay`, `assert_exists`, `assert_eq`, `emit`). When the
+  orchestrator solves a multi-step problem itself, it `recipe_save`s the flow; next time
+  `recipe_run(name)` replays it deterministically with **zero LLM tokens**. Recipes are
+  JSONL at `.supporter/recipes.jsonl`; each step is data, not Python, so they replay safely
+  without trusting the writer's intent.
+- **AutoRecover watchdog** (`supporter.recover.AutoRecover`) — a unifying catch-and-heal
+  wrapper around any async call site (`provider.generate`, `browser.browse`,
+  `agent.execute`, `recipe.run`). Classifies exceptions, runs pluggable recovery actions
+  in order (the built-in `rotate_api_key` action marks the failing key sick and lets the
+  keypool pick a fresh one on next `acquire()`), and retries with the same arguments.
+  `ChatAgent.execute_with_verification(recover=...)` wires it in by default, so a
+  transient 5xx / network blip rotates the keypool and retries without burning the
+  verification budget.
+
+Plus a small verifier layer (`supporter.verify.VerificationLoop`) that powers
+`ChatAgent.execute_with_verification`: run → pure-Python checks (length, garble, JSON
+shape, files-exist, recipe-passes) → re-attempt with the failure context if any check
+fails, bounded by `max_attempts`. The final result is what gets persisted to history;
+intermediate attempts stay off the user-visible transcript.
 
 ### Reliability & self-healing
 

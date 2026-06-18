@@ -70,11 +70,13 @@ async def create_capsule(
     milestone: str,
     tasks: list[dict[str, Any]],
     parallel_cap: int,
+    question_id: str | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
     capsule: dict[str, Any] = {
         "schema_version": CAPSULE_SCHEMA_VERSION,
         "job_id": job_id,
+        "question_id": question_id or job_id,
         "milestone": milestone,
         "status": "running",
         "created_at": now,
@@ -267,6 +269,7 @@ async def mark_task_completed(
                 "summary": parsed["summary"],
                 "evidence": parsed["evidence"],
                 "findings": parsed["findings"],
+                "claims": parsed.get("claims", []),
                 "handoff": parsed["handoff"],
                 "confidence": parsed["confidence"],
                 "error": "",
@@ -297,6 +300,7 @@ async def mark_task_failed(
                 "summary": parsed["summary"],
                 "evidence": parsed["evidence"],
                 "findings": parsed["findings"],
+                "claims": parsed.get("claims", []),
                 "handoff": parsed["handoff"],
                 "confidence": parsed["confidence"],
                 "error": error,
@@ -427,6 +431,7 @@ def extract_task_capsule_fields(output: str) -> dict[str, Any]:
             "summary": preview(output, 3000) if output else "",
             "evidence": default_evidence(),
             "findings": [],
+            "claims": [],
             "handoff": "",
             "confidence": "unknown",
         }
@@ -440,6 +445,7 @@ def extract_task_capsule_fields(output: str) -> dict[str, Any]:
         "findings": parsed.get("findings")
         if isinstance(parsed.get("findings"), list)
         else [],
+        "claims": _normalize_claims(parsed.get("claims")),
         "handoff": _string_or_default(parsed.get("handoff"), ""),
         "confidence": _normalize_confidence(parsed.get("confidence")),
     }
@@ -467,6 +473,9 @@ def validate_delegation_payload(output: str) -> bool:
     ):
         return False
     if not isinstance(parsed.get("findings"), list):
+        return False
+    claims = parsed.get("claims")
+    if claims is not None and not isinstance(claims, list):
         return False
     return isinstance(parsed.get("handoff"), str)
 
@@ -584,6 +593,7 @@ def _initial_task_record(task: dict[str, Any]) -> dict[str, Any]:
         "summary": "",
         "evidence": default_evidence(),
         "findings": [],
+        "claims": [],
         "handoff": "",
         "confidence": "unknown",
         "error": "",
@@ -651,6 +661,32 @@ def _normalize_evidence(value: Any) -> dict[str, list[Any]]:
         item = value.get(key, [])
         evidence[key] = item if isinstance(item, list) else []
     return evidence
+
+
+def _normalize_claims(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        statement = item.get("statement")
+        url = item.get("url")
+        if not isinstance(statement, str) or not statement.strip():
+            continue
+        if not isinstance(url, str) or not url.strip():
+            continue
+        snippet = item.get("snippet")
+        stance = item.get("stance")
+        normalized.append(
+            {
+                "statement": statement.strip(),
+                "url": url.strip(),
+                "snippet": snippet.strip() if isinstance(snippet, str) else "",
+                "stance": stance if stance in {"support", "refute"} else "support",
+            }
+        )
+    return normalized
 
 
 def _normalize_confidence(value: Any) -> str:

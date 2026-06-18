@@ -6,11 +6,18 @@ hard-dropping oldest turns, fold them into a dense summary for context preservat
 
 from __future__ import annotations
 
+import hashlib
+
 from supporter.llm.types import Message, TextPart, ToolCallPart, ToolResultPart
 
 from .config import config
 
-__all__ = ["render_turns", "summarize_turns"]
+__all__ = [
+    "clear_summarizer_cache",
+    "render_turns",
+    "summarize_turns",
+    "summarizer_cache_info",
+]
 
 _SUMMARIZATION_INSTRUCTION = (
     "You are a helpful assistant that summarizes conversation history. "
@@ -18,6 +25,12 @@ _SUMMARIZATION_INSTRUCTION = (
     "preserving key facts, decisions, context, and technical details. "
     "Write in present tense, be factual and neutral, avoid redundancy."
 )
+
+# In-process LRU for summarization results. Bounded so memory does not grow
+# unbounded across long-lived sessions. Caching is safe because summarize_turns
+# is a pure function of the transcript (no side effects, no streaming state).
+_SUMMARIZER_CACHE_MAX = 32
+_SUMMARIZER_CACHE: dict[str, str] = {}
 
 
 def render_turns(turns: list[Message]) -> str:
@@ -94,6 +107,15 @@ async def summarize_turns(turns: list[Message]) -> str:
     if not transcript:
         return ""
 
+    # WHY: A long-lived session can ask for the same summary multiple
+    # times (the agent recomputes coverage after each turn). Caching by
+    # transcript hash skips the network round-trip and the LLM cost on
+    # the common case. The cache is bounded so it cannot grow without
+    # limit across many distinct transcripts.
+    cache_key = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    if cache_key in _SUMMARIZER_CACHE:
+        return _SUMMARIZER_CACHE[cache_key]
+
     if not config.gemini_api_keys:
         raise RuntimeError("No Gemini API keys configured for summarization")
 
@@ -112,4 +134,24 @@ async def summarize_turns(turns: list[Message]) -> str:
         },
     )
 
-    return result.text.strip()
+    summary = result.text.strip()
+    if len(_SUMMARIZER_CACHE) >= _SUMMARIZER_CACHE_MAX:
+        # Drop the oldest entry (insertion order). Cheap; we never
+        # need to be exact about eviction policy here.
+        oldest = next(iter(_SUMMARIZER_CACHE))
+        del _SUMMARIZER_CACHE[oldest]
+    _SUMMARIZER_CACHE[cache_key] = summary
+    return summary
+
+
+def summarizer_cache_info() -> dict[str, int]:
+    """Return the size of the in-process summarizer cache.
+
+    Useful for observability / tests.
+    """
+    return {"size": len(_SUMMARIZER_CACHE), "max": _SUMMARIZER_CACHE_MAX}
+
+
+def clear_summarizer_cache() -> None:
+    """Drop the in-process summarizer cache. Tests / config changes."""
+    _SUMMARIZER_CACHE.clear()

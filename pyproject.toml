@@ -27,6 +27,7 @@ dev = [
 
 [project.scripts]
 supporter = "supporter.tui:main"
+supporter-worker = "supporter.worker:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]

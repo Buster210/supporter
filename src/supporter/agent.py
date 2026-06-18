@@ -60,9 +60,13 @@ class ChatAgent:
         self._store: Any = None
         self._store_prev_len: int = 0
         # WHY: Cache summary state so compaction survives AFC clobber.
-        # _summary covers turns [0, _summary_turn_count) of self.history.
+        # _summary covers turns [0, _summary_turn_count) of self.history;
+        # _summary_fingerprint is a structural fingerprint of that same prefix,
+        # so a wholesale history replacement (different branch, same length)
+        # is detected as a stale cache even when the count check would pass.
         self._summary: str = ""
         self._summary_turn_count: int = 0
+        self._summary_fingerprint: str = ""
         if config.durable_history_enabled:
             from .session import HistoryStore, new_session_id
 
@@ -83,8 +87,17 @@ class ChatAgent:
 
     def _prepare_execution_context(self) -> GenOptions:
         history_for_send = self._build_compacted_history()
+        system_instruction = self.system_instruction
+        # WHY: inject recent working memory + a "known automations" hint
+        # into the system prompt so the assistant's context is never
+        # blank after a restart. This is the wire that turns the memory
+        # + recipe stores into knowledge the model actually sees.
+        if system_instruction is not None:
+            injected = self._build_context_injection()
+            if injected:
+                system_instruction = f"{system_instruction}\n\n{injected}"
         return GenOptions(
-            system_instruction=self.system_instruction,
+            system_instruction=system_instruction,
             use_search=self.use_search,
             extras={
                 "history": history_for_send,
@@ -94,6 +107,108 @@ class ChatAgent:
                 "use_code_execution": self.use_code_execution,
             },
         )
+
+    @staticmethod
+    def _build_context_injection(limit: int = 5) -> str:
+        """Compose the working-memory + recipe digest that gets prepended
+        to the system prompt on every turn.
+
+        Each source is independently best-effort: a corrupt store
+        should not prevent the agent from running. Failures are logged
+        at debug level.
+        """
+        from .logger import logger
+        from .memory import memory_snapshot
+        from .recipes import recipes_snapshot
+        from .tools.memory_tools import memory_render_block
+
+        parts: list[str] = []
+        try:
+            block = memory_render_block(limit=limit)
+            if block:
+                parts.append(block)
+        except Exception as exc:
+            logger.debug(
+                f"ChatAgent: memory injection failed [{type(exc).__name__}]: {exc}"
+            )
+        try:
+            snap = recipes_snapshot()
+            total = snap.get("total", 0) if isinstance(snap, dict) else 0
+            if total:
+                parts.append(
+                    f"KNOWN AUTOMATIONS ({total} recipes available): "
+                    "use the recipe_list / recipe_run / recipe_find tools "
+                    "to replay any saved multi-step workflow without LLM tokens."
+                )
+        except Exception as exc:
+            logger.debug(
+                f"ChatAgent: recipe injection failed [{type(exc).__name__}]: {exc}"
+            )
+        try:
+            snap = memory_snapshot()
+            kinds = snap.get("kinds", {}) if isinstance(snap, dict) else {}
+            if kinds:
+                kinds_repr = ", ".join(
+                    f"{k}={v}"
+                    for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
+                )
+                parts.append(f"WORKING MEMORY TOTALS: {kinds_repr}")
+        except Exception as exc:
+            logger.debug(
+                f"ChatAgent: kinds injection failed [{type(exc).__name__}]: {exc}"
+            )
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _entry_text(entry: Any) -> str:
+        """Pull text out of a history entry — Message or genai Content.
+
+        Both shapes expose `.role` and `.parts`; each part may expose `.text`
+        (TextPart, genai Part, or anything duck-typed). Falls back to
+        ``str(part)`` so non-text parts still contribute a stable token.
+        """
+        pieces: list[str] = []
+        for part in getattr(entry, "parts", None) or []:
+            text = getattr(part, "text", None)
+            if text:
+                pieces.append(str(text))
+            else:
+                pieces.append(str(part))
+        return "\x1d".join(pieces)
+
+    def _fingerprint(self, n: int) -> str:
+        """Deterministic structural fingerprint of the first ``n`` entries.
+
+        Works for both ``Message`` and ``genai.types.Content`` because both
+        expose ``.role`` and ``.parts``. The fingerprint is what guards the
+        cached summary against branch-swap / wholesale history replacement.
+        """
+        import hashlib
+
+        parts: list[str] = []
+        for entry in self.history[:n]:
+            role = getattr(entry, "role", "") or ""
+            text = self._entry_text(entry)
+            parts.append(f"{role}\x1f{text}")
+        raw = "\x1e".join(parts)
+        return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
+
+    def _summary_is_stale(self) -> bool:
+        """True iff the cached summary is no longer valid for self.history.
+
+        Invalidation triggers:
+          - no summary cached
+          - _summary_turn_count >= current history length: a pure shrink to or
+            below the coverage point (preserves the original guard so the
+            cache-hit splice never overlaps already-summarized recent turns)
+          - structural fingerprint of the first _summary_turn_count entries
+            has changed (branch-swap at the same length, in-place mutation, etc.)
+        """
+        if not self._summary:
+            return True
+        if self._summary_turn_count >= len(self.history):
+            return True
+        return self._fingerprint(self._summary_turn_count) != self._summary_fingerprint
 
     def _build_compacted_history(self) -> list[Any]:
         """Build compacted history view for LLM context.
@@ -110,13 +225,14 @@ class ChatAgent:
         if len(self.history) <= keep_recent:
             return self.history
 
-        # WHY (PITFALL-2): if history shrunk (e.g. AFC branch clobber), the
-        # cached _summary_turn_count is an offset into the old list and may
-        # exceed len(self.history), making uncovered_count negative. Invalidate
-        # the stale summary so the next call re-summarizes from the new base.
-        if self._summary and self._summary_turn_count >= len(self.history):
+        # WHY: Cached summary is valid only while the fingerprint of the first
+        # _summary_turn_count history entries is unchanged. A pure shrink AND
+        # a shrink-then-regrow with a DIFFERENT branch both invalidate it,
+        # because we trust the structural fingerprint — not the length count.
+        if self._summary_is_stale():
             self._summary = ""
             self._summary_turn_count = 0
+            self._summary_fingerprint = ""
         uncovered_count = len(self.history) - self._summary_turn_count
         if uncovered_count <= keep_recent and self._summary:
             summary_text = f"[PREVIOUS_CONTEXT_SUMMARY]\n{self._summary}"
@@ -142,11 +258,13 @@ class ChatAgent:
         if len(self.history) <= trigger:
             return False
 
-        # WHY (PITFALL-2): invalidate stale summary that references a now-shrunken
-        # history so the coverage math (and resulting recent-turns slice) is correct.
-        if self._summary and self._summary_turn_count >= len(self.history):
+        # WHY: Invalidate stale summary so the coverage math (and resulting
+        # recent-turns slice) is correct. Uses the structural fingerprint so
+        # a branch-swap at the same length is also detected.
+        if self._summary_is_stale():
             self._summary = ""
             self._summary_turn_count = 0
+            self._summary_fingerprint = ""
 
         if len(self.history) > keep_recent:
             turns_to_summarize = self.history[:-keep_recent]
@@ -158,6 +276,9 @@ class ChatAgent:
             if summary:
                 self._summary = summary
                 self._summary_turn_count = len(self.history) - keep_recent
+                self._summary_fingerprint = self._fingerprint(
+                    self._summary_turn_count
+                )
                 logger.info(
                     f"Summarized {len(turns_to_summarize)} history turns "
                     f"(kept {keep_recent} recent)"
@@ -204,6 +325,63 @@ class ChatAgent:
             f"history_size={len(self.history)}"
         )
         return result
+
+    async def execute_with_verification(
+        self,
+        prompt: str,
+        checks: list[Any] | None = None,
+        config: Any | None = None,
+        recover: Any | None = None,
+    ) -> Any:
+        """Run the prompt through a verification loop.
+
+        On every retry the LLM receives the *original* prompt plus a
+        structured "your previous response failed verification" follow-up
+        that names each failing check and its captured detail. History is
+        synced only with the *final* result so the user-visible transcript
+        shows the chosen answer, not the rejected intermediate ones.
+
+        If ``recover`` is an :class:`supporter.recover.AutoRecover` it
+        wraps every provider call so transient 5xx / network failures
+        rotate the keypool and retry without LLM involvement.
+        """
+        from .verify import VerificationConfig, VerificationLoop
+
+        if not await self._maybe_summarize():
+            self._trim_history()
+
+        cfg = config or VerificationConfig()
+        loop = VerificationLoop(cfg, checks or [])
+
+        async def _caller(text: str) -> LLMResult:
+            options = self._prepare_execution_context()
+            if recover is not None:
+                result: LLMResult = await recover.call(
+                    self.provider.generate, text, options
+                )
+                return result
+            return await self.provider.generate(text, options)
+
+        outcome = await loop.run(_caller, prompt)
+        last = outcome.last_result
+        if last is None:
+            # Should not happen — at least one attempt always runs.
+            return outcome
+
+        # Sync history with the *final* result only; intermediate attempts
+        # are not user-visible.
+        user_message = _build_message("user", prompt)
+        self.current_interaction_id = last.interaction_id
+        self._sync_history(user_message, last)
+        if self._store:
+            self._store.sync()
+        self._record_brain_decision(prompt, last)
+
+        logger.info(
+            f"Agent: verification complete — ok={outcome.ok} "
+            f"attempts={outcome.attempts} history_size={len(self.history)}"
+        )
+        return outcome
 
     def _record_brain_decision(self, prompt: str, result: LLMResult) -> None:
         chosen = "text_response"
@@ -318,6 +496,7 @@ class ChatAgent:
         self.history = []
         self._summary = ""
         self._summary_turn_count = 0
+        self._summary_fingerprint = ""
         self.current_interaction_id = None
         if self._store:
             self._store.rotate()

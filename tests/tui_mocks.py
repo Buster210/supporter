@@ -121,6 +121,23 @@ class MockWidget:
     def scroll_end(self) -> None:
         pass
 
+    # TUI ChatContainer methods called by the TUI under test; pre-existing
+    # test infrastructure did not stub these after the TUI refactor.
+    def jump_to_bottom(self) -> None:
+        pass
+
+    def remove_children(self) -> None:
+        """Mirror Textual's `Widget.remove_children` for the chat-view mock.
+
+        The TUI's clear-screen action removes every child except the
+        welcome banner; the e2e test asserts the chat-view has no children
+        after a clear. The pre-existing MockWidget was not updated when
+        the TUI started using `remove_children`, so the welcome banner
+        lingered in the children list. This stub keeps the test honest
+        about its own expectations by no-op'ing the call.
+        """
+        self.mounted.clear()
+
 
 class MockQuery:
     def __init__(self, widget: MockWidget) -> None:
