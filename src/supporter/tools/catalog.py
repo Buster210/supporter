@@ -67,6 +67,7 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         recipe_list,
         recipe_run,
         recipe_save,
+        recipe_search,
         recipe_status,
     )
     from .research.driver import deep_research
@@ -151,6 +152,7 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         "memory_status": ToolSpec("memory_status", memory_status),
         "recipe_save": ToolSpec("recipe_save", recipe_save),
         "recipe_find": ToolSpec("recipe_find", recipe_find),
+        "recipe_search": ToolSpec("recipe_search", recipe_search),
         "recipe_run": ToolSpec("recipe_run", recipe_run),
         "recipe_delete": ToolSpec("recipe_delete", recipe_delete),
         "recipe_list": ToolSpec("recipe_list", recipe_list),

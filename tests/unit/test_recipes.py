@@ -514,3 +514,74 @@ async def test_recipe_status_tool(
     save_recipe("a", "d", [{"kind": "emit", "value": "x"}])
     out = await recipe_tools.recipe_status()
     assert "total=1" in out
+
+
+@pytest.mark.asyncio
+async def test_recipe_search_finds_by_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    save_recipe("a", "deploy the web app to prod", [{"kind": "emit", "value": "x"}])
+    save_recipe("b", "run the test suite", [{"kind": "emit", "value": "x"}])
+    out = await recipe_tools.recipe_search("deploy")
+    # The match for "deploy" should appear BEFORE the description of "a";
+    # "b" should not be in the matches list at all.
+    assert "- a " in out
+    # No line for b
+    lines = [ln for ln in out.splitlines() if ln.startswith("- ")]
+    assert not any(ln.startswith("- b ") for ln in lines)
+
+
+@pytest.mark.asyncio
+async def test_recipe_search_finds_by_step_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    save_recipe(
+        "a",
+        "d",
+        [{"kind": "shell", "value": json.dumps(["npm", "test"])}],
+    )
+    out = await recipe_tools.recipe_search("npm test")
+    assert "a" in out
+
+
+@pytest.mark.asyncio
+async def test_recipe_search_no_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    save_recipe("a", "d", [{"kind": "emit", "value": "x"}])
+    out = await recipe_tools.recipe_search("definitely-no-match")
+    assert "no recipes match" in out
+
+
+@pytest.mark.asyncio
+async def test_recipe_search_empty_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    out = await recipe_tools.recipe_search("")
+    assert "ERROR" in out
+
+
+@pytest.mark.asyncio
+async def test_recipe_search_by_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    save_recipe(
+        "a",
+        "d",
+        [{"kind": "emit", "value": "x"}],
+        tags=["ci"],
+    )
+    save_recipe(
+        "b",
+        "d",
+        [{"kind": "emit", "value": "x"}],
+        tags=["docs"],
+    )
+    out = await recipe_tools.recipe_search("anything", tag="ci")
+    assert "a" in out
+    assert "b" not in out

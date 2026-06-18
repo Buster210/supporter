@@ -29,6 +29,7 @@ __all__ = [
     "recipe_list",
     "recipe_run",
     "recipe_save",
+    "recipe_search",
     "recipe_status",
 ]
 
@@ -154,6 +155,31 @@ async def recipe_list(query: str = "", limit: int = 20) -> str:
         f"tags={','.join(r.tags) or '-'})"
         for r in recipes
     )
+
+
+async def recipe_search(query: str, tag: str = "", limit: int = 5) -> str:
+    """Find recipes whose name / description / step content match ``query``.
+
+    Use this BEFORE writing a brand-new multi-step workflow: if a
+    recipe already does what you need, ``recipe_run`` it for free
+    instead of asking the model to re-derive the steps.
+    """
+    if not query or not isinstance(query, str):
+        return "ERROR: query must be a non-empty string"
+    recipes = list_recipes(
+        query,
+        tag=tag or None,
+        limit=max(1, min(20, limit)),
+    )
+    if not recipes:
+        return f"(no recipes match {query!r})"
+    out = [f"matches for {query!r}:"]
+    for r in recipes:
+        out.append(
+            f"- {r.name} (uses={r.uses}, steps={len(r.steps)}, "
+            f"tags={','.join(r.tags) or '-'}): {r.description[:160]}"
+        )
+    return "\n".join(out)
 
 
 async def recipe_status() -> str:

@@ -45,6 +45,7 @@ def test_catalog_exposes_current_tool_surface() -> None:
         "memory_status",
         "recipe_save",
         "recipe_find",
+        "recipe_search",
         "recipe_run",
         "recipe_delete",
         "recipe_list",
