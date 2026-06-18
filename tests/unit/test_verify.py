@@ -425,7 +425,6 @@ async def test_agent_execute_with_verification_records_history() -> None:
 @pytest.mark.asyncio
 async def test_agent_execute_with_verification_with_recover() -> None:
     """When ``recover`` is supplied, the provider call is wrapped."""
-    import asyncio
 
     from supporter.agent import ChatAgent
     from supporter.recover import AutoRecover, note_recovery
@@ -434,7 +433,7 @@ async def test_agent_execute_with_verification_with_recover() -> None:
     provider.get_name.return_value = "fake"
     # First call: timeout (recoverable). Second call: ok.
     provider.generate = AsyncMock(
-        side_effect=[asyncio.TimeoutError(), _result("hi")]
+        side_effect=[TimeoutError(), _result("hi")]
     )
 
     recover = AutoRecover(

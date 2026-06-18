@@ -92,6 +92,35 @@ def should_trigger_fallback(error: Any) -> bool:
     return is_rate_limit(error) or is_model_error(error)
 
 
+def _notify_keypool_failure(provider: LLMProvider, error: BaseException) -> None:
+    """Best-effort: tell the keypool that ``provider``'s key just failed.
+
+    The keypool records cooldowns on a per-key basis; the existing
+    DynamicPool rotates per-request but does not track per-key health.
+    Hooking the two layers together means a 429 on key A is now visible
+    to the keypool so the next ``acquire()`` skips A and prefers B.
+    Safe to call when the keypool is unconfigured (no-op) or when
+    ``provider`` is not a GeminiProvider.
+    """
+    try:
+        from .keypool import (
+            get_key_pool,
+            reset_key_pool,  # noqa: F401  (kept for symmetry)
+        )
+
+        api_key = getattr(provider, "api_key", None)
+        if not isinstance(api_key, str) or not api_key:
+            return
+        pool = get_key_pool()
+        if pool is None:
+            return
+        pool.report_failure(api_key, error)
+    except Exception as exc:
+        logger.debug(
+            f"keypool notification skipped [{type(exc).__name__}]: {exc}"
+        )
+
+
 def _prune_expired_cooldowns() -> None:
     now = datetime.now()
     with _provider_lock:
@@ -246,6 +275,7 @@ class DynamicPool(LLMProvider):
                             f"[{self.model_name}] Retriable error attempt "
                             f"{attempt + 1}: {e}"
                         )
+                    _notify_keypool_failure(provider, e)
                     self._replace_instance(provider)
                     if is_rate_limit(e):
                         continue
@@ -289,6 +319,7 @@ class DynamicPool(LLMProvider):
                             f"[{self.model_name}] Retriable stream error attempt "
                             f"{attempt + 1}: {e}"
                         )
+                    _notify_keypool_failure(provider, e)
                     self._replace_instance(provider)
                     if not yielded_any:
                         logger.info(

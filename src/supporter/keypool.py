@@ -198,6 +198,8 @@ def _classify(error: BaseException) -> str:
             return "free_tier"
     if isinstance(status, int) and status == 429:
         return "free_tier"
+    if isinstance(status, int) and 500 <= status < 600:
+        return "transient"
     for pat in _TRANSIENT_PATTERNS:
         if pat.search(message):
             return "transient"

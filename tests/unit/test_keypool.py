@@ -89,6 +89,13 @@ def test_classify_status_4xx_means_revoked() -> None:
     assert keypool._classify(_exc("rate limit", status=429)) == "free_tier"
 
 
+def test_classify_status_5xx_means_transient() -> None:
+    assert keypool._classify(_exc("boom", status=500)) == "transient"
+    assert keypool._classify(_exc("boom", status=502)) == "transient"
+    assert keypool._classify(_exc("boom", status=503)) == "transient"
+    assert keypool._classify(_exc("boom", status=504)) == "transient"
+
+
 def test_classify_unknown() -> None:
     assert keypool._classify(_exc("definitely not a recognised error")) == "unknown"
 

@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -128,3 +129,65 @@ async def test_get_provider_registry() -> None:
     await clear_providers()
     p3 = get_provider("gemini")
     assert p3 is not p1
+
+
+@pytest.mark.asyncio
+async def test_load_balancer_notifies_keypool_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 5xx on a slot notifies the keypool so future acquires skip the key."""
+    from supporter import keypool
+    from supporter import pool as pool_mod
+
+    monkeypatch.setattr(keypool, "_default_state_path", lambda: tmp_path / "kp.json")
+    monkeypatch.setattr(keypool.config, "gemini_api_keys", ["key-a", "key-b"])
+    keypool.reset_key_pool()
+
+    # Build a provider that fails with a 5xx, then succeeds.
+    class _BoomError(Exception):
+        status = 503
+
+    call_count = {"n": 0}
+
+    provider = MagicMock()
+    provider.get_name.return_value = "P_A"
+    provider.api_key = "key-a"
+
+    async def gen(*args: Any, **kwargs: Any) -> LLMResult:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _BoomError("boom")
+        return LLMResult(text="ok from key-a")
+
+    provider.generate = AsyncMock(side_effect=gen)
+    provider.generate_stream = MagicMock()
+
+    class FakeGeminiProvider:
+        def __init__(self, api_key: str, model_name: str) -> None:
+            self._provider = provider
+            self.api_key = api_key
+
+        def get_name(self) -> str:
+            return self._provider.get_name()
+
+        async def generate(
+            self, prompt: str, options: Any = None
+        ) -> LLMResult:
+            return await self._provider.generate(prompt, options)
+
+    monkeypatch.setattr(pool_mod, "GeminiProvider", FakeGeminiProvider)
+    # Bypass model-level cooldown so we can see the key-level effect.
+    pool_mod._is_model_in_cooldown = lambda *_a, **_k: False  # type: ignore[assignment]
+
+    pool = DynamicPool(["key-a", "key-b"], model_name="P_A")
+    res = await pool.generate("test")
+    # The first attempt fails; the loop's `continue` re-runs.
+    # We don't care which key the second call lands on — only that the
+    # keypool was notified of key-a's failure.
+    assert res.text.startswith("ok from key-")
+
+    pool_snapshot = keypool.get_key_pool().all_health()
+    key_a_health = next(h for h in pool_snapshot if h.key == "key-a")
+    assert not key_a_health.is_available()
+    assert key_a_health.last_category == "transient"
+    keypool.reset_key_pool()
