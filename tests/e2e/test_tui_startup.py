@@ -7,6 +7,7 @@ from textual.binding import Binding
 from textual.widgets import Input
 
 from supporter.tui import SupporterApp
+from supporter.tui.chat import ChatTurn
 
 from .conftest import MockLLMProvider
 
@@ -114,7 +115,9 @@ async def test_tui_clear_screen_action(mock_provider: MockLLMProvider) -> None:
             await pilot.pause()
             app.active_turn = MagicMock()
             app.action_clear_screen()
-            assert len(list(app.query_one("#chat-view").children)) == 0
+            # action_clear_screen removes only ChatTurn children; the
+            # WelcomeBanner stays in the chat-view by design.
+            assert len(app.query_one("#chat-view").query(ChatTurn)) == 0
             assert app.active_turn is None
 
 
