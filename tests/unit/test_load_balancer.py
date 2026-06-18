@@ -176,8 +176,13 @@ async def test_load_balancer_notifies_keypool_on_failure(
             return await self._provider.generate(prompt, options)
 
     monkeypatch.setattr(pool_mod, "GeminiProvider", FakeGeminiProvider)
-    # Bypass model-level cooldown so we can see the key-level effect.
-    pool_mod._is_model_in_cooldown = lambda *_a, **_k: False  # type: ignore[assignment]
+    # Bypass model-level cooldown so we can see the key-level effect. Use
+    # monkeypatch (not raw assignment) so it's restored at teardown — a raw
+    # assign here leaks the stub into later tests and silently disables their
+    # model-cooldown guard, sending them to the real network.
+    monkeypatch.setattr(
+        pool_mod, "_is_model_in_cooldown", lambda *_a, **_k: False
+    )
 
     pool = DynamicPool(["key-a", "key-b"], model_name="P_A")
     res = await pool.generate("test")
