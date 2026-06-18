@@ -35,7 +35,6 @@ import os
 import re
 import threading
 from collections import deque
-from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -203,7 +202,7 @@ class WorkingMemory:
         *,
         kind: str | None = None,
         limit: int = 20,
-    ) -> "list[Note]":
+    ) -> list[Note]:
         """Return notes whose label, kind, or stringified value contains
         ``query`` (case-insensitive substring match).
         """
@@ -271,11 +270,11 @@ class WorkingMemory:
                 "snapshot_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             }
 
-    def list(  # noqa: A003 — keep short public name
+    def list(
         self,
         kind: str | None = None,
         limit: int | None = None,
-    ) -> "list[Note]":
+    ) -> list[Note]:
         return self.list_notes(kind=kind, limit=limit)
 
     # --- internals --------------------------------------------------------

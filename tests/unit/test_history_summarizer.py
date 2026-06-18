@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from supporter.history_summarizer import render_turns, summarize_turns
+from supporter.history_summarizer import (
+    clear_summarizer_cache,
+    render_turns,
+    summarize_turns,
+    summarizer_cache_info,
+)
 
 
 def _make_content(role: str, text: str | None = None) -> Any:
@@ -172,3 +177,71 @@ class TestSummarizeTurns:
 
             call_kwargs = mock_provider.generate.call_args.args[1]
             assert call_kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_summarize_turns_caches_results() -> None:
+    """Identical transcripts hit the cache and skip the LLM call."""
+    from supporter import history_summarizer
+
+    history_summarizer.clear_summarizer_cache()
+
+    mock_result = MagicMock()
+    mock_result.text = "summary text"
+    mock_provider = MagicMock()
+    mock_provider.generate = AsyncMock(return_value=mock_result)
+
+    with (
+        patch("supporter.history_summarizer.config") as mock_config,
+        patch("supporter.pool.get_provider", return_value=mock_provider),
+    ):
+        mock_config.gemini_api_keys = ["test-key"]
+        mock_config.gemini_model = "test-model"
+
+        turns = [_make_content("user", "hello")]
+        out1 = await summarize_turns(turns)
+        out2 = await summarize_turns(turns)
+        assert out1 == out2 == "summary text"
+        # LLM called only once.
+        assert mock_provider.generate.await_count == 1
+        # Cache holds one entry.
+        assert summarizer_cache_info()["size"] == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_turns_cache_evicts_when_full() -> None:
+    """Cache evicts oldest entry when at max size."""
+    from supporter import history_summarizer
+
+    history_summarizer.clear_summarizer_cache()
+    # Override the cap so the test is fast.
+    history_summarizer._SUMMARIZER_CACHE_MAX = 2  # type: ignore[attr-defined]
+
+    mock_result = MagicMock()
+    mock_result.text = "summary"
+    mock_provider = MagicMock()
+    mock_provider.generate = AsyncMock(return_value=mock_result)
+
+    with (
+        patch("supporter.history_summarizer.config") as mock_config,
+        patch("supporter.pool.get_provider", return_value=mock_provider),
+    ):
+        mock_config.gemini_api_keys = ["test-key"]
+        mock_config.gemini_model = "test-model"
+
+        for i in range(5):
+            await summarize_turns([_make_content("user", f"msg-{i}")])
+
+        # Cache never grows past the cap.
+        assert summarizer_cache_info()["size"] <= 2
+        # All five LLM calls fired because each transcript is distinct.
+        assert mock_provider.generate.await_count == 5
+
+
+def test_clear_summarizer_cache() -> None:
+    from supporter import history_summarizer
+
+    history_summarizer._SUMMARIZER_CACHE["x"] = "y"  # type: ignore[attr-defined]
+    clear_summarizer_cache()
+    assert summarizer_cache_info()["size"] == 0
+
