@@ -83,8 +83,17 @@ class ChatAgent:
 
     def _prepare_execution_context(self) -> GenOptions:
         history_for_send = self._build_compacted_history()
+        system_instruction = self.system_instruction
+        # WHY: inject recent working memory + a "known automations" hint
+        # into the system prompt so the assistant's context is never
+        # blank after a restart. This is the wire that turns the memory
+        # + recipe stores into knowledge the model actually sees.
+        if system_instruction is not None:
+            injected = self._build_context_injection()
+            if injected:
+                system_instruction = f"{system_instruction}\n\n{injected}"
         return GenOptions(
-            system_instruction=self.system_instruction,
+            system_instruction=system_instruction,
             use_search=self.use_search,
             extras={
                 "history": history_for_send,
@@ -94,6 +103,57 @@ class ChatAgent:
                 "use_code_execution": self.use_code_execution,
             },
         )
+
+    @staticmethod
+    def _build_context_injection(limit: int = 5) -> str:
+        """Compose the working-memory + recipe digest that gets prepended
+        to the system prompt on every turn.
+
+        Each source is independently best-effort: a corrupt store
+        should not prevent the agent from running. Failures are logged
+        at debug level.
+        """
+        from .logger import logger
+        from .memory import memory_snapshot
+        from .recipes import recipes_snapshot
+        from .tools.memory_tools import memory_render_block
+
+        parts: list[str] = []
+        try:
+            block = memory_render_block(limit=limit)
+            if block:
+                parts.append(block)
+        except Exception as exc:
+            logger.debug(
+                f"ChatAgent: memory injection failed [{type(exc).__name__}]: {exc}"
+            )
+        try:
+            snap = recipes_snapshot()
+            total = snap.get("total", 0) if isinstance(snap, dict) else 0
+            if total:
+                parts.append(
+                    f"KNOWN AUTOMATIONS ({total} recipes available): "
+                    "use the recipe_list / recipe_run / recipe_find tools "
+                    "to replay any saved multi-step workflow without LLM tokens."
+                )
+        except Exception as exc:
+            logger.debug(
+                f"ChatAgent: recipe injection failed [{type(exc).__name__}]: {exc}"
+            )
+        try:
+            snap = memory_snapshot()
+            kinds = snap.get("kinds", {}) if isinstance(snap, dict) else {}
+            if kinds:
+                kinds_repr = ", ".join(
+                    f"{k}={v}"
+                    for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
+                )
+                parts.append(f"WORKING MEMORY TOTALS: {kinds_repr}")
+        except Exception as exc:
+            logger.debug(
+                f"ChatAgent: kinds injection failed [{type(exc).__name__}]: {exc}"
+            )
+        return "\n\n".join(parts)
 
     def _build_compacted_history(self) -> list[Any]:
         """Build compacted history view for LLM context.
