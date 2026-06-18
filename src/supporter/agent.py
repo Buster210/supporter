@@ -205,6 +205,63 @@ class ChatAgent:
         )
         return result
 
+    async def execute_with_verification(
+        self,
+        prompt: str,
+        checks: list[Any] | None = None,
+        config: Any | None = None,
+        recover: Any | None = None,
+    ) -> Any:
+        """Run the prompt through a verification loop.
+
+        On every retry the LLM receives the *original* prompt plus a
+        structured "your previous response failed verification" follow-up
+        that names each failing check and its captured detail. History is
+        synced only with the *final* result so the user-visible transcript
+        shows the chosen answer, not the rejected intermediate ones.
+
+        If ``recover`` is an :class:`supporter.recover.AutoRecover` it
+        wraps every provider call so transient 5xx / network failures
+        rotate the keypool and retry without LLM involvement.
+        """
+        from .verify import VerificationConfig, VerificationLoop
+
+        if not await self._maybe_summarize():
+            self._trim_history()
+
+        cfg = config or VerificationConfig()
+        loop = VerificationLoop(cfg, checks or [])
+
+        async def _caller(text: str) -> LLMResult:
+            options = self._prepare_execution_context()
+            if recover is not None:
+                result: LLMResult = await recover.call(
+                    self.provider.generate, text, options
+                )
+                return result
+            return await self.provider.generate(text, options)
+
+        outcome = await loop.run(_caller, prompt)
+        last = outcome.last_result
+        if last is None:
+            # Should not happen — at least one attempt always runs.
+            return outcome
+
+        # Sync history with the *final* result only; intermediate attempts
+        # are not user-visible.
+        user_message = _build_message("user", prompt)
+        self.current_interaction_id = last.interaction_id
+        self._sync_history(user_message, last)
+        if self._store:
+            self._store.sync()
+        self._record_brain_decision(prompt, last)
+
+        logger.info(
+            f"Agent: verification complete — ok={outcome.ok} "
+            f"attempts={outcome.attempts} history_size={len(self.history)}"
+        )
+        return outcome
+
     def _record_brain_decision(self, prompt: str, result: LLMResult) -> None:
         chosen = "text_response"
         try:
