@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import Any, Protocol
 
-from textual.message import Message
+from textual.message import Message as TextualMessage
 
-if TYPE_CHECKING:
-    from google.genai.types import Content, GenerateContentConfig, Tool
+from .llm.types import GenOptions, Message
 
 
 class TaskStatus(StrEnum):
@@ -18,26 +17,6 @@ class TaskStatus(StrEnum):
     ERROR = "error"
     STARTED = "started"
     PENDING = "pending"
-
-
-class LLMOptions(TypedDict, total=False):
-    history: list[Content]
-    model: str
-    tools: list[Tool]
-    registry: dict[str, Callable[..., Any]]
-    interaction_id: str | None
-    use_search: bool
-    use_code_execution: bool
-    system_instruction: str | None
-    thinking_level: str | None
-    temperature: float
-    top_p: float
-    top_k: int
-    max_output_tokens: int
-    config: GenerateContentConfig
-    user_content: Any
-    response_mime_type: str
-    response_schema: Any
 
 
 @dataclass
@@ -89,6 +68,16 @@ class AppConfig:
     browser_profile_name: str | None = None
     browser_debug_overlay: bool = False
     browser_parallel_pilots: bool = True
+    browser_diff_threshold: int = 40
+    # Auto-close the browser after this many seconds with no interaction.
+    # Any browser interaction resets the clock; 0 disables idle auto-close
+    # (browser persists until explicit close).
+    browser_idle_close_seconds: int = 600
+    # D1: Browser output caps for page read, batch read, links, and eval results
+    browse_page_chars_cap: int = 50_000
+    browse_batch_chars_cap: int = 150_000
+    browse_max_links: int = 100
+    browse_eval_chars_cap: int = 16_000
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2
@@ -97,16 +86,21 @@ class AppConfig:
     reconnect_backoff_base: float = 0.5
     reconnect_backoff_cap: float = 8.0
     prewarm_safety_margin: float = 5.0
-    # Deprecated: kept only as the fallback default for idle_monitor_enabled
-    # when IDLE_MONITOR_ENABLED env var is unset. The provider no longer
-    # reads this directly.
-    keepalive_enabled: bool = True
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
 
+    # WI-3: Generalized trust gating
+    browser_trusted_hosts: str = ""
+    browser_micro_behavior_rate: float = 0.06
+    browser_promotion_threshold: int = 5
+    # Auto-approve browser actions (files remain gated)
+    browser_auto_approve: bool = True
+    # Plan before act in interactive orchestrator
+    plan_before_act: bool = True
+
 
 @dataclass
-class ModeChanged(Message):
+class ModeChanged(TextualMessage):
     mode: str
     enabled: bool
 
@@ -120,8 +114,9 @@ class LLMResult:
     thoughts: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
     raw: Any = None
-    automatic_function_calling_history: list[Content] | None = None
+    automatic_function_calling_history: list[Any] | None = None
     candidates: list[Any] = field(default_factory=list)
+    history: list[Message] = field(default_factory=list)
 
 
 @dataclass
@@ -138,11 +133,11 @@ class LLMChunk:
 
 class LLMProvider(Protocol):
     async def generate(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Message], options: GenOptions | None = None
     ) -> LLMResult: ...
 
     def generate_stream(
-        self, prompt: str | list[Content], options: LLMOptions | None = None
+        self, prompt: str | list[Message], options: GenOptions | None = None
     ) -> AsyncIterator[LLMChunk]: ...
 
     def get_name(self) -> str: ...

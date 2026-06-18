@@ -352,4 +352,3 @@ def with_recovery(
         max_attempts=max_attempts,
         metrics_tag=name,
     )
-
