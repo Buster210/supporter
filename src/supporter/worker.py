@@ -134,25 +134,109 @@ def _planner_profile() -> dict[str, Any]:
     return profile
 
 
+async def make_plan(objective: str, persona: str, model: str) -> str:
+    """Shared planner: ask a model with *persona* to plan *objective*.
+
+    Returns the plan text, or empty string on failure. Never raises.
+    """
+    try:
+        provider = get_provider(model_name=model, shared=False)
+        options = GenOptions(system_instruction=persona)
+        result = await provider.generate(f"OBJECTIVE:\n{objective}", options)
+        plan = (getattr(result, "text", "") or "").strip()
+        logger.info(f"planner produced a {len(plan)}-char plan")
+        return plan
+    except Exception as exc:
+        logger.warning(f"planner failed: {exc}")
+        return ""
+
+
+async def format_response(text: str, model: str) -> str:
+    """Reformat an assistant reply via the fallback model. Returns the
+    formatted text, or "" on failure/empty (caller keeps the raw text).
+    Never raises."""
+    from .prompts import RESPONSE_FORMATTER_PERSONA
+
+    try:
+        provider = get_provider(model_name=model, shared=False)
+        options = GenOptions(system_instruction=RESPONSE_FORMATTER_PERSONA)
+        result = await provider.generate(text, options)
+        return (getattr(result, "text", "") or "").strip()
+    except Exception as exc:
+        logger.warning(f"format_response failed: {exc}")
+        return ""
+
+
+async def needs_plan(objective: str, model: str) -> bool | None:
+    """Fast binary classifier: does *objective* need a multi-step plan?
+
+    Returns True/False, or None on failure (caller decides fallback).
+    Never raises.
+    """
+    from .prompts import PLAN_CLASSIFIER_PERSONA
+
+    try:
+        provider = get_provider(model_name=model, shared=False)
+        options = GenOptions(
+            system_instruction=PLAN_CLASSIFIER_PERSONA,
+            max_output_tokens=4,
+        )
+        result = await provider.generate(f"TASK:\n{objective}", options)
+        verdict = (getattr(result, "text", "") or "").strip().upper()
+        if verdict.startswith("YES"):
+            return True
+        if verdict.startswith("NO"):
+            return False
+        return None
+    except Exception as exc:
+        logger.warning(f"needs_plan classifier failed: {exc}")
+        return None
+
+
+async def verify_plan(
+    objective: str, plan: str, result: str, model: str
+) -> tuple[bool, str]:
+    """Ask the planner to verify *result* fulfils *plan* for *objective*.
+
+    Returns (is_done, reason). Fail-open: on any error or an unclear verdict
+    returns (True, ...) so a verifier outage never traps the worker loop.
+    Never raises.
+    """
+    from .prompts import PLAN_VERIFIER_PERSONA
+
+    try:
+        provider = get_provider(model_name=model, shared=False)
+        options = GenOptions(system_instruction=PLAN_VERIFIER_PERSONA)
+        prompt = (
+            f"OBJECTIVE:\n{objective}\n\n"
+            f"PLAN:\n{plan or '(no plan was produced)'}\n\n"
+            f"RESULT:\n{result}"
+        )
+        gen = await provider.generate(prompt, options)
+        text = (getattr(gen, "text", "") or "").strip()
+        first = text.splitlines()[0].upper() if text else ""
+        reason = text.split("\n", 1)[1].strip() if "\n" in text else text
+        if "NOT_DONE" in first or "NOT DONE" in first:
+            return False, reason or "planner judged the result incomplete"
+        if "DONE" in first:
+            return True, reason or "planner verified the result"
+        logger.info("verify_plan: no clear verdict, accepting (fail-open)")
+        return True, "verifier returned no clear verdict; accepting"
+    except Exception as exc:
+        logger.warning(f"verify_plan failed: {exc}")
+        return True, f"verify unavailable: {exc}"
+
+
 async def _make_plan(task: str) -> str:
     """Phase 1: ask the heavy-model planner role for an execution plan."""
     profile = _planner_profile()
-    provider = get_provider(model_name=profile["model"], shared=False)
-    # REST providers drop the factory system_instruction, so the persona MUST
-    # ride the per-call options or the planner falls back to the default prompt.
-    options = GenOptions(system_instruction=profile["persona"])
-    result = await provider.generate(f"OBJECTIVE:\n{task}", options)
-    plan = (getattr(result, "text", "") or "").strip()
-    logger.info(f"worker: planner produced a {len(plan)}-char plan")
-    return plan
+    return await make_plan(task, profile["persona"], profile["model"])
 
 
 def _build_executor_agent(session_id: str) -> ChatAgent:
     """Phase 2 setup: an autonomous agent with browser + write tools."""
     model = os.getenv("WORKER_EXECUTOR_MODEL") or config.gemini_model
-    registry = select_tools(
-        build_tool_catalog(include_bash=False), _EXECUTOR_TOOLS
-    )
+    registry = select_tools(build_tool_catalog(include_bash=False), _EXECUTOR_TOOLS)
     # ChatAgent supplies the system_instruction per-call via GenOptions; the REST
     # factory would silently drop it here, so it is intentionally not passed.
     provider = get_provider(model_name=model, registry=registry, shared=False)
@@ -189,6 +273,16 @@ def _continuation_prompt(report_path: Path) -> str:
         f"to {report_path}. Keep driving the browser to gather any remaining "
         "data, then write the complete executive markdown report to that exact "
         f"path via write_file(path='{report_path}', content=<full markdown>)."
+    )
+
+
+def _verification_prompt(report_path: Path, reason: str) -> str:
+    return (
+        "The planner reviewed your report and judged it NOT done:\n"
+        f"{reason}\n\n"
+        "Fix exactly that gap: keep driving the browser to gather the missing or "
+        f"corrected data, then rewrite the COMPLETE report to {report_path} via "
+        "write_file(path=..., content=<full markdown>)."
     )
 
 
@@ -229,11 +323,14 @@ async def run_worker(
         report_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"worker: task={task!r} -> report {report_path}")
 
-        plan = await _make_plan(task)
+        profile = _planner_profile()
+        plan = await make_plan(task, profile["persona"], profile["model"])
+        planner_model = profile["model"]
         session_id = f"worker-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
         agent = _build_executor_agent(session_id)
         prompt = _build_executor_prompt(task, plan, report_path)
 
+        verified = False
         for turn in range(1, max_executor_turns + 1):
             logger.info(f"worker: executor turn {turn}/{max_executor_turns}")
             try:
@@ -241,17 +338,38 @@ async def run_worker(
             except Exception as exc:  # keep driving on a transient turn failure
                 logger.warning(f"worker: executor turn {turn} errored: {exc}")
             if _report_ready(report_path):
-                logger.info(f"worker: report ready after turn {turn}")
-                break
-            prompt = _continuation_prompt(report_path)
+                try:
+                    result_text = report_path.read_text(encoding="utf-8")
+                except OSError:
+                    result_text = ""
+                ok, reason = await verify_plan(
+                    task, plan, result_text, planner_model
+                )
+                if ok:
+                    logger.info(f"worker: planner verified report after turn {turn}")
+                    verified = True
+                    break
+                logger.info(
+                    f"worker: planner says NOT done after turn {turn}: {reason}"
+                )
+                prompt = _verification_prompt(report_path, reason)
+            else:
+                prompt = _continuation_prompt(report_path)
         else:
-            logger.warning("worker: exhausted executor turns without a report")
+            logger.warning(
+                "worker: exhausted executor turns without a verified report"
+            )
     finally:
         await _teardown(agent)
         restore_callbacks()
 
     if not _report_ready(report_path):
         raise RuntimeError(f"worker did not produce a report at {report_path}")
+    if not verified:
+        raise RuntimeError(
+            f"worker produced a report at {report_path} but the planner never "
+            "verified it satisfies the plan within the turn budget"
+        )
     logger.info(f"worker: done -> {report_path}")
     return report_path
 

@@ -174,6 +174,16 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
             "- Sensitive browser steps (login, payment, irreversible UI) "
             "may prompt for confirmation -- surface the prompt clearly "
             "in your report so the user knows to act.\n"
+            "## Data Return Contract\n"
+            "Return ALL collected data -- do NOT summarize or compress it. "
+            "Your structured result block MUST include:\n"
+            "- `findings`: the concrete extracted items, one per entry "
+            "(e.g. article titles, data points, section contents). "
+            "NOT a summary of what you did.\n"
+            "- `evidence.sources`: every URL you opened or read.\n"
+            "- `summary`: one sentence on scope, NOT a rehash of findings.\n"
+            "- `output` (in your prose): the full extracted page content "
+            "so nothing is lost.\n"
             "When reporting web findings, populate `claims` -- one atomic, "
             "URL-attributed claim per fact, so the orchestrator can cross-verify. "
             "Use web_search to find real URLs to open, then browse to read them."
@@ -221,6 +231,41 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
         "live": False,
     },
 }
+
+RESPONSE_FORMATTER_PERSONA = (
+    "You are a pure FORMATTER for an AI assistant's already-written reply. "
+    "Reformat the given text into clean, correct, readable markdown: fix broken "
+    "or garbled markup, normalize spacing, fix list and heading structure, "
+    "correct unclosed or mismatched code fences.\n\n"
+    "HARD RULES — violating any one is a critical failure:\n"
+    "- Never add information.\n"
+    "- Never remove information.\n"
+    "- Never answer or continue the task.\n"
+    "- Never add commentary, preamble, or postamble.\n"
+    "- Output ONLY the reformatted reply text, nothing else.\n"
+    "- If the text is already clean, return it unchanged."
+)
+
+PLAN_CLASSIFIER_PERSONA = (
+    "You are a fast task router. Given ONE user task, decide whether it needs "
+    "a multi-step execution plan (file edits, browsing, research, multi-tool "
+    "work, or anything beyond a single direct answer) or can be answered "
+    "immediately (greeting, simple question, single fact, chit-chat).\n\n"
+    "Reply with EXACTLY one token: YES or NO. No prose, no punctuation, no "
+    "explanation."
+)
+
+PLAN_VERIFIER_PERSONA = (
+    "You are the planner acting as a verifier. Earlier you produced a PLAN for an "
+    "OBJECTIVE. You are now given the OBJECTIVE, that PLAN, and the RESULT that was "
+    "produced by the worker. Decide ONLY whether the result actually fulfils the "
+    "objective and the plan: every required item gathered, nothing fabricated, no "
+    "planned step skipped. Be strict — a partial, stubbed, or placeholder result is "
+    "NOT done.\n"
+    "Reply with EXACTLY one line first: `VERDICT: DONE` or `VERDICT: NOT_DONE`. Then "
+    "on the next line give a one-sentence reason. If NOT_DONE, the reason MUST name "
+    "the specific missing or wrong part so the worker can fix exactly that."
+)
 
 ORCHESTRATION_PLANNER_PERSONA = (
     "You are the orchestration planner. Given a user's task, produce a "
