@@ -13,6 +13,8 @@ Step types (intentionally small):
 * ``http_get``     — GET a URL, return text or status.
 * ``memory_write`` — persist a note to the working-memory store.
 * ``delay``        — sleep N milliseconds.
+* ``human_break``  — sleep a RANDOM duration each run; value "min||max" ms
+  (blank = default).
 * ``assert_exists``— fail the recipe if a path does not exist.
 * ``assert_eq``    — fail the recipe if two strings differ.
 * ``emit``         — attach a string to the run's output.
@@ -36,6 +38,7 @@ Design choices
 from __future__ import annotations
 
 import json
+import random
 import re
 import threading
 import time
@@ -71,6 +74,10 @@ MAX_RECIPES = 200
 MAX_STEPS_PER_RECIPE = 50
 MAX_STEP_VALUE_CHARS = 4000
 
+DEFAULT_HUMAN_BREAK_MIN_MS = 300
+DEFAULT_HUMAN_BREAK_MAX_MS = 1500
+MAX_HUMAN_BREAK_MS = 60_000
+
 # Valid step kinds — keep this set tight on purpose.
 _VALID_KINDS: frozenset[str] = frozenset(
     {
@@ -80,6 +87,7 @@ _VALID_KINDS: frozenset[str] = frozenset(
         "http_get",
         "memory_write",
         "delay",
+        "human_break",
         "assert_exists",
         "assert_eq",
         "emit",
@@ -104,6 +112,7 @@ class RecipeStep:
     #   http_get     -> URL
     #   memory_write -> kind label
     #   delay        -> integer ms
+    #   human_break  -> "min||max" ms range (blank=default); fresh random each replay
     #   assert_exists-> project-relative path
     #   assert_eq    -> "expected||actual" string (split on "||")
     #   emit         -> free-form text
@@ -551,6 +560,23 @@ def _safe_resolve(rel: str) -> Path:
     return candidate
 
 
+def _parse_break_range(value: str) -> tuple[int, int]:
+    """Parse a human_break range. Blank -> defaults. "min||max" -> ints.
+    Clamped to 0..MAX_HUMAN_BREAK_MS; swapped if reversed; defaults on bad input."""
+    lo, hi = DEFAULT_HUMAN_BREAK_MIN_MS, DEFAULT_HUMAN_BREAK_MAX_MS
+    if value and "||" in value:
+        a, b = value.split("||", 1)
+        try:
+            lo, hi = int(a), int(b)
+        except ValueError:
+            lo, hi = DEFAULT_HUMAN_BREAK_MIN_MS, DEFAULT_HUMAN_BREAK_MAX_MS
+    lo = max(0, min(MAX_HUMAN_BREAK_MS, lo))
+    hi = max(0, min(MAX_HUMAN_BREAK_MS, hi))
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
 def _execute_step(
     index: int,
     step: RecipeStep,
@@ -565,6 +591,14 @@ def _execute_step(
                 raise ValueError("delay must be 0..60000 ms")
             time.sleep(ms / 1000.0)
             head["detail"] = f"slept {ms}ms"
+            return head
+
+        if step.kind == "human_break":
+            lo, hi = _parse_break_range(step.value)
+            ms = random.randint(lo, hi)  # noqa: S311  # fresh random every run
+            time.sleep(ms / 1000.0)
+            head["detail"] = f"human break {ms}ms (random in {lo}..{hi})"
+            head["break_ms"] = ms
             return head
 
         if step.kind == "emit":
