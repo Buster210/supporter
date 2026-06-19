@@ -222,6 +222,58 @@ class SupporterApp(App[None]):
 
     async def _setup_agent(self, use_live: bool = False) -> None:
         await self._mode_manager.setup_agent(use_live=use_live)
+        await self._replay_history()
+
+    async def _replay_history(self) -> None:
+        """Mount full persisted history as scrollable bubbles on startup.
+
+        Loads ALL records from the history store (uncapped) so sessions with
+        >200 turns still display everything in the UI. Does not trigger the
+        thinking indicator or any LLM call.
+        """
+        if not self.agent or not self.agent._store:
+            return
+
+        from ..llm.types import TextPart, ToolCallPart
+        records = self.agent._store.load(limit=None)
+        if not records:
+            return
+
+        chat_view = self.query_one("#chat-view", ChatContainer)
+
+        # Hide welcome banner when history is non-empty.
+        for banner in self.query(WelcomeBanner):
+            banner.message = ""
+
+        current_turn: ChatTurn | None = None
+
+        for msg in records:
+            role: str = msg.role
+
+            if role == "user":
+                text = " ".join(
+                    p.text for p in msg.parts if isinstance(p, TextPart) and p.text
+                )
+                current_turn = ChatTurn(MessageBubble(role="user", content=text))
+                await chat_view.mount(current_turn)
+
+            elif role == "model":
+                bubble = MessageBubble(role="agent", content="", streaming=False)
+                for part in msg.parts:
+                    if isinstance(part, TextPart) and part.text:
+                        bubble.append_token(part.text)
+                    elif isinstance(part, ToolCallPart):
+                        bubble.add_tool_call(part.name, part.args)
+                    # ToolResultPart / ImagePart — skip cleanly.
+                bubble.finalize()
+                if current_turn is not None:
+                    await current_turn.mount_bubble(bubble)
+                else:
+                    await chat_view.mount(bubble)
+
+            # role == "tool" — internal, skip cleanly.
+
+        chat_view.jump_to_bottom()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-container"):
