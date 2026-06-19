@@ -95,8 +95,6 @@ class AppConfig:
     browser_promotion_threshold: int = 5
     # Auto-approve browser actions (files remain gated)
     browser_auto_approve: bool = True
-    # Plan before act in interactive orchestrator
-    plan_before_act: bool = True
 
 
 @dataclass

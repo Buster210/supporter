@@ -50,6 +50,7 @@ def test_catalog_exposes_current_tool_surface() -> None:
         "recipe_delete",
         "recipe_list",
         "recipe_status",
+        "plan",
     }
     assert all(spec.name == name for name, spec in catalog.items())
     assert all(callable(spec.callable) for spec in catalog.values())
@@ -71,6 +72,7 @@ def test_orchestrator_selects_root_tools_without_search_function() -> None:
         "research_assess",
         "verify_claims",
         "research_report",
+        "plan",
     }
     assert "google_search" not in registry
     assert "browse" not in registry

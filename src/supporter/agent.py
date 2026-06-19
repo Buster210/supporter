@@ -59,6 +59,8 @@ class ChatAgent:
         self.system_instruction = system_instruction
         self._store: Any = None
         self._store_prev_len: int = 0
+        self.last_plan: str = ""
+        self.last_plan_objective: str = ""
         # WHY: Cache summary state so compaction survives AFC clobber.
         # _summary covers turns [0, _summary_turn_count) of self.history;
         # _summary_fingerprint is a structural fingerprint of that same prefix,

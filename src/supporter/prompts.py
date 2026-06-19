@@ -298,15 +298,6 @@ RESPONSE_FORMATTER_PERSONA = (
     "- If the text is already clean, return it unchanged."
 )
 
-PLAN_CLASSIFIER_PERSONA = (
-    "You are a fast task router. Given ONE user task, decide whether it needs "
-    "a multi-step execution plan (file edits, browsing, research, multi-tool "
-    "work, or anything beyond a single direct answer) or can be answered "
-    "immediately (greeting, simple question, single fact, chit-chat).\n\n"
-    "Reply with EXACTLY one token: YES or NO. No prose, no punctuation, no "
-    "explanation."
-)
-
 PLAN_VERIFIER_PERSONA = (
     "You are the planner acting as a verifier. Earlier you produced a PLAN for an "
     "OBJECTIVE. You are now given the OBJECTIVE, that PLAN, and the RESULT that was "
@@ -585,4 +576,8 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "for any 'remember this for next time' or 'do the same thing "
     "again' need — they are faster, cheaper, and more reliable than "
     "calling a sub-agent or asking the user."
+    "\n\n## Routing\n"
+    "Greeting, simple question, or chit-chat -> respond directly, do NOT call plan.\n"
+    "Multi-step or non-trivial task -> call plan(objective) FIRST, "
+    "then follow the returned steps."
 )

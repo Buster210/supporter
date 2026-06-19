@@ -167,31 +167,6 @@ async def format_response(text: str, model: str) -> str:
         return ""
 
 
-async def needs_plan(objective: str, model: str) -> bool | None:
-    """Fast binary classifier: does *objective* need a multi-step plan?
-
-    Returns True/False, or None on failure (caller decides fallback).
-    Never raises.
-    """
-    from .prompts import PLAN_CLASSIFIER_PERSONA
-
-    try:
-        provider = get_provider(model_name=model, shared=False)
-        options = GenOptions(
-            system_instruction=PLAN_CLASSIFIER_PERSONA,
-            max_output_tokens=4,
-        )
-        result = await provider.generate(f"TASK:\n{objective}", options)
-        verdict = (getattr(result, "text", "") or "").strip().upper()
-        if verdict.startswith("YES"):
-            return True
-        if verdict.startswith("NO"):
-            return False
-        return None
-    except Exception as exc:
-        logger.warning(f"needs_plan classifier failed: {exc}")
-        return None
-
 
 async def verify_plan(
     objective: str, plan: str, result: str, model: str
