@@ -2,8 +2,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+from rich.text import Text
+from textual.app import App, ComposeResult
+
 from supporter.tui.bubble import MessageBubble, SectionHeader
 from supporter.tui.chat import ChatTurn, ThinkingIndicator
+from supporter.tui.mode_manager import ModeManager
 from supporter.tui.utils import ToastManager
 
 
@@ -133,6 +137,17 @@ class TestMessageBubble:
         calls = [{"name": "read_file", "args": {}}]
         result = bubble._format_tool_calls(calls)
         assert "read_file" in result
+
+    def test_format_tool_calls_escapes_markup(self) -> None:
+        # Tool names/args are model-controlled; bracketed values like "[/etc]"
+        # used to be parsed as Rich console markup and raise MarkupError. The
+        # output must render as valid markup while keeping the text visible.
+        bubble = MessageBubble(role="agent", content="")
+        calls = [{"name": "read_file", "args": {"path": "[/etc/hosts]", "idx": "[0]"}}]
+        result = bubble._format_tool_calls(calls)
+        rendered = Text.from_markup(result)  # raises MarkupError if unescaped
+        assert "/etc/hosts" in rendered.plain
+        assert "read_file" in rendered.plain
 
 
 class TestChatTurn:
@@ -417,3 +432,52 @@ class TestMessageBubbleShouldUseMarkdown:
     def test_markdown_detection_asterisk_pattern_matched(self) -> None:
         bubble = MessageBubble(role="user", content="")
         assert bubble._should_use_markdown("just * text") is True
+
+
+class _BubbleApp(App[None]):
+    def __init__(self, bubble: MessageBubble) -> None:
+        super().__init__()
+        self._bubble = bubble
+
+    def compose(self) -> ComposeResult:
+        yield self._bubble
+
+
+class TestMessageBubbleMarkupSafety:
+    async def test_renders_bracketed_content_without_markup_error(self) -> None:
+        # Full render path regression: streamed model text and tool args full of
+        # stray brackets used to raise MarkupError mid-render and abort the whole
+        # bubble (the "stops showing content" symptom). Mount + stream + toggle
+        # collapse must all complete without the render crashing.
+        evil = "see [/etc/hosts] then bold[] and [unclosed tag"
+        bubble = MessageBubble(role="agent", content=evil, model="gemini", duration=1.0)
+        app = _BubbleApp(bubble)
+        async with app.run_test(size=(60, 20)) as pilot:
+            bubble.add_tool_call("read_file", {"path": "[/etc/hosts]", "idx": "[0]"})
+            await pilot.pause()
+            bubble.append_token(" more [text without a close")
+            await pilot.pause()
+            bubble.collapsed = True  # exercises the collapsed-summary sink
+            await pilot.pause()
+            bubble.collapsed = False
+            for _ in range(4):
+                await pilot.pause()
+        # Reaching here means no MarkupError surfaced through the render loop.
+
+
+class TestModeManagerBoldUsername:
+    def test_bolds_username_in_plain_greeting(self) -> None:
+        out = ModeManager._bold_username("Hello bob, welcome", "bob")
+        assert "[b]bob[/b]" in out
+        assert Text.from_markup(out).plain == "Hello bob, welcome"
+
+    def test_escapes_bracketed_greeting(self) -> None:
+        # Model greeting with stray brackets must not raise MarkupError when the
+        # welcome banner renders it.
+        out = ModeManager._bold_username("welcome bob, run [/exit] now", "bob")
+        rendered = Text.from_markup(out)  # raises if markup is malformed
+        assert rendered.plain == "welcome bob, run [/exit] now"
+
+    def test_handles_unbalanced_brackets(self) -> None:
+        out = ModeManager._bold_username("hi bob [unclosed", "bob")
+        assert Text.from_markup(out).plain == "hi bob [unclosed"

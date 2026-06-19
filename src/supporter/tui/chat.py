@@ -49,15 +49,20 @@ class WelcomeBanner(Static):
 
 class ChatContainer(Vertical):
     # Auto-follow the newest content. Disarmed ONLY by an explicit upward user
-    # gesture (mouse wheel up, PageUp, Home) and re-armed when the viewport
-    # returns to the bottom. Disarming must never be driven by geometry: content
-    # reflow (a turn auto-collapsing, markdown re-rendering) clamps scroll_y
-    # downward programmatically, and treating that as "user scrolled up" stranded
-    # the viewport mid-history during streaming. So watch_scroll_y only re-arms.
+    # gesture (mouse wheel up, PageUp, Home) and re-armed only when the user
+    # scrolls back DOWN to the bottom. Re-arm is direction-aware on purpose:
+    # geometry alone is a trap — on short content the bottom tolerance band
+    # covers the whole (tiny) scroll range, so re-arming on proximity would
+    # instantly cancel a wheel-up and let the next streamed chunk yank the
+    # viewport back to the bottom (the reported "stuck at bottom" bug). Reflow
+    # clamps (a turn auto-collapsing, markdown re-rendering) move scroll_y
+    # DOWNWARD (new < old), so requiring new > old also keeps reflow from ever
+    # re-arming spuriously while leaving a disarmed follow disarmed.
     _follow = True
 
-    def watch_scroll_y(self, _old_value: float, new_value: float) -> None:
-        if new_value >= self.max_scroll_y - _BOTTOM_TOLERANCE_ROWS:
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        at_bottom = new_value >= self.max_scroll_y - _BOTTOM_TOLERANCE_ROWS
+        if new_value > old_value and at_bottom:
             self._follow = True
         self._update_scroll_btn()
 

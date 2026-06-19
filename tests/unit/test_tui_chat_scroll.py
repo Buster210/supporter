@@ -86,6 +86,32 @@ async def test_wheel_up_disarms_follow_and_new_content_does_not_yank() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wheel_up_on_short_content_is_not_re_armed_by_geometry() -> None:
+    # Regression for the "stuck at the bottom" trap. When content is only just
+    # taller than the viewport, max_scroll_y == 1 and the whole scroll range sits
+    # inside the bottom tolerance band. The old geometry-only re-arm flipped
+    # follow back on the instant a wheel-up landed in that band, so the gesture
+    # was cancelled and the next streamed chunk yanked the viewport to the bottom
+    # — the user could never read back. Re-arm is now direction-aware, so a
+    # wheel-up here disarms and STAYS disarmed through subsequent growth.
+    app = _ScrollApp()
+    async with app.run_test(size=(40, 10)) as pilot:
+        view = app.query_one("#chat-view", ChatContainer)
+        await app.add_lines(11)
+        await _settle(pilot)
+        assert view.max_scroll_y == 1  # entire range is within the tolerance band
+
+        view._on_mouse_scroll_up(_wheel_up(view))
+        await pilot.pause()
+        assert view._follow is False  # gesture must survive the geometry band
+
+        await app.add_lines(40)  # streaming growth must not steal the viewport
+        await _settle(pilot)
+        assert view._follow is False
+        assert view.scroll_y < view.max_scroll_y - 1  # not yanked to the bottom
+
+
+@pytest.mark.asyncio
 async def test_wheel_up_disarm_is_guarded() -> None:
     app = _ScrollApp()
     async with app.run_test(size=(40, 10)) as pilot:
