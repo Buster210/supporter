@@ -25,6 +25,14 @@ MODAL_MAX_WIDTH_PERCENT = 0.9
 MODAL_PADDING = 6
 COLLAPSED_SUMMARY_LEN = 50
 RENDER_COALESCE_INTERVAL = 0.08
+# A streaming bubble is one Static that is re-rendered whole every coalesce, so
+# the per-tick composite cost grows with the message's height. Past a few
+# screens it nears the frame budget and starves the event loop (frozen spinner,
+# laggy scroll). Stretch the coalesce interval with accumulated size to keep the
+# render duty cycle bounded — the reply still streams live, just in coarser
+# steps once long. ~1 screen of wrapped text per extra base interval, capped.
+STREAM_RENDER_SCALE_CHARS = 1800
+STREAM_RENDER_MAX_INTERVAL = 0.4
 MARKDOWN_SYNTAX_MARKERS = [
     re.compile(p, re.MULTILINE)
     for p in (

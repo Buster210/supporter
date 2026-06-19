@@ -15,6 +15,8 @@ from .constants import (
     COLLAPSED_SUMMARY_LEN,
     MARKDOWN_SYNTAX_MARKERS,
     RENDER_COALESCE_INTERVAL,
+    STREAM_RENDER_MAX_INTERVAL,
+    STREAM_RENDER_SCALE_CHARS,
     THEME,
 )
 
@@ -395,7 +397,14 @@ class MessageBubble(Vertical):
 
         if not self._render_pending:
             self._render_pending = True
-            self.set_timer(RENDER_COALESCE_INTERVAL, self._coalesced_render)
+            self.set_timer(self._render_interval(), self._coalesced_render)
+
+    def _render_interval(self) -> float:
+        # Scale the coalesce delay with accumulated content so the re-render
+        # duty cycle stays bounded as the bubble grows (see STREAM_RENDER_*).
+        size = len(self.content) + len(self.thoughts)
+        interval = RENDER_COALESCE_INTERVAL * (1 + size / STREAM_RENDER_SCALE_CHARS)
+        return min(interval, STREAM_RENDER_MAX_INTERVAL)
 
     def _coalesced_render(self) -> None:
         self._render_pending = False
