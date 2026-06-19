@@ -3,9 +3,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from textual.containers import Vertical
 
 from supporter.tui import SupporterApp
+from supporter.tui.chat import ChatContainer
 from supporter.tui.delegation_listener import (
     DelegationListener,
     format_delegation_progress,
@@ -484,9 +484,9 @@ async def test_capsule_result_reaches_model_without_raw_bubble() -> None:
 @pytest.mark.asyncio
 async def test_render_delegation_signal_mounts_centered_label() -> None:
     app = MagicMock()
-    chat_view = MagicMock(spec=Vertical)
+    chat_view = MagicMock(spec=ChatContainer)
     chat_view.mount = AsyncMock()
-    chat_view.scroll_end = MagicMock()
+    chat_view.follow_end = MagicMock()
     app.query_one = MagicMock(return_value=chat_view)
     app.active_turn = None
     bus = MagicMock()

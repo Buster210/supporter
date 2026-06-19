@@ -188,12 +188,19 @@ class SupporterApp(App[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "scroll-bottom-btn":
-            chat_view = self.query_one("#chat-view", Vertical)
-            chat_view.scroll_end(animate=True)
-            event.button.add_class("hidden")
+            from .chat import ChatContainer
+
+            self.query_one("#chat-view", ChatContainer).jump_to_bottom()
 
     def action_scroll_chat(self, direction: str) -> None:
-        chat_view = self.query_one("#chat-view", Vertical)
+        from .chat import ChatContainer
+
+        chat_view = self.query_one("#chat-view", ChatContainer)
+        # animate=False: Textual's scroll_* default to a smooth animation, which
+        # is a burst of full-viewport repaints per keypress. On a real terminal
+        # that can't absorb the writes fast enough they back up and stall the
+        # event loop (frozen spinner, "stuck" scroll); an instant jump is one
+        # repaint. Headless never feels this, so it stayed hidden.
         if direction == "pageup":
             chat_view.scroll_page_up()
         elif direction == "pagedown":
@@ -204,6 +211,8 @@ class SupporterApp(App[None]):
             chat_view.scroll_end()
 
     def action_clear_screen(self) -> None:
+        from .chat import ChatTurn, QueuedMessagesDisplay
+
         chat_view = self.query_one("#chat-view")
         if not chat_view.query("*") and (not self.agent or not self.agent.history):
             self._toast_manager.notify(self, "Session already clear", type="system")
@@ -268,9 +277,9 @@ class SupporterApp(App[None]):
 
     async def _mount_user_turn(self, text: str, role: str = "user") -> ChatTurn:
         from .bubble import MessageBubble
-        from .chat import ChatTurn
+        from .chat import ChatContainer, ChatTurn
 
-        chat_view = self.query_one("#chat-view", Vertical)
+        chat_view = self.query_one("#chat-view", ChatContainer)
         new_turn = ChatTurn(MessageBubble(role=role, content=text))
         self.active_turn = new_turn
         await chat_view.mount(new_turn)
@@ -339,6 +348,9 @@ class SupporterApp(App[None]):
         if not self._user_message_queue:
             return
 
+        from .chat import QueuedMessagesDisplay
+
+        self._is_processing = True
         items = list(self._user_message_queue)
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
@@ -455,7 +467,9 @@ class SupporterApp(App[None]):
 
         body = text.replace("<br/>", "").replace("`", "").strip()
         label = Static(body, classes="delegation-signal")
-        chat_view = self.query_one("#chat-view", Vertical)
+        from .chat import ChatContainer
+
+        chat_view = self.query_one("#chat-view", ChatContainer)
         target = self.active_turn or chat_view
         await target.mount(label)
         chat_view.scroll_end()
@@ -505,7 +519,9 @@ class SupporterApp(App[None]):
         ]
         bubble.collapsed = False
         self._delegation_bubbles[job_id] = bubble
-        chat_view = self.query_one("#chat-view", Vertical)
+        from .chat import ChatContainer
+
+        chat_view = self.query_one("#chat-view", ChatContainer)
         target = self.active_turn or chat_view
         if hasattr(target, "mount_bubble"):
             await target.mount_bubble(bubble)
