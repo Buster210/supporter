@@ -1,6 +1,6 @@
 """End-to-end live demonstration of the autonomous surface.
 
-Runs the full plan \u2192 implement \u2192 verify \u2192 recipe \u2192 recover \u2192 memory
+Runs the full plan -> implement -> verify -> recipe -> recover -> memory
 chain against a fake Gemini provider that I drive. Captures evidence
 at each phase (counters, decision-log tail, memory notes, recipe
 runs, recovery log) and prints a transcript.
@@ -28,6 +28,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # Make sure src/ is importable when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from supporter import config as _config_mod
+from supporter.lifecycle import reset_runtime_state
 from supporter.llm.types import GenOptions, Message
 from supporter.recover import AutoRecover, note_recovery
 from supporter.types import LLMChunk, LLMProvider, LLMResult
@@ -39,13 +41,12 @@ from supporter.verify import (
     check_no_unicode_garble,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-class FakeProvider(LLMProvider):
+class FakeProvider(LLMProvider):  # type: ignore[misc]
     """A scripted Gemini stand-in.
 
     `responses` is a list of LLMResult OR Exception. We pop one per
@@ -103,30 +104,12 @@ async def main() -> int:
         os.environ[k] = v
 
     # Force re-read of config so GEMINI_API_KEYS takes effect.
-    from supporter import config as cfg
-    from supporter import keypool
-    from supporter import memory
+    from supporter import keypool, memory
     from supporter import pool as pool_mod
-    from supporter import recipes
-    from supporter.tools import memory_tools, recipe_tools
+    from supporter.tools import recipe_tools
 
-    cfg.config = cfg.load_config()
-    # All sibling modules that did `from .config import config` bound the
-    # *old* AppConfig instance. Re-bind so they all see the fresh values
-    # for the duration of this script.
-    import supporter.keypool as _kp
-    import supporter.memory as _mem
-    import supporter.recipes as _rcp
-    import supporter.pool as _pl
-
-    _kp.config = cfg.config
-    _mem.config = cfg.config
-    _rcp.config = cfg.config
-    _pl.config = cfg.config
-
-    keypool.reset_key_pool()
-    memory._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
-    recipes._STORE = None  # type: ignore[attr-defined]
+    _config_mod.reload_config()
+    reset_runtime_state()
 
     try:
         # -------------------------------------------------------------
@@ -137,7 +120,7 @@ async def main() -> int:
         print(f"configured keys: {list(pool.keys)}")
         pool.report_failure("k1", ConnectionResetError("quota exceeded"))
         snap = keypool.pool_snapshot()
-        print(f"snapshot after 1 failure on k1:")
+        print("snapshot after 1 failure on k1:")
         print(json.dumps(snap, indent=2))
         for _ in range(6):
             assert pool.acquire() in {"k2", "k3"}
@@ -169,7 +152,7 @@ async def main() -> int:
         for i in range(100):
             memory.append_note("noise", {"i": i})
         # compact is a method on the singleton, not a module-level helper.
-        mem = memory._get_memory()  # type: ignore[attr-defined]
+        mem = memory._get_memory()
         assert mem is not None
         removed = mem.compact()
         print(f"compacted: removed {removed} oldest noise notes")
@@ -298,9 +281,7 @@ async def main() -> int:
             [
                 check_min_chars(min_chars=8),
                 check_no_unicode_garble(),
-                check_json_shape(
-                    required_keys=("summary", "confidence", "evidence")
-                ),
+                check_json_shape(required_keys=("summary", "confidence", "evidence")),
             ],
         )
         outcome = await loop.run(_caller, "give me a structured result")
@@ -373,10 +354,8 @@ async def main() -> int:
             if v is None:
                 os.environ.pop(k, None)
             else:
-                os.environ[k] = v
-        keypool.reset_key_pool()
-        memory._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
-        recipes._STORE = None  # type: ignore[attr-defined]
+                os.environ[k] = v  # type: ignore[assignment]
+        reset_runtime_state()
         with contextlib.suppress(Exception):
             shutil.rmtree(tmp)
 

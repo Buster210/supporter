@@ -122,41 +122,43 @@ class ChatAgent:
         from .recipes import recipes_snapshot
         from .tools.memory_tools import memory_render_block
 
-        parts: list[str] = []
-        try:
+        def _memory_block() -> str:
             block = memory_render_block(limit=limit)
-            if block:
-                parts.append(block)
-        except Exception as exc:
-            logger.debug(
-                f"ChatAgent: memory injection failed [{type(exc).__name__}]: {exc}"
-            )
-        try:
+            return block or ""
+
+        def _recipes_block() -> str:
             snap = recipes_snapshot()
             total = snap.get("total", 0) if isinstance(snap, dict) else 0
-            if total:
-                parts.append(
-                    f"KNOWN AUTOMATIONS ({total} recipes available): "
-                    "use the recipe_list / recipe_run / recipe_find tools "
-                    "to replay any saved multi-step workflow without LLM tokens."
-                )
-        except Exception as exc:
-            logger.debug(
-                f"ChatAgent: recipe injection failed [{type(exc).__name__}]: {exc}"
+            if not total:
+                return ""
+            return (
+                f"KNOWN AUTOMATIONS ({total} recipes available): "
+                "use the recipe_list / recipe_run / recipe_find tools "
+                "to replay any saved multi-step workflow without LLM tokens."
             )
-        try:
+
+        def _kinds_block() -> str:
             snap = memory_snapshot()
             kinds = snap.get("kinds", {}) if isinstance(snap, dict) else {}
-            if kinds:
-                kinds_repr = ", ".join(
-                    f"{k}={v}"
-                    for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
-                )
-                parts.append(f"WORKING MEMORY TOTALS: {kinds_repr}")
-        except Exception as exc:
-            logger.debug(
-                f"ChatAgent: kinds injection failed [{type(exc).__name__}]: {exc}"
+            if not kinds:
+                return ""
+            kinds_repr = ", ".join(
+                f"{k}={v}"
+                for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
             )
+            return f"WORKING MEMORY TOTALS: {kinds_repr}"
+
+        parts: list[str] = []
+        for render in (_memory_block, _recipes_block, _kinds_block):
+            try:
+                rendered = render()
+            except Exception as exc:
+                logger.debug(
+                    f"ChatAgent: injection failed [{type(exc).__name__}]: {exc}"
+                )
+                continue
+            if rendered:
+                parts.append(rendered)
         return "\n\n".join(parts)
 
     @staticmethod
@@ -412,13 +414,7 @@ class ChatAgent:
         if history:
             logger.info("Agent: syncing history from result.history")
             new_list = list(history)
-            if self._store and len(new_list) > self._store_prev_len:
-                for msg in new_list[self._store_prev_len :]:
-                    self._store.append(msg)
-            self.history = new_list
-            self._trim_history()
-            if self._store:
-                self._store_prev_len = len(self.history)
+            self._commit_synced_history(new_list)
             return
 
         # Fall back to AFC history (convert google Content → neutral Message).
@@ -426,13 +422,7 @@ class ChatAgent:
             logger.info("Agent: syncing history from automatic function calling")
             new_list_raw = result.automatic_function_calling_history
             new_list = [content_to_message(c) for c in new_list_raw]
-            if self._store and len(new_list) > self._store_prev_len:
-                for msg in new_list[self._store_prev_len :]:
-                    self._store.append(msg)
-            self.history = new_list
-            self._trim_history()
-            if self._store:
-                self._store_prev_len = len(self.history)
+            self._commit_synced_history(new_list)
             return
 
         self.history.append(user_message)
@@ -445,11 +435,28 @@ class ChatAgent:
             return
 
         self.history.append(assistant_message)
+        self._commit_synced_history(None)
+        logger.info(f"Agent: history synced — new size={len(self.history)}")
+
+    def _commit_synced_history(self, new_list: list[Any] | None) -> None:
+        if new_list is not None:
+            if self._store and len(new_list) > self._store_prev_len:
+                for msg in new_list[self._store_prev_len :]:
+                    self._store.append(msg)
+            self.history = new_list
+            # _store_prev_len reflects the POST-trim length for the
+            # replace-history branches (matches the original ordering).
+            self._trim_history()
+            if self._store:
+                self._store_prev_len = len(self.history)
+            return
+        # Branch 3: user + assistant already appended to self.history; mirror
+        # the assistant append to the store and bookkeep the PRE-trim length,
+        # then trim (matches the original ordering for this branch).
         if self._store:
-            self._store.append(assistant_message)
+            self._store.append(self.history[-1])
             self._store_prev_len = len(self.history)
         self._trim_history()
-        logger.info(f"Agent: history synced — new size={len(self.history)}")
 
     async def execute_stream(
         self, prompt: str, exclude_from_history: bool = False

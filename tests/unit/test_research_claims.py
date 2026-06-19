@@ -83,9 +83,7 @@ def test_corroboration_key_distinguishes_numbers() -> None:
 
 
 def test_corroboration_key_without_kept_distinct_from_with() -> None:
-    assert _corroboration_key("tea with milk") != _corroboration_key(
-        "tea without milk"
-    )
+    assert _corroboration_key("tea with milk") != _corroboration_key("tea without milk")
 
 
 def test_corroboration_key_falls_back_when_all_function_words() -> None:

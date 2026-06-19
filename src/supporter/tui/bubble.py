@@ -460,6 +460,45 @@ class MessageBubble(Vertical):
             self._message_view.styles.width = self._message_view.size.width
         self._update_ui_content()
 
+    def replace_content(self, new_text: str) -> None:
+        """Replace plain-text content of a finalized pure-text bubble.
+
+        No-op if new_text is blank. Preserves non-content elements (thought/
+        tool_calls/subagent_result) in their original relative order.
+        """
+        if not new_text.strip():
+            return
+        if not any(el["type"] == "content" for el in self.elements):
+            # No existing content elements — nothing to replace.
+            return
+        self.content = new_text
+
+        new_el: dict[str, Any] = {
+            "type": "content",
+            "content": new_text,
+            "collapsed": False,
+            "manually_interacted": False,
+        }
+        # Rebuild: non-content elements keep their relative order; the run of
+        # content elements collapses to the single new element, placed where the
+        # first content element was.
+        rebuilt: list[dict[str, Any]] = []
+        inserted = False
+        for el in self.elements:
+            if el["type"] == "content":
+                if not inserted:
+                    rebuilt.append(new_el)
+                    inserted = True
+                # Drop the other content elements (collapsed into the one above).
+            else:
+                rebuilt.append(el)
+        self.elements = rebuilt
+
+        # Let the existing markdown-detection path decide on re-render.
+        new_el["_recheck_markdown"] = True
+
+        self._update_ui_content()
+
     def on_click(self, event: Click) -> None:
         if not self.collapsed:
             return

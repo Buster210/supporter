@@ -270,10 +270,10 @@ def host_is_fast(host: str) -> bool:
         return True
 
     # 2. Config/env allowlist
-    raw = config.browser_trusted_hosts
+    raw = getattr(config, "browser_trusted_hosts", "")
     if raw:
         for h in raw.split(","):
-            if h.strip() == clean:
+            if h.strip().lower().removeprefix("www.") == clean:
                 return True
 
     # 3. User-confirmed via dialog (persisted trust store)
@@ -291,8 +291,8 @@ async def record_clean_interaction(host: str) -> None:
         return
     clean = host.removeprefix("www.")
 
-    # Fast hosts and already-confirmed hosts don't need promotion tracking
-    if clean in FAST_HOSTS or _get_trust_store().is_confirmed(clean):
+    # Already-trusted hosts (built-in, config allowlist, or confirmed) skip promotion
+    if host_is_fast(clean):
         return
 
     store = _get_trust_store()
@@ -307,6 +307,10 @@ async def record_clean_interaction(host: str) -> None:
 
     if store.is_suppressed(clean):
         store._save()
+        return
+    # When auto-approve is on, trust comes only from explicit config /
+    # trusted.json — never as a side-effect of auto-approved interactions.
+    if getattr(config, "browser_auto_approve", False):
         return
 
     # Record the promotion attempt timestamp

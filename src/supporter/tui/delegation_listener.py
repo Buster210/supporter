@@ -130,99 +130,106 @@ class DelegationListener:
         try:
             bus = get_bus(job_id)
             queue = bus.subscribe()
-            while True:
-                event = await queue.get()
-                if event is None:
-                    break
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
 
-                if isinstance(event, (MilestoneStarted, TaskStarted)):
-                    pass
+                    if isinstance(event, (MilestoneStarted, TaskStarted)):
+                        pass
 
-                elif isinstance(event, TaskOutputChunk):
-                    # Append to the bounded per-task tail and MERGE it into the
-                    # task's existing state — never replace, which would wipe the
-                    # scheduler-owned status/agent fields for a running task.
-                    current_tail = self._output_tails.get(event.task_id, "")
-                    truncated = _truncate_output_tail(current_tail + event.chunk)
-                    self._output_tails[event.task_id] = truncated
-                    state = bus.get_snapshot().get(event.task_id, {})
-                    bus.update_task_state(
-                        event.task_id, {**state, "output_tail": truncated}
-                    )
-                    # Coalesce: only re-render on a newline boundary.
-                    if "\n" in event.chunk:
-                        await self._upsert_progress(job_id, bus)
-
-                elif isinstance(event, TaskAnomaly):
-                    msg = (
-                        f"AGENT ALERT: Task `{event.task_id}` [{event.agent_label}] "
-                        f"has used {event.elapsed_seconds:.0f}s of its "
-                        f"{event.timeout:.0f}s limit and may be hung."
-                    )
-                    self._render_signal(msg)
-
-                elif isinstance(event, TaskCompleted):
-                    self._clear_task_tail(bus, event.task_id)
-                    await self._emit_task_event(bus, job_id, "DONE", event.task_id)
-
-                elif isinstance(event, TaskFailed):
-                    self._clear_task_tail(bus, event.task_id)
-                    await self._emit_task_event(bus, job_id, "FAIL", event.task_id)
-
-                elif isinstance(event, TaskTimedOut):
-                    self._clear_task_tail(bus, event.task_id)
-                    await self._emit_task_event(bus, job_id, "TIMEOUT", event.task_id)
-
-                elif isinstance(event, TaskSkipped):
-                    self._clear_task_tail(bus, event.task_id)
-                    await self._emit_task_event(bus, job_id, "SKIP", event.task_id)
-
-                elif isinstance(event, MilestoneCompleted):
-                    # Clear all stored tails
-                    self._output_tails.clear()
-                    try:
-                        payload = serialize_capsule_result(job_id)
-                    except Exception as e:
-                        logger.warning(
-                            "Falling back to legacy delegation result for "
-                            f"{job_id} [{type(e).__name__}]: {e}"
+                    elif isinstance(event, TaskOutputChunk):
+                        # Append to the bounded per-task tail and MERGE it into the
+                        # task's existing state — never replace, which would wipe the
+                        # scheduler-owned status/agent fields for a running task.
+                        current_tail = self._output_tails.get(event.task_id, "")
+                        truncated = _truncate_output_tail(current_tail + event.chunk)
+                        self._output_tails[event.task_id] = truncated
+                        state = bus.get_snapshot().get(event.task_id, {})
+                        bus.update_task_state(
+                            event.task_id, {**state, "output_tail": truncated}
                         )
-                        has_failures = any(
-                            str(result.get("status")) in {"error", "timeout", "skipped"}
-                            for result in event.results
-                        )
-                        payload = serialize_results(
-                            event.milestone,
-                            event.results,
-                            event.total_duration,
-                            job_id,
-                            status="completed_with_failures"
-                            if has_failures
-                            else "completed",
-                        )
-                    self._inject_capsule_result(payload)
-                    self._drop_progress(job_id)
-                    break
+                        # Coalesce: only re-render on a newline boundary.
+                        if "\n" in event.chunk:
+                            await self._upsert_progress(job_id, bus)
 
-                elif isinstance(event, MilestoneCancelled):
-                    # Clear all stored tails
-                    self._output_tails.clear()
-                    try:
-                        payload = serialize_capsule_result(job_id)
-                    except Exception as e:
-                        logger.warning(
-                            "Falling back to legacy cancellation result for "
-                            f"{job_id} [{type(e).__name__}]: {e}"
+                    elif isinstance(event, TaskAnomaly):
+                        msg = (
+                            f"AGENT ALERT: Task `{event.task_id}` "
+                            f"[{event.agent_label}] "
+                            f"has used {event.elapsed_seconds:.0f}s of its "
+                            f"{event.timeout:.0f}s limit and may be hung."
                         )
-                        payload = {
-                            "job_id": job_id,
-                            "milestone": event.milestone,
-                            "status": "cancelled",
-                            "total_duration": round(event.total_duration, 2),
-                        }
-                    self._inject_capsule_result(payload)
-                    self._drop_progress(job_id)
-                    break
+                        self._render_signal(msg)
+
+                    elif isinstance(event, TaskCompleted):
+                        self._clear_task_tail(bus, event.task_id)
+                        await self._emit_task_event(bus, job_id, "DONE", event.task_id)
+
+                    elif isinstance(event, TaskFailed):
+                        self._clear_task_tail(bus, event.task_id)
+                        await self._emit_task_event(bus, job_id, "FAIL", event.task_id)
+
+                    elif isinstance(event, TaskTimedOut):
+                        self._clear_task_tail(bus, event.task_id)
+                        await self._emit_task_event(
+                            bus, job_id, "TIMEOUT", event.task_id
+                        )
+
+                    elif isinstance(event, TaskSkipped):
+                        self._clear_task_tail(bus, event.task_id)
+                        await self._emit_task_event(bus, job_id, "SKIP", event.task_id)
+
+                    elif isinstance(event, MilestoneCompleted):
+                        # Clear all stored tails
+                        self._output_tails.clear()
+                        try:
+                            payload = serialize_capsule_result(job_id)
+                        except Exception as e:
+                            logger.warning(
+                                "Falling back to legacy delegation result for "
+                                f"{job_id} [{type(e).__name__}]: {e}"
+                            )
+                            has_failures = any(
+                                str(result.get("status"))
+                                in {"error", "timeout", "skipped"}
+                                for result in event.results
+                            )
+                            payload = serialize_results(
+                                event.milestone,
+                                event.results,
+                                event.total_duration,
+                                job_id,
+                                status="completed_with_failures"
+                                if has_failures
+                                else "completed",
+                            )
+                        self._inject_capsule_result(payload)
+                        self._drop_progress(job_id)
+                        break
+
+                    elif isinstance(event, MilestoneCancelled):
+                        # Clear all stored tails
+                        self._output_tails.clear()
+                        try:
+                            payload = serialize_capsule_result(job_id)
+                        except Exception as e:
+                            logger.warning(
+                                "Falling back to legacy cancellation result for "
+                                f"{job_id} [{type(e).__name__}]: {e}"
+                            )
+                            payload = {
+                                "job_id": job_id,
+                                "milestone": event.milestone,
+                                "status": "cancelled",
+                                "total_duration": round(event.total_duration, 2),
+                            }
+                        self._inject_capsule_result(payload)
+                        self._drop_progress(job_id)
+                        break
+            finally:
+                bus.unsubscribe(queue)
 
         except Exception as e:
             logger.error(f"Delegation listener failed for {job_id}: {e}")
