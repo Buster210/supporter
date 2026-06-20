@@ -5,6 +5,8 @@ import contextlib
 import re
 from typing import Any
 
+from rich.markup import escape
+
 from ..logger import logger
 from ..types import ModeChanged
 
@@ -184,8 +186,11 @@ class ModeManager:
 
     @staticmethod
     def _bold_username(text: str, username: str) -> str:
+        # The greeting is model-generated; escape it so stray brackets are shown
+        # literally instead of parsed as Rich markup (which raises MarkupError and
+        # blanks the welcome banner). The bold tag is the only markup we inject.
         pattern = re.escape(username)
-        return re.sub(pattern, f"[b]{username}[/b]", text, count=1)
+        return re.sub(pattern, f"[b]{username}[/b]", escape(text), count=1)
 
     async def handle_command(self, command: str) -> bool:
         cmd = command.lower().strip()

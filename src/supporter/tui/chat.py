@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.events import Click
+from textual.events import Click, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widgets import Label, Static
@@ -17,7 +17,9 @@ from .bubble import MessageBubble
 from .constants import SPINNER_FRAMES
 from .utils import apply_crystal_gradient
 
-_AT_BOTTOM_THRESHOLD = 4
+# Re-arm auto-follow once the viewport is within this many rows of the bottom.
+# Kept tight so the user has to be essentially at the bottom to resume following.
+_BOTTOM_TOLERANCE_ROWS = 1
 
 _SUPPORTER_ART = (
     " █▀▀ █ █ █▀█ █▀█ █▀█ █▀█ ▀█▀ █▀▀ █▀█ \n"
@@ -46,14 +48,65 @@ class WelcomeBanner(Static):
 
 
 class ChatContainer(Vertical):
-    def watch_scroll_y(self, _old_value: float, new_value: float) -> None:
-        self._was_at_bottom = new_value >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
+    # Auto-follow the newest content. Disarmed ONLY by an explicit upward user
+    # gesture (mouse wheel up, PageUp, Home) and re-armed only when the user
+    # scrolls back DOWN to the bottom. Re-arm is direction-aware on purpose:
+    # geometry alone is a trap — on short content the bottom tolerance band
+    # covers the whole (tiny) scroll range, so re-arming on proximity would
+    # instantly cancel a wheel-up and let the next streamed chunk yank the
+    # viewport back to the bottom (the reported "stuck at bottom" bug). Reflow
+    # clamps (a turn auto-collapsing, markdown re-rendering) move scroll_y
+    # DOWNWARD (new < old), so requiring new > old also keeps reflow from ever
+    # re-arming spuriously while leaving a disarmed follow disarmed.
+    _follow = True
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        at_bottom = new_value >= self.max_scroll_y - _BOTTOM_TOLERANCE_ROWS
+        if new_value > old_value and at_bottom:
+            self._follow = True
         self._update_scroll_btn()
 
-    def watch_virtual_size(self, _old_value: object, new_value: object) -> None:
-        if getattr(self, "_was_at_bottom", True):
+    def watch_virtual_size(self, _old_value: object, _new_value: object) -> None:
+        if self._follow:
+            # immediate=True pins to the bottom in this same frame so the view
+            # never trails the growing reply (deferred-only lands one render
+            # behind, and the render throttle widens that gap into a visible
+            # "stuck mid-reply"); the deferred call then settles onto the true
+            # bottom once layout works out the final max_scroll_y.
+            self.scroll_end(animate=False, immediate=True)
             self.scroll_end(animate=False)
         self._update_scroll_btn()
+
+    def _on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        # A vertical wheel-up is the user choosing to read back, so stop chasing
+        # the bottom. Ignore it when there is no scroll range (content fits the
+        # viewport, so the gesture is a no-op and later growth must still pin to
+        # the bottom) or when it carries a horizontal modifier (ctrl/shift).
+        if not (event.ctrl or event.shift) and self.max_scroll_y > 0:
+            self._follow = False
+        super()._on_mouse_scroll_up(event)
+
+    def scroll_page_up(self, *args: object, **kwargs: object) -> None:
+        self._follow = False
+        super().scroll_page_up(*args, **kwargs)
+
+    def scroll_home(self, *args: object, **kwargs: object) -> None:
+        self._follow = False
+        super().scroll_home(*args, **kwargs)
+
+    def follow_end(self) -> None:
+        """Scroll to the bottom only while auto-follow is armed.
+
+        Use for background updates (delegation progress, system messages) that
+        must not steal the viewport when the user has scrolled up to read.
+        """
+        if self._follow:
+            self.scroll_end(animate=False)
+
+    def jump_to_bottom(self) -> None:
+        """Force the viewport to the bottom and resume auto-follow."""
+        self._follow = True
+        self.scroll_end(animate=False)
 
     def _update_scroll_btn(self) -> None:
         from textual.css.query import NoMatches
@@ -63,18 +116,10 @@ class ChatContainer(Vertical):
                 self._scroll_wrapper = self.app.query_one("#scroll-btn-wrapper")
         except NoMatches:
             return
-
-        wrapper = self._scroll_wrapper
-        at_bottom = (
-            self.max_scroll_y <= 0
-            or getattr(self, "_was_at_bottom", True)
-            or self.scroll_y >= self.max_scroll_y - _AT_BOTTOM_THRESHOLD
+        at_bottom = self.max_scroll_y <= 0 or (
+            self.scroll_y >= self.max_scroll_y - _BOTTOM_TOLERANCE_ROWS
         )
-        if not at_bottom:
-            if wrapper.has_class("hidden"):
-                wrapper.remove_class("hidden")
-        elif not wrapper.has_class("hidden"):
-            wrapper.add_class("hidden")
+        self._scroll_wrapper.set_class(at_bottom, "hidden")
 
 
 class ChatTurn(Vertical):

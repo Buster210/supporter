@@ -20,17 +20,58 @@ _STRIP_CHARS = " \t\n\r.,;:!?\"'()[]{}"
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
     {
-        "a", "an", "the", "of", "to", "in", "on", "at", "by", "for", "with",
-        "as", "is", "are", "was", "were", "be", "been", "being", "and", "or",
-        "that", "this", "these", "those", "it", "its", "from", "into", "than",
-        "then", "which", "who", "whom", "whose", "what", "when", "where",
-        "will", "would", "has", "have", "had", "do", "does", "did", "but",
+        "a",
+        "an",
+        "the",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "for",
+        "with",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "and",
+        "or",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "from",
+        "into",
+        "than",
+        "then",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "what",
+        "when",
+        "where",
+        "will",
+        "would",
+        "has",
+        "have",
+        "had",
+        "do",
+        "does",
+        "did",
+        "but",
     }
 )
 # Never dropped, even though some are short function words -- they flip meaning.
 _NEGATIONS = frozenset(
-    {"not", "no", "never", "none", "cannot", "nor", "without", "neither",
-     "nothing"}
+    {"not", "no", "never", "none", "cannot", "nor", "without", "neither", "nothing"}
 )
 
 

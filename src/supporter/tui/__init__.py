@@ -8,11 +8,26 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Button, Input, Label
+from textual.widgets import Button, Input, Label, Static
 
+from ..config import config
 from ..logger import init_logger, logger, shutdown_logger
 from ..tools.base import ToolError
 from ..types import ModeChanged
+from .bubble import MessageBubble
+from .chat import (
+    ChatContainer,
+    ChatTurn,
+    QueuedMessagesDisplay,
+    SupporterHeader,
+    ThinkingIndicator,
+    WelcomeBanner,
+)
+from .delegation_listener import DelegationListener, format_delegation_progress
+from .message_processor import ChatMessageProcessor
+from .modals import ConfirmationModal, ProfileSelectModal
+from .mode_manager import ModeManager
+from .utils import ToastManager
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -22,7 +37,7 @@ if TYPE_CHECKING:
     from textual.widgets import Button, Input
 
     from ..agent import ChatAgent
-    from .chat import ChatTurn
+
 
 
 class SupporterApp(App[None]):
@@ -53,10 +68,6 @@ class SupporterApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        from .message_processor import ChatMessageProcessor
-        from .mode_manager import ModeManager
-        from .utils import ToastManager
-
         self.agent: ChatAgent | None = None
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
@@ -64,8 +75,6 @@ class SupporterApp(App[None]):
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
         self._delegation_bubbles: dict[str, Any] = {}
-        from .delegation_listener import DelegationListener
-
         self._delegation_listener = DelegationListener(
             inject_message=self._inject_delegation_message,
             upsert_progress=self._upsert_delegation_progress,
@@ -79,13 +88,15 @@ class SupporterApp(App[None]):
         status = "ENABLED" if event.enabled else "DISABLED"
 
         target = self.active_turn or self.query_one("#chat-view")
-        from .bubble import MessageBubble
-
         await target.mount(
             MessageBubble(role="agent", content=f"Single Agent {status}")
         )
 
     async def on_mount(self) -> None:
+        # Tool/pool imports below are intentionally lazy: each pulls in modules
+        # that spawn subprocesses, open OS handles, or touch the network at
+        # import time (e.g. browser prewarm). Keeping them out of module top
+        # defers that work until the app is actually starting up.
         from ..tools.bash.sandbox import register_bash_callbacks
         from ..tools.browser.guardrails import register_browse_callback
         from ..tools.delegate.api import set_delegation_start_callback
@@ -130,6 +141,8 @@ class SupporterApp(App[None]):
         from ..tools.browser.session import close_session
         from ..tools.file_ops import register_confirmation_callback
 
+        self.workers.cancel_all()
+
         register_confirmation_callback(None)
         register_bash_callbacks(confirmation=None, notification=None)
         register_browse_callback(
@@ -158,21 +171,66 @@ class SupporterApp(App[None]):
 
     async def _setup_agent(self, use_live: bool = False) -> None:
         await self._mode_manager.setup_agent(use_live=use_live)
+        await self._replay_history()
+
+    async def _replay_history(self) -> None:
+        """Mount full persisted history as scrollable bubbles on startup.
+
+        Loads ALL records from the history store (uncapped) so sessions with
+        >200 turns still display everything in the UI. Does not trigger the
+        thinking indicator or any LLM call.
+        """
+        if not self.agent or not self.agent._store:
+            return
+
+        from ..llm.types import TextPart, ToolCallPart
+        records = self.agent._store.load(limit=None)
+        if not records:
+            return
+
+        chat_view = self.query_one("#chat-view", ChatContainer)
+
+        # Hide welcome banner when history is non-empty.
+        for banner in self.query(WelcomeBanner):
+            banner.message = ""
+
+        current_turn: ChatTurn | None = None
+
+        for msg in records:
+            role: str = msg.role
+
+            if role == "user":
+                text = " ".join(
+                    p.text for p in msg.parts if isinstance(p, TextPart) and p.text
+                )
+                current_turn = ChatTurn(MessageBubble(role="user", content=text))
+                await chat_view.mount(current_turn)
+
+            elif role == "model":
+                bubble = MessageBubble(role="agent", content="", streaming=False)
+                for part in msg.parts:
+                    if isinstance(part, TextPart) and part.text:
+                        bubble.append_token(part.text)
+                    elif isinstance(part, ToolCallPart):
+                        bubble.add_tool_call(part.name, part.args)
+                    # ToolResultPart / ImagePart — skip cleanly.
+                bubble.finalize()
+                if current_turn is not None:
+                    await current_turn.mount_bubble(bubble)
+                else:
+                    await chat_view.mount(bubble)
+
+            # role == "tool" — internal, skip cleanly.
+
+        chat_view.jump_to_bottom()
 
     def compose(self) -> ComposeResult:
-        from .chat import (
-            ChatContainer,
-            QueuedMessagesDisplay,
-            SupporterHeader,
-            ThinkingIndicator,
-            WelcomeBanner,
-        )
-
         with Vertical(id="main-container"):
             yield SupporterHeader(id="supporter-header")
-            yield WelcomeBanner(id="welcome-banner", classes="hidden")
             with ChatContainer(id="chat-view"):
-                pass
+                # Inside the scroll view so the greeting scrolls away with the
+                # chat history instead of staying pinned above it.
+                yield WelcomeBanner(id="welcome-banner", classes="hidden")
             yield ThinkingIndicator(id="thinking-indicator")
 
             with Horizontal(id="scroll-btn-wrapper", classes="hidden"):
@@ -188,32 +246,33 @@ class SupporterApp(App[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "scroll-bottom-btn":
-            chat_view = self.query_one("#chat-view", Vertical)
-            chat_view.scroll_end(animate=True)
-            event.button.add_class("hidden")
+            self.query_one("#chat-view", ChatContainer).jump_to_bottom()
 
     def action_scroll_chat(self, direction: str) -> None:
-        chat_view = self.query_one("#chat-view", Vertical)
+        chat_view = self.query_one("#chat-view", ChatContainer)
+        # animate=False: Textual's scroll_* default to a smooth animation, which
+        # is a burst of full-viewport repaints per keypress. On a real terminal
+        # that can't absorb the writes fast enough they back up and stall the
+        # event loop (frozen spinner, "stuck" scroll); an instant jump is one
+        # repaint. Headless never feels this, so it stayed hidden.
         if direction == "pageup":
-            chat_view.scroll_page_up()
+            chat_view.scroll_page_up(animate=False)
         elif direction == "pagedown":
-            chat_view.scroll_page_down()
+            chat_view.scroll_page_down(animate=False)
         elif direction == "home":
-            chat_view.scroll_home()
+            chat_view.scroll_home(animate=False)
         elif direction == "end":
-            chat_view.scroll_end()
+            chat_view.jump_to_bottom()
 
     def action_clear_screen(self) -> None:
         chat_view = self.query_one("#chat-view")
-        if not chat_view.query("*") and (not self.agent or not self.agent.history):
+        if not chat_view.query(ChatTurn) and (not self.agent or not self.agent.history):
             self._toast_manager.notify(self, "Session already clear", type="system")
             return
 
-        from .chat import QueuedMessagesDisplay
-
         if self.agent:
             self.agent.clear_history()
-        chat_view.query("*").remove()
+        chat_view.query(ChatTurn).remove()
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
         self.active_turn = None
@@ -223,12 +282,6 @@ class SupporterApp(App[None]):
 
     def stop_thinking(self) -> None:
         self.active_queries = max(0, self.active_queries - 1)
-
-    def _start_thinking(self) -> None:
-        self.start_thinking()
-
-    def _stop_thinking(self) -> None:
-        self.stop_thinking()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         user_text = event.value.strip()
@@ -243,8 +296,6 @@ class SupporterApp(App[None]):
             return
 
         if self._is_processing:
-            from .chat import QueuedMessagesDisplay
-
             self._user_message_queue.append((user_text, False))
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
                 [msg for msg, _ in self._user_message_queue]
@@ -267,14 +318,11 @@ class SupporterApp(App[None]):
         )
 
     async def _mount_user_turn(self, text: str, role: str = "user") -> ChatTurn:
-        from .bubble import MessageBubble
-        from .chat import ChatTurn
-
-        chat_view = self.query_one("#chat-view", Vertical)
+        chat_view = self.query_one("#chat-view", ChatContainer)
         new_turn = ChatTurn(MessageBubble(role=role, content=text))
         self.active_turn = new_turn
         await chat_view.mount(new_turn)
-        chat_view.scroll_end()
+        chat_view.jump_to_bottom()
         return new_turn
 
     async def _handle_command(self, command: str) -> bool:
@@ -292,7 +340,7 @@ class SupporterApp(App[None]):
         role: str = "user",
     ) -> None:
         self._is_processing = True
-        chat_view = self.query_one("#chat-view", Vertical)
+        chat_view = self.query_one("#chat-view", ChatContainer)
         if mount_user:
             await self._mount_user_turn(text, role=role)
             self.query_one("#user-input").focus()
@@ -304,22 +352,47 @@ class SupporterApp(App[None]):
             raise RuntimeError("Invalid UI state: chat view container missing")
 
         self.status_label = "Thinking"
-        self._start_thinking()
+        self.start_thinking()
         start_time = getattr(target_container, "turn_start_time", time.perf_counter())
 
         try:
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
-            await self._process_streaming_execution(
-                text, target_container, start_time, self.agent, exclude_from_history
-            )
-        except ToolError as e:
-            from .bubble import MessageBubble
 
+            # Bind agent ref for plan tool handler
+            from ..tools.planning import bind_agent, clear_agent
+            bind_agent(self.agent)
+            try:
+                bubble = await self._process_streaming_execution(
+                    text,
+                    target_container,
+                    start_time,
+                    self.agent,
+                    exclude_from_history,
+                )
+                # Capture plan info BEFORE the finally resets it.
+                objective = getattr(self.agent, "last_plan_objective", "")
+                plan = getattr(self.agent, "last_plan", "")
+                # Show the plan if the orchestrator called the plan tool
+                if plan:
+                    await target_container.mount(
+                        MessageBubble(role="system", content=f"PLAN:\n{plan}")
+                    )
+                    chat_view.jump_to_bottom()
+                # Verify the planned turn post-execution (no-op when unplanned).
+                result_text = getattr(bubble, "content", "") if bubble else ""
+                await self._verify_planned_turn(
+                    objective, plan, result_text, target_container, chat_view
+                )
+            finally:
+                # Reset always so a stale plan from a failed turn never leaks
+                # into the next turn's display.
+                self.agent.last_plan = ""
+                self.agent.last_plan_objective = ""
+                clear_agent()
+        except ToolError as e:
             await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
         except Exception as e:
-            from .bubble import MessageBubble
-
             logger.error(f"UI Message Cycle Error [{type(e).__name__}]: {e}")
             await chat_view.mount(
                 MessageBubble(
@@ -330,22 +403,23 @@ class SupporterApp(App[None]):
             )
         finally:
             self._is_processing = False
-            self._stop_thinking()
+            self.stop_thinking()
             await self._flush_queued_messages()
 
     async def _flush_queued_messages(self) -> None:
-        from .chat import QueuedMessagesDisplay
-
+        # Only mark busy once we know there is work; setting it before the
+        # empty-queue check wedged the app permanently after the first turn
+        # (flag stuck True with nothing draining).
         if not self._user_message_queue:
             return
 
+        self._is_processing = True
         items = list(self._user_message_queue)
         self._user_message_queue.clear()
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
         combined_text = "\n\n".join(msg for msg, _ in items)
         has_user_message = any(not is_sys for _, is_sys in items)
-        self._is_processing = True
 
         if has_user_message:
             self.run_worker(self._process_message_cycle(combined_text, mount_user=True))
@@ -359,15 +433,49 @@ class SupporterApp(App[None]):
         start_time: float,
         agent: ChatAgent,
         exclude_from_history: bool = False,
-    ) -> None:
-        await self._message_processor.process_streaming(
+    ) -> Any:
+        return await self._message_processor.process_streaming(
             text, target, start_time, agent, exclude_from_history
         )
 
+    async def _verify_planned_turn(
+        self,
+        objective: str,
+        plan: str,
+        result_text: str,
+        target: Vertical,
+        chat_view: ChatContainer,
+    ) -> None:
+        """Verify a planned turn's result; warn only when judged incomplete.
+
+        No-op when the turn was unplanned (``objective`` empty). ``verify_plan``
+        is fail-open and never raises; the guard here swallows anything else so
+        verification can never break the turn.
+        """
+        if not objective:
+            return
+        try:
+            from ..prompts import DELEGATE_AGENT_ROSTER
+            from ..worker import verify_plan
+
+            model = DELEGATE_AGENT_ROSTER.get("planner", {}).get(
+                "model", "gemma-4-31b-it"
+            )
+            is_done, reason = await verify_plan(objective, plan, result_text, model)
+            if not is_done:
+                await target.mount(
+                    MessageBubble(
+                        role="system",
+                        content=f"⚠ Verification: incomplete — {reason}",
+                    )
+                )
+                chat_view.jump_to_bottom()
+        except Exception as exc:
+            logger.warning(f"verify_plan gate failed: {exc}")
+
+
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
-
-        from .modals import ConfirmationModal
 
         event = threading.Event()
         result = [False]
@@ -387,8 +495,6 @@ class SupporterApp(App[None]):
 
     def _confirm_bash(self, tokens: list[str], cwd: str) -> bool:
         import threading
-
-        from .modals import ConfirmationModal
 
         event = threading.Event()
         result = [False]
@@ -412,15 +518,13 @@ class SupporterApp(App[None]):
         return result[0]
 
     async def _confirm_browse(self, title: str, detail: str) -> bool:
-        from .modals import ConfirmationModal
-
+        if getattr(config, "browser_auto_approve", False):
+            return True
         return await self.push_screen_wait(
             ConfirmationModal(title=title, content=detail, language="text")
         )
 
     async def _select_profile(self, profiles: list[Any]) -> str | None:
-        from .modals import ProfileSelectModal
-
         return await self.push_screen_wait(ProfileSelectModal(profiles))
 
     def _safe_call(
@@ -438,8 +542,6 @@ class SupporterApp(App[None]):
 
     def _inject_system_message(self, text: str) -> None:
         if self._is_processing:
-            from .chat import QueuedMessagesDisplay
-
             self._user_message_queue.append((text, True))
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
                 [msg for msg, _ in self._user_message_queue]
@@ -451,14 +553,12 @@ class SupporterApp(App[None]):
         self._safe_call(lambda: self.run_worker(self._render_delegation_signal(text)))
 
     async def _render_delegation_signal(self, text: str) -> None:
-        from textual.widgets import Static
-
         body = text.replace("<br/>", "").replace("`", "").strip()
         label = Static(body, classes="delegation-signal")
-        chat_view = self.query_one("#chat-view", Vertical)
+        chat_view = self.query_one("#chat-view", ChatContainer)
         target = self.active_turn or chat_view
         await target.mount(label)
-        chat_view.scroll_end()
+        chat_view.follow_end()
 
     async def _process_system_message(self, text: str) -> None:
         # The aggregate delegation result must reach the model, but its raw JSON
@@ -477,16 +577,8 @@ class SupporterApp(App[None]):
     def _start_delegation_listener(self, job_id: str) -> None:
         self.run_worker(self._delegation_listener.listen(job_id), exclusive=False)
 
-    @staticmethod
-    def _format_delegation_progress(job_id: str, bus: Any) -> str:
-        from .delegation_listener import format_delegation_progress
-
-        return format_delegation_progress(job_id, bus)
-
     async def _upsert_delegation_progress(self, job_id: str, bus: Any) -> None:
-        from .bubble import MessageBubble
-
-        content = self._format_delegation_progress(job_id, bus)
+        content = format_delegation_progress(job_id, bus)
         bubble = self._delegation_bubbles.get(job_id)
         if bubble is not None:
             bubble.elements[0]["content"] = content
@@ -505,13 +597,13 @@ class SupporterApp(App[None]):
         ]
         bubble.collapsed = False
         self._delegation_bubbles[job_id] = bubble
-        chat_view = self.query_one("#chat-view", Vertical)
+        chat_view = self.query_one("#chat-view", ChatContainer)
         target = self.active_turn or chat_view
         if hasattr(target, "mount_bubble"):
             await target.mount_bubble(bubble)
         else:
             await target.mount(bubble)
-        chat_view.scroll_end()
+        chat_view.follow_end()
 
     def _inject_delegation_message(self, message: str) -> None:
         self._safe_call(self._inject_system_message, message)

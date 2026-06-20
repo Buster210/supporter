@@ -91,7 +91,7 @@ async def web_search(query: str, max_results: int = _DEFAULT_MAX_RESULTS) -> str
         )
     try:
         capped = max(1, min(int(max_results), _MAX_RESULTS_CAP))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         capped = _DEFAULT_MAX_RESULTS
 
     logger.info(f"Tool: web_search -- query='{query}' max_results={capped}")

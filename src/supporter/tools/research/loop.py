@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from ...logger import logger
@@ -14,7 +15,7 @@ _MAX_ROUNDS = 6
 _GAP_SAMPLE = 12
 
 
-def _assess_log_path(question_id: str):
+def _assess_log_path(question_id: str) -> Path:
     return research_dir(question_id) / "assess_log.jsonl"
 
 

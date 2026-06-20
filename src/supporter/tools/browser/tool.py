@@ -234,7 +234,7 @@ async def browse(
     if (
         success
         and action not in guardrails._ALWAYS_CONFIRM_ACTIONS
-        and not _last_confirmation_needed
+        and not _last_confirmation_needed.get()
     ):
         page = session.active_page()
         if page is not None:

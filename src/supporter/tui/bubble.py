@@ -4,6 +4,7 @@ import contextlib
 import re
 from typing import Any, cast
 
+from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.events import Click
@@ -15,6 +16,8 @@ from .constants import (
     COLLAPSED_SUMMARY_LEN,
     MARKDOWN_SYNTAX_MARKERS,
     RENDER_COALESCE_INTERVAL,
+    STREAM_RENDER_MAX_INTERVAL,
+    STREAM_RENDER_SCALE_CHARS,
     THEME,
 )
 
@@ -111,7 +114,7 @@ class MessageBubble(Vertical):
                 for i, el in enumerate(self.elements):
                     yield from self._create_widgets_for_element(i, el)
 
-            self._message_view = Static(self.content, id="main-content")
+            self._message_view = Static(escape(self.content), id="main-content")
             self._message_view.display = False
             yield self._message_view
 
@@ -197,7 +200,7 @@ class MessageBubble(Vertical):
         if len(self.content) > COLLAPSED_SUMMARY_LEN or "\n" in self.content:
             summary += "..."
         hint = f"[{THEME['meta_gray']} italic](Click to expand/collapse)[/] "
-        self._message_view.update(f"{hint}{summary}")
+        self._message_view.update(f"{hint}{escape(summary)}")
         self._message_view.display = True
         if self._meta_label:
             self._meta_label.display = False
@@ -311,7 +314,7 @@ class MessageBubble(Vertical):
         if self._element_is_markdown(el):
             view.update(_md(content))
         else:
-            view.update(content)
+            view.update(escape(content))
 
     def _create_widgets_for_element(self, idx: int, el: dict[str, Any]) -> list[Static]:
         if el["type"] == "subagent_result":
@@ -338,7 +341,7 @@ class MessageBubble(Vertical):
         if self._element_is_markdown(el):
             view = Static(_md(content), classes="main-content")
         else:
-            view = Static(content, classes="main-content")
+            view = Static(escape(content), classes="main-content")
         view.set_class(idx > 0, "section-gap")
         return [view]
 
@@ -355,7 +358,10 @@ class MessageBubble(Vertical):
             if len(full_line) > max_width:
                 full_line = f"{full_line[: max_width - 3]}..."
             lines.append(full_line)
-        return "\n".join(lines)
+        # Tool names/args are model-controlled text; escape so stray brackets
+        # ("[/path]", "[idx]") are shown literally instead of parsed as Rich
+        # console markup, which raises MarkupError and aborts the render.
+        return escape("\n".join(lines))
 
     def _get_tool_line_max_width(self) -> int:
         width = self.size.width
@@ -395,7 +401,14 @@ class MessageBubble(Vertical):
 
         if not self._render_pending:
             self._render_pending = True
-            self.set_timer(RENDER_COALESCE_INTERVAL, self._coalesced_render)
+            self.set_timer(self._render_interval(), self._coalesced_render)
+
+    def _render_interval(self) -> float:
+        # Scale the coalesce delay with accumulated content so the re-render
+        # duty cycle stays bounded as the bubble grows (see STREAM_RENDER_*).
+        size = len(self.content) + len(self.thoughts)
+        interval = RENDER_COALESCE_INTERVAL * (1 + size / STREAM_RENDER_SCALE_CHARS)
+        return min(interval, STREAM_RENDER_MAX_INTERVAL)
 
     def _coalesced_render(self) -> None:
         self._render_pending = False
@@ -445,6 +458,45 @@ class MessageBubble(Vertical):
             self._meta_label.display = not self.collapsed
         if self._message_view and self._message_view.size.width > 0:
             self._message_view.styles.width = self._message_view.size.width
+        self._update_ui_content()
+
+    def replace_content(self, new_text: str) -> None:
+        """Replace plain-text content of a finalized pure-text bubble.
+
+        No-op if new_text is blank. Preserves non-content elements (thought/
+        tool_calls/subagent_result) in their original relative order.
+        """
+        if not new_text.strip():
+            return
+        if not any(el["type"] == "content" for el in self.elements):
+            # No existing content elements — nothing to replace.
+            return
+        self.content = new_text
+
+        new_el: dict[str, Any] = {
+            "type": "content",
+            "content": new_text,
+            "collapsed": False,
+            "manually_interacted": False,
+        }
+        # Rebuild: non-content elements keep their relative order; the run of
+        # content elements collapses to the single new element, placed where the
+        # first content element was.
+        rebuilt: list[dict[str, Any]] = []
+        inserted = False
+        for el in self.elements:
+            if el["type"] == "content":
+                if not inserted:
+                    rebuilt.append(new_el)
+                    inserted = True
+                # Drop the other content elements (collapsed into the one above).
+            else:
+                rebuilt.append(el)
+        self.elements = rebuilt
+
+        # Let the existing markdown-detection path decide on re-render.
+        new_el["_recheck_markdown"] = True
+
         self._update_ui_content()
 
     def on_click(self, event: Click) -> None:

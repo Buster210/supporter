@@ -65,6 +65,7 @@ class ChatMessageProcessor:
                 duration = time.perf_counter() - start_time
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
+                await self._maybe_format_bubble(state.bubble)
 
         return state.bubble
 
@@ -137,6 +138,32 @@ class ChatMessageProcessor:
         name = (tool_name or "").lower()
         status = "Searching" if "google_search" in name else f"Using {tool_name}"
         self._update_status(status)
+
+    async def _maybe_format_bubble(self, bubble: Any) -> None:
+        """Pass a finalized bubble's prose content through the fallback formatter.
+
+        Always on (gemini_fallback_model defaults to a fast model). Formats the
+        content of any bubble — mixed bubbles included; ``replace_content`` only
+        swaps the content run and preserves tool_calls/thought/subagent_result
+        elements. No-op when there is no model or no content. Never raises.
+        """
+        try:
+            from ..config import config
+
+            model = config.gemini_fallback_model
+            if not model:
+                return
+
+            if not bubble.content.strip():
+                return
+
+            from ..worker import format_response
+
+            formatted = await format_response(bubble.content, model)
+            if formatted and formatted != bubble.content:
+                bubble.replace_content(formatted)
+        except Exception as exc:
+            logger.warning(f"_maybe_format_bubble failed: {exc}")
 
     def _update_status(self, status: str) -> None:
         self._app.status_label = status

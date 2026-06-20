@@ -20,7 +20,10 @@ $modal-border: #333;
 }
 
 #chat-view {
-    height: 100%;
+    height: 1fr;
+    padding: 0;
+    margin: 0;
+    layout: vertical;
     overflow-y: scroll;
     scrollbar-size-vertical: 1;
     scrollbar-background: $bg;
@@ -48,13 +51,6 @@ SupporterHeader {
     margin-top: 1;
     color: $primary;
     text-style: bold;
-}
-
-#chat-view {
-    height: 1fr;
-    padding: 0;
-    margin: 0;
-    layout: vertical;
 }
 
 MessageBubble {

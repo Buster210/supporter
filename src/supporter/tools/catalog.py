@@ -19,6 +19,7 @@ ORCHESTRATOR_TOOL_NAMES = (
     "research_assess",
     "verify_claims",
     "research_report",
+    "plan",
 )
 
 
@@ -61,6 +62,7 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         memory_status,
         memory_write,
     )
+    from .planning import plan_tool
     from .recipe_tools import (
         recipe_delete,
         recipe_find,
@@ -157,6 +159,7 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         "recipe_delete": ToolSpec("recipe_delete", recipe_delete),
         "recipe_list": ToolSpec("recipe_list", recipe_list),
         "recipe_status": ToolSpec("recipe_status", recipe_status),
+        "plan": ToolSpec("plan", plan_tool),
     }
     # ToolSpec is frozen=True dataclass — safe to share cached refs without copying
     _BUILTIN_CATALOG_CACHE[include_bash] = catalog

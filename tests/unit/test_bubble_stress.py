@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from supporter.tui.bubble import MessageBubble
+from supporter.tui.constants import (
+    RENDER_COALESCE_INTERVAL,
+    STREAM_RENDER_MAX_INTERVAL,
+)
 
 
 def _make_immediate_timer(bubble: MessageBubble) -> None:
@@ -64,6 +68,21 @@ def test_finalize_collapses_last_thought_or_tool_section() -> None:
     assert bubble.elements[-1]["type"] == "thought"
     assert bubble.elements[-1]["collapsed"] is True
     assert bubble.model == "gemini"
+
+
+def test_render_interval_throttles_with_size_and_caps() -> None:
+    # A short bubble renders at the base cadence; as content accumulates the
+    # coalesce interval stretches (bounded duty cycle) and saturates at the cap,
+    # so a tall streaming message can never starve the event loop.
+    bubble = MessageBubble(role="agent", content="", streaming=True)
+
+    assert bubble._render_interval() == RENDER_COALESCE_INTERVAL
+
+    bubble.content = "x" * 1800
+    assert bubble._render_interval() > RENDER_COALESCE_INTERVAL
+
+    bubble.content = "x" * 100_000
+    assert bubble._render_interval() == STREAM_RENDER_MAX_INTERVAL
 
 
 def test_finalize_empty_streaming_is_safe() -> None:

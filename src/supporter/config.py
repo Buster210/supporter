@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from .prompts import (
 )
 from .types import AppConfig
 
-__all__ = ["AppConfig", "config"]
+__all__ = ["AppConfig", "config", "reload_config"]
 
 HTTP_RATE_LIMIT = 429
 HTTP_INTERNAL_ERROR = 500
@@ -69,7 +70,7 @@ DELEGATE_DEFAULT_PARALLEL = 3
 DELEGATE_DEFAULT_TIMEOUT = 180
 DELEGATE_MAX_TIMEOUT = 600
 DELEGATE_MAX_TASKS = 10
-DELEGATE_MAX_OUTPUT_CHARS = 10000
+DELEGATE_MAX_OUTPUT_CHARS = 30000
 DELEGATE_MAX_RETRIES = 2
 
 DELEGATE_RESULT_REPAIR = True
@@ -165,7 +166,7 @@ def load_config() -> AppConfig:
         gemini_live_fallback_model=os.getenv(
             "GEMINI_LIVE_FALLBACK_MODEL", MODEL_GEMINI_LIVE_FALLBACK
         ),
-        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL"),
+        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", DEFAULT_MODEL),
         log_file=os.getenv("LOG_FILE", "app.log"),
         voice_name=os.getenv("GEMINI_VOICE_NAME", "Puck"),
         default_system_instruction=os.getenv(
@@ -191,7 +192,9 @@ def load_config() -> AppConfig:
         delegate_default_timeout=DELEGATE_DEFAULT_TIMEOUT,
         delegate_max_timeout=DELEGATE_MAX_TIMEOUT,
         delegate_max_tasks=DELEGATE_MAX_TASKS,
-        delegate_max_output_chars=DELEGATE_MAX_OUTPUT_CHARS,
+        delegate_max_output_chars=_int_env(
+            "DELEGATE_MAX_OUTPUT_CHARS", DELEGATE_MAX_OUTPUT_CHARS
+        ),
         delegate_default_persona=DELEGATE_DEFAULT_PERSONA,
         delegate_agent_roster=DELEGATE_AGENT_ROSTER,
         delegate_max_retries=_int_env("DELEGATE_MAX_RETRIES", DELEGATE_MAX_RETRIES),
@@ -222,6 +225,12 @@ def load_config() -> AppConfig:
         browser_debug_overlay=_bool_env("BROWSER_DEBUG_OVERLAY", False),
         browser_parallel_pilots=_bool_env("BROWSER_PARALLEL_PILOTS", True),
         browser_diff_threshold=_int_env("BROWSER_DIFF_THRESHOLD", 40),
+        browser_idle_close_seconds=_int_env("BROWSER_IDLE_CLOSE_SECONDS", 600),
+        # D1: Browser output caps - env overrides
+        browse_page_chars_cap=_int_env("BROWSE_PAGE_CHARS_CAP", 50_000),
+        browse_batch_chars_cap=_int_env("BROWSE_BATCH_CHARS_CAP", 150_000),
+        browse_max_links=_int_env("BROWSE_MAX_LINKS", 100),
+        browse_eval_chars_cap=_int_env("BROWSE_EVAL_CHARS_CAP", 16_000),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),
@@ -230,7 +239,6 @@ def load_config() -> AppConfig:
         reconnect_backoff_base=float(os.getenv("RECONNECT_BACKOFF_BASE", "0.5")),
         reconnect_backoff_cap=float(os.getenv("RECONNECT_BACKOFF_CAP", "8.0")),
         prewarm_safety_margin=float(os.getenv("PREWARM_SAFETY_MARGIN", "5.0")),
-        keepalive_enabled=_bool_env("KEEPALIVE_ENABLED", True),
         idle_monitor_enabled=_bool_env(
             "IDLE_MONITOR_ENABLED",
             _bool_env("KEEPALIVE_ENABLED", True),
@@ -239,7 +247,20 @@ def load_config() -> AppConfig:
         browser_trusted_hosts=os.getenv("BROWSER_TRUSTED_HOSTS", ""),
         browser_micro_behavior_rate=float(os.getenv("MICRO_BEHAVIOR_RATE", "0.06")),
         browser_promotion_threshold=_int_env("BROWSER_PROMOTION_THRESHOLD", 5),
+        browser_auto_approve=_bool_env("BROWSER_AUTO_APPROVE", True),
     )
 
 
 config = load_config()
+
+
+def reload_config() -> AppConfig:
+    """Reload config from env, mutating the existing module-global ``config``
+    object in place so all importers that did ``from .config import config``
+    automatically see the updated values without rebinding.
+    """
+    global config
+    fresh = load_config()
+    for f in dataclasses.fields(AppConfig):
+        setattr(config, f.name, getattr(fresh, f.name))
+    return config

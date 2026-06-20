@@ -7,14 +7,13 @@ import pytest
 from supporter.config import config
 from supporter.tools.base import ToolError
 from supporter.tools.research import driver as drv
-from supporter.tools.research.claims import load_claims
+from supporter.tools.research.claims import load_claims, research_dir
 from supporter.tools.research.driver import (
     _extract_claims,
     _generate_queries,
     _loads_lenient,
     _reset_store,
     question_id_for,
-    research_dir,
     run_deep_research,
 )
 
@@ -203,3 +202,133 @@ async def test_run_deep_research_skips_error_pages(
     assert result["pages_read"] == 1  # visited, but content was an error
     assert result["verification"]["total_assertions"] == 0
     assert extract_called is False  # never extract from an error page
+
+
+# ---------------------------------------------------------------------------
+# P3 Item 1 — parallel read/search focused tests
+# ---------------------------------------------------------------------------
+
+
+async def test_parallel_reads_use_distinct_agent_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N concurrent URL reads must each use a distinct browser agent_id."""
+    urls = [f"https://src{i}.example.com/page" for i in range(3)]
+    seen_ids: list[str] = []
+
+    async def fake_search(query: str, n: int) -> list[dict[str, Any]]:
+        return [{"url": u} for u in urls]
+
+    async def fake_read(url: str, full_page: bool) -> str:
+        return f"content of {url}"
+
+    async def fake_structured(_p: Any, system: str, _user: str, _schema: Any) -> Any:
+        if "generate" in system.lower():
+            return {"queries": ["q1"]}
+        return {"claims": [{"statement": "fact", "snippet": "s"}]}
+
+    original_set_agent_id = None
+
+    def capturing_set_agent_id(aid: str) -> Any:
+        seen_ids.append(aid)
+        if original_set_agent_id is not None:
+            return original_set_agent_id(aid)
+        return None
+
+    import supporter.tools.browser.session as bsession
+
+    original_set_agent_id = bsession.set_agent_id
+    monkeypatch.setattr(bsession, "set_agent_id", capturing_set_agent_id)
+    monkeypatch.setattr(drv, "_search_results", fake_search)
+    monkeypatch.setattr(drv, "_read_page", fake_read)
+    monkeypatch.setattr(drv, "_structured", fake_structured)
+
+    result = await run_deep_research(
+        "test question",
+        provider=_Provider(),
+        max_rounds=1,
+        results_per_query=3,
+        subqueries=1,
+    )
+    assert result["pages_read"] == 3
+    # Each URL read used a distinct agent id
+    assert len(seen_ids) == 3
+    assert len(set(seen_ids)) == 3, f"agent ids not distinct: {seen_ids}"
+
+
+async def test_one_failing_url_does_not_sink_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A _read_page exception on one URL must not fail the whole round."""
+    async def fake_search(query: str, n: int) -> list[dict[str, Any]]:
+        return [{"url": "https://good.com/p"}, {"url": "https://bad.com/p"}]
+
+    async def fake_read(url: str, full_page: bool) -> str:
+        if "bad" in url:
+            raise OSError("network error")
+        return "good page content"
+
+    async def fake_structured(_p: Any, system: str, _user: str, _schema: Any) -> Any:
+        if "generate" in system.lower():
+            return {"queries": ["q1"]}
+        return {"claims": [{"statement": "good fact", "snippet": "s"}]}
+
+    monkeypatch.setattr(drv, "_search_results", fake_search)
+    monkeypatch.setattr(drv, "_read_page", fake_read)
+    monkeypatch.setattr(drv, "_structured", fake_structured)
+
+    result = await run_deep_research(
+        "question",
+        provider=_Provider(),
+        max_rounds=1,
+        results_per_query=2,
+        subqueries=1,
+    )
+    # bad URL visited but read failed; good URL read and claim extracted
+    assert result["pages_read"] == 2  # both URLs in visited
+    assert result["verification"]["total_assertions"] == 1
+    trace = result["trace"][0]
+    assert trace["pages_read"] == 1  # only good.com counted as a page
+    assert trace["claims_ingested"] == 1
+
+
+async def test_ingest_is_sequential_not_concurrent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ingest called in main loop sequentially, not inside concurrent read tasks."""
+    ingest_calls: list[str] = []
+    real_ingest = drv.ingest_claims
+
+    def tracking_ingest(
+        qid: str, *, task_id: str, agent: str, claims: list[Any], round: int = 0
+    ) -> int:
+        ingest_calls.append(task_id)
+        return real_ingest(
+            qid, task_id=task_id, agent=agent, claims=claims, round=round
+        )
+
+    monkeypatch.setattr(drv, "ingest_claims", tracking_ingest)
+
+    urls = [f"https://s{i}.example.com/p" for i in range(3)]
+
+    async def fake_search(query: str, n: int) -> list[dict[str, Any]]:
+        return [{"url": u} for u in urls]
+
+    async def fake_read(url: str, full_page: bool) -> str:
+        return f"page {url}"
+
+    async def fake_structured(_p: Any, system: str, _user: str, _schema: Any) -> Any:
+        if "generate" in system.lower():
+            return {"queries": ["q1"]}
+        return {"claims": [{"statement": f"fact from {_user[:20]}", "snippet": "s"}]}
+
+    monkeypatch.setattr(drv, "_search_results", fake_search)
+    monkeypatch.setattr(drv, "_read_page", fake_read)
+    monkeypatch.setattr(drv, "_structured", fake_structured)
+
+    await run_deep_research(
+        "q", provider=_Provider(), max_rounds=1, results_per_query=3, subqueries=1
+    )
+    # All 3 pages read; ingest called 3 times sequentially (same task_id each)
+    assert len(ingest_calls) == 3
+    assert all(tid == "round-1" for tid in ingest_calls)
