@@ -363,20 +363,27 @@ class SupporterApp(App[None]):
             from ..tools.planning import bind_agent, clear_agent
             bind_agent(self.agent)
             try:
-                await self._process_streaming_execution(
+                bubble = await self._process_streaming_execution(
                     text,
                     target_container,
                     start_time,
                     self.agent,
                     exclude_from_history,
                 )
-                # Show the plan if the orchestrator called the plan tool
+                # Capture plan info BEFORE the finally resets it.
+                objective = getattr(self.agent, "last_plan_objective", "")
                 plan = getattr(self.agent, "last_plan", "")
+                # Show the plan if the orchestrator called the plan tool
                 if plan:
                     await target_container.mount(
                         MessageBubble(role="system", content=f"PLAN:\n{plan}")
                     )
                     chat_view.jump_to_bottom()
+                # Verify the planned turn post-execution (no-op when unplanned).
+                result_text = getattr(bubble, "content", "") if bubble else ""
+                await self._verify_planned_turn(
+                    objective, plan, result_text, target_container, chat_view
+                )
             finally:
                 # Reset always so a stale plan from a failed turn never leaks
                 # into the next turn's display.
@@ -426,10 +433,45 @@ class SupporterApp(App[None]):
         start_time: float,
         agent: ChatAgent,
         exclude_from_history: bool = False,
-    ) -> None:
-        await self._message_processor.process_streaming(
+    ) -> Any:
+        return await self._message_processor.process_streaming(
             text, target, start_time, agent, exclude_from_history
         )
+
+    async def _verify_planned_turn(
+        self,
+        objective: str,
+        plan: str,
+        result_text: str,
+        target: Vertical,
+        chat_view: ChatContainer,
+    ) -> None:
+        """Verify a planned turn's result; warn only when judged incomplete.
+
+        No-op when the turn was unplanned (``objective`` empty). ``verify_plan``
+        is fail-open and never raises; the guard here swallows anything else so
+        verification can never break the turn.
+        """
+        if not objective:
+            return
+        try:
+            from ..prompts import DELEGATE_AGENT_ROSTER
+            from ..worker import verify_plan
+
+            model = DELEGATE_AGENT_ROSTER.get("planner", {}).get(
+                "model", "gemma-4-31b-it"
+            )
+            is_done, reason = await verify_plan(objective, plan, result_text, model)
+            if not is_done:
+                await target.mount(
+                    MessageBubble(
+                        role="system",
+                        content=f"⚠ Verification: incomplete — {reason}",
+                    )
+                )
+                chat_view.jump_to_bottom()
+        except Exception as exc:
+            logger.warning(f"verify_plan gate failed: {exc}")
 
 
     def _confirm_write(self, path: Path, content: str) -> bool:
