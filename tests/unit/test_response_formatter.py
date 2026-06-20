@@ -184,27 +184,30 @@ class TestMaybeFormatBubble:
         assert bubble.content == "clean text"
 
     @pytest.mark.asyncio
-    async def test_tool_calls_bubble_skipped(self) -> None:
+    async def test_mixed_bubble_formatted_preserving_tool_calls(self) -> None:
+        """Mixed bubbles are now formatted; tool_calls element survives."""
         processor = self._make_processor()
         bubble = _make_bubble(["some text"])
         # Inject a tool_calls element to simulate a mixed bubble.
-        bubble.elements.append(
-            {
-                "type": "tool_calls",
-                "calls": [{"name": "read_file", "args": {}}],
-                "collapsed": False,
-                "manually_interacted": False,
-            }
-        )
+        tool_el = {
+            "type": "tool_calls",
+            "calls": [{"name": "read_file", "args": {}}],
+            "collapsed": False,
+            "manually_interacted": False,
+        }
+        bubble.elements.append(tool_el)
 
         with patch("supporter.config.config") as mock_cfg:
             mock_cfg.gemini_fallback_model = "fallback-model"
             with patch(
                 "supporter.worker.format_response", new_callable=AsyncMock
             ) as mock_fmt:
+                mock_fmt.return_value = "clean text"
                 await processor._maybe_format_bubble(bubble)
 
-        mock_fmt.assert_not_called()
+        mock_fmt.assert_called_once_with("some text", "fallback-model")
+        assert bubble.content == "clean text"
+        assert tool_el in bubble.elements
 
     @pytest.mark.asyncio
     async def test_empty_content_bubble_skipped(self) -> None:

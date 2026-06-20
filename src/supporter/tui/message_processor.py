@@ -140,23 +140,18 @@ class ChatMessageProcessor:
         self._update_status(status)
 
     async def _maybe_format_bubble(self, bubble: Any) -> None:
-        """Pass a finalized pure-text bubble through the fallback formatter.
+        """Pass a finalized bubble's prose content through the fallback formatter.
 
-        No-op when gemini_fallback_model is None (the common default path).
-        Skips bubbles with tool_calls/thought/subagent_result elements —
-        interleaved non-text bubbles are left raw; widen later if needed.
-        Never raises into the stream.
+        Always on (gemini_fallback_model defaults to a fast model). Formats the
+        content of any bubble — mixed bubbles included; ``replace_content`` only
+        swaps the content run and preserves tool_calls/thought/subagent_result
+        elements. No-op when there is no model or no content. Never raises.
         """
         try:
             from ..config import config
 
             model = config.gemini_fallback_model
             if not model:
-                return
-
-            # Only format pure-text replies.
-            non_text_types = {"tool_calls", "thought", "subagent_result"}
-            if any(el["type"] in non_text_types for el in bubble.elements):
                 return
 
             if not bubble.content.strip():

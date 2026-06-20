@@ -113,6 +113,12 @@ class TestLoadConfig:
         config = load_config()
         assert config.gemini_live_model == "gemini-3.1-flash-live-preview"
 
+    def test_load_config_fallback_model_defaults_on(self, clean_env: Any) -> None:
+        """Response formatting is always-on: fallback model defaults, not None."""
+        os.environ["GEMINI_API_KEY"] = "test-key"  # pragma: allowlist secret
+        config = load_config()
+        assert config.gemini_fallback_model == "gemma-4-31b-it"
+
     def test_load_config_write_confirmation_default_true(self, clean_env: Any) -> None:
         os.environ["GEMINI_API_KEY"] = "test-key"  # pragma: allowlist secret
         config = load_config()
