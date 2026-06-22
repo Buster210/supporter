@@ -134,15 +134,26 @@ def _planner_profile() -> dict[str, Any]:
     return profile
 
 
-async def make_plan(objective: str, persona: str, model: str) -> str:
+async def make_plan(
+    objective: str, persona: str, model: str, tools_roster: str = ""
+) -> str:
     """Shared planner: ask a model with *persona* to plan *objective*.
+
+    When *tools_roster* is given, the planner is told exactly which tools the
+    orchestrator has so the plan is grounded in real capabilities.
 
     Returns the plan text, or empty string on failure. Never raises.
     """
     try:
         provider = get_provider(model_name=model, shared=False)
         options = GenOptions(system_instruction=persona)
-        result = await provider.generate(f"OBJECTIVE:\n{objective}", options)
+        prompt = f"OBJECTIVE:\n{objective}"
+        if tools_roster:
+            prompt = (
+                "ORCHESTRATOR TOOLS (the executor has exactly these — plan using "
+                f"only them):\n{tools_roster}\n\n{prompt}"
+            )
+        result = await provider.generate(prompt, options)
         plan = (getattr(result, "text", "") or "").strip()
         logger.info(f"planner produced a {len(plan)}-char plan")
         return plan

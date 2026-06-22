@@ -359,9 +359,15 @@ class SupporterApp(App[None]):
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
 
-            # Bind agent ref for plan tool handler
-            from ..tools.planning import bind_agent, clear_agent
+            # Bind agent ref + live plan-signal sink for the plan tool handler.
+            from ..tools.planning import (
+                bind_agent,
+                clear_agent,
+                clear_plan_signal_callback,
+                set_plan_signal_callback,
+            )
             bind_agent(self.agent)
+            set_plan_signal_callback(self._render_plan_signal_now)
             try:
                 bubble = await self._process_streaming_execution(
                     text,
@@ -370,15 +376,11 @@ class SupporterApp(App[None]):
                     self.agent,
                     exclude_from_history,
                 )
-                # Capture plan info BEFORE the finally resets it.
+                # Capture plan info BEFORE the finally resets it. The plan bubble
+                # was already mounted IN ORDER by the signal callback during the
+                # turn — we only need it here for post-execution verification.
                 objective = getattr(self.agent, "last_plan_objective", "")
                 plan = getattr(self.agent, "last_plan", "")
-                # Show the plan if the orchestrator called the plan tool
-                if plan:
-                    await target_container.mount(
-                        MessageBubble(role="system", content=f"PLAN:\n{plan}")
-                    )
-                    chat_view.jump_to_bottom()
                 # Verify the planned turn post-execution (no-op when unplanned).
                 result_text = getattr(bubble, "content", "") if bubble else ""
                 await self._verify_planned_turn(
@@ -390,6 +392,7 @@ class SupporterApp(App[None]):
                 self.agent.last_plan = ""
                 self.agent.last_plan_objective = ""
                 clear_agent()
+                clear_plan_signal_callback()
         except ToolError as e:
             await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
         except Exception as e:
@@ -558,6 +561,19 @@ class SupporterApp(App[None]):
         chat_view = self.query_one("#chat-view", ChatContainer)
         target = self.active_turn or chat_view
         await target.mount(label)
+        chat_view.follow_end()
+
+    def _render_plan_signal_now(self, kind: str, text: str) -> None:
+        """Thread/async-safe sink for planner signals (kind, text), in order."""
+        self._safe_call(lambda: self.run_worker(self._render_plan_signal(kind, text)))
+
+    async def _render_plan_signal(self, kind: str, text: str) -> None:
+        chat_view = self.query_one("#chat-view", ChatContainer)
+        target = self.active_turn or chat_view
+        if kind == "plan":
+            await target.mount(MessageBubble(role="system", content=f"PLAN:\n{text}"))
+        else:
+            await target.mount(Static(text, classes="delegation-signal"))
         chat_view.follow_end()
 
     async def _process_system_message(self, text: str) -> None:

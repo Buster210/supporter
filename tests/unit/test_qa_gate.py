@@ -1,5 +1,4 @@
 import asyncio
-import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,10 +39,10 @@ def _result() -> dict[str, Any]:
 def _run_gate(outputs_for: Any) -> tuple[dict[str, Any], list[str]]:
     """Run the gate with run_sub_agent mocked by a per-task-id output function.
 
-    Forces the LLM tier-1 path (``DELEGATE_TIER1_OBJECTIVE=0``) so the
-    existing orchestration assertions on tier-1/tier-2/correction call
-    counts keep exercising the unchanged loop body, independent of the new
-    objective tier-1 dispatch.
+    Forces the LLM tier-1 path via the legitimate no-objective-commands
+    fallback (``resolve_tier1_commands`` -> []) so the orchestration
+    assertions on tier-1/tier-2/correction call counts keep exercising the
+    loop body. There is no off-switch to bypass objective tier-1.
     """
     calls: list[str] = []
 
@@ -54,7 +53,7 @@ def _run_gate(outputs_for: Any) -> tuple[dict[str, Any], list[str]]:
     bus = MagicMock(spec=DelegationBus)
     with (
         patch.object(qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)),
-        patch.dict(os.environ, {"DELEGATE_TIER1_OBJECTIVE": "0"}),
+        patch.object(qa_gate, "resolve_tier1_commands", lambda _repo: []),
     ):
         result = asyncio.run(
             run_qa_gate(_base_task(), _result(), asyncio.Semaphore(3), bus, "job1")
@@ -445,7 +444,7 @@ class TestQaGate:
         bus = MagicMock(spec=DelegationBus)
         with (
             patch.object(qa_gate, "run_sub_agent", new=AsyncMock(side_effect=fake_run)),
-            patch.dict(os.environ, {"DELEGATE_TIER1_OBJECTIVE": "0"}),
+            patch.object(qa_gate, "resolve_tier1_commands", lambda _repo: []),
         ):
             result = asyncio.run(
                 run_qa_gate(_base_task(), _result(), asyncio.Semaphore(3), bus, "job1")
@@ -453,16 +452,6 @@ class TestQaGate:
         assert result["status"] == TaskStatus.ERROR
         assert "did not complete" in result["output"]
         assert sum(1 for c in calls if "__fix_" in c) == 1
-
-    def test_disabled_gate_is_noop(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(config, "delegate_qa_gate_enabled", False)
-        bus = MagicMock(spec=DelegationBus)
-        with patch.object(qa_gate, "run_sub_agent", new=AsyncMock()) as mock:
-            result = asyncio.run(
-                run_qa_gate(_base_task(), _result(), asyncio.Semaphore(1), bus, "job1")
-            )
-        mock.assert_not_awaited()
-        assert result["status"] == TaskStatus.COMPLETED
 
     def test_gemini_corrects_then_passes(self, monkeypatch: Any) -> None:
         """Gemini correction converges: initial fails, correction passes."""

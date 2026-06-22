@@ -207,7 +207,6 @@ def load_config() -> AppConfig:
         delegate_persist_noncode=_bool_env(
             "DELEGATE_PERSIST_NONCODE", DELEGATE_PERSIST_NONCODE
         ),
-        delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
         delegate_result_repair=_bool_env(
             "DELEGATE_RESULT_REPAIR", DELEGATE_RESULT_REPAIR
         ),

@@ -55,7 +55,6 @@ class AppConfig:
     delegate_correction_rounds: int = 3
     delegate_min_confidence: str = "medium"
     delegate_persist_noncode: bool = True
-    delegate_qa_gate_enabled: bool = True
     delegate_result_repair: bool = True
     delegate_tier1_commands: list[list[str]] = field(default_factory=list)
     log_max_bytes: int = 5_000_000

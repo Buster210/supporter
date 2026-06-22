@@ -289,10 +289,18 @@ async def test_delegate_tasks_creates_capsule_at_start() -> None:
             "tokens": {"total_tokens": 5},
         }
 
+    async def _gate_passthrough(
+        task: Any, result: Any, *_a: Any, **_k: Any
+    ) -> Any:
+        return result
+
     tasks_json = json.dumps([{"id": "t1", "task": "slow task"}])
     with (
         patch("supporter.tools.delegate.scheduler.run_sub_agent", side_effect=slow_run),
-        patch.object(config, "delegate_qa_gate_enabled", False),
+        patch(
+            "supporter.tools.delegate.scheduler.run_qa_gate",
+            side_effect=_gate_passthrough,
+        ),
     ):
         plan = await delegate_tasks("Capsule start", tasks_json, max_parallel=1)
         job_id = next(line for line in plan.splitlines() if "Job ID:" in line).split(
