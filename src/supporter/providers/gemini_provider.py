@@ -162,7 +162,16 @@ class GeminiProvider:
                 )
 
         if not result:
-            result = await self.client.aio.models.generate_content(
+            from ..recover import AutoRecover, rotate_api_key
+
+            recover = AutoRecover(
+                name=f"gemini_rest.{self.model_name}",
+                actions=[rotate_api_key],
+                max_attempts=3,
+                metrics_tag="gemini_rest",
+            )
+            result = await recover.call(
+                self.client.aio.models.generate_content,
                 model=self.model_name,
                 contents=cast(Any, contents),
                 config=generation_config,

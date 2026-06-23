@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -214,8 +215,33 @@ async def finish(success: bool, host: str = "") -> str:
             break
     playbook.url_template = url_template
     await save_playbook(playbook)
+    await _autorecord_recipe(task.goal, final_host)
     stepped_count = len(task.steps)
     return f"Saved playbook for {task.goal!r} on {final_host} ({stepped_count} steps)."
+
+
+async def _autorecord_recipe(goal: str, host: str) -> None:
+    """Save a zero-token replay recipe alongside the playbook: a human_break
+    (randomized range, fresh jitter each replay) then a browser step that
+    re-runs the playbook. Never raises — recipe storage is best-effort."""
+    try:
+        import random
+        import re
+
+        from ...recipes import save_recipe
+
+        slug = re.sub(r"[^A-Za-z0-9_\-]+", "-", f"{host}-{goal}").strip("-")[:57]
+        lo = random.randint(200, 600)  # noqa: S311  # human-pacing jitter, not crypto
+        hi = lo + random.randint(400, 1500)  # noqa: S311
+        steps = [
+            {"kind": "human_break", "value": f"{lo}||{hi}"},
+            {"kind": "browser", "value": goal, "note": f"replay {goal!r} on {host}"},
+        ]
+        await asyncio.to_thread(
+            save_recipe, f"browse:{slug}", f"Replay browse: {goal}", steps, ("browser",)
+        )
+    except Exception as exc:
+        logger.debug(f"recorder: autorecord recipe failed: {exc}")
 
 
 async def _record_step(req: BrowseRequest, result: str) -> None:

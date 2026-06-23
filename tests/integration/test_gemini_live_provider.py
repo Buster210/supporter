@@ -1076,14 +1076,23 @@ async def test_fatal_error_preserves_handle(provider: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_replay_failure_falls_back_to_realtime(provider: Any) -> None:
+async def test_replay_failure_reconnects_and_retries(provider: Any) -> None:
+    """A failed replay reconnects and retries with full history rather than
+    silently sending the prompt without restored context."""
     provider._needs_replay = True
     provider._history = [_turn("user", "earlier")]
-    session = AsyncMock()
-    session.send_client_content = AsyncMock(side_effect=RuntimeError("send died"))
-    await provider._send_user_turn(session, "hello")
-    session.send_client_content.assert_awaited_once()
-    session.send_realtime_input.assert_awaited_once_with(text="hello")
+    broken = AsyncMock()
+    broken.send_client_content = AsyncMock(side_effect=RuntimeError("send died"))
+    retry_session = AsyncMock()
+    provider._teardown_session = AsyncMock()
+    provider._ensure_session = AsyncMock(return_value=retry_session)
+    result = await provider._send_user_turn(broken, "hello")
+    broken.send_client_content.assert_awaited_once()
+    retry_session.send_client_content.assert_awaited_once()
+    # No silent prompt-only fallback on either session.
+    broken.send_realtime_input.assert_not_called()
+    retry_session.send_realtime_input.assert_not_called()
+    assert result is retry_session
     assert provider._needs_replay is False
 
 
@@ -1385,17 +1394,19 @@ async def test_recovery_observer_fires_reconnecting_on_prewarm(provider: Any) ->
 
 
 @pytest.mark.asyncio
-async def test_recovery_observer_fires_context_partial_on_replay_fallback(
+async def test_recovery_observer_fires_retry_replay_on_replay_failure(
     provider: Any,
 ) -> None:
     events: list[tuple[str, dict[str, Any]]] = []
     provider.recovery_observer = lambda e, d: events.append((e, d))
     provider._needs_replay = True
     provider._history = [_turn("user", "ctx")]
-    session = AsyncMock()
-    session.send_client_content = AsyncMock(side_effect=RuntimeError("send died"))
-    await provider._send_user_turn(session, "go")
-    assert any(e[0] == "context_partial" for e in events)
+    broken = AsyncMock()
+    broken.send_client_content = AsyncMock(side_effect=RuntimeError("send died"))
+    provider._teardown_session = AsyncMock()
+    provider._ensure_session = AsyncMock(return_value=AsyncMock())
+    await provider._send_user_turn(broken, "go")
+    assert any(e[0] == "replaying" and e[1].get("retry") for e in events)
 
 
 @pytest.mark.asyncio

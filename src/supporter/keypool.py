@@ -44,6 +44,7 @@ __all__ = [
     "KeyHealth",
     "KeyPool",
     "coerce_keys",
+    "config",
     "get_key_pool",
     "reset_key_pool",
 ]
@@ -379,9 +380,7 @@ class KeyPool:
                 logger.debug(
                     f"KeyPool: dropping malformed entry for key ...{key[-4:]}: {exc}"
                 )
-        logger.info(
-            f"KeyPool: loaded {len(self._state.entries)} cooldowns from {path}"
-        )
+        logger.info(f"KeyPool: loaded {len(self._state.entries)} cooldowns from {path}")
 
     def _persist_locked(self) -> None:
         path = self._state_path

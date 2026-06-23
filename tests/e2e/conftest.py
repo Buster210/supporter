@@ -1,4 +1,5 @@
 import os
+import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,16 +79,25 @@ async def _always_allow(_title: str, _detail: str) -> bool:
     return True
 
 
-@pytest.fixture
-async def throwaway_browser(tmp_path: Path) -> AsyncIterator[None]:
+@pytest.fixture(scope="session")
+async def _shared_browser() -> AsyncIterator[None]:
+    """Session-scoped browser: one browser/context/page for all e2e browser tests."""
     saved_path = real_config.browser_profile_path
-    profile_dir = tmp_path / "profile"
+    profile_dir = Path(tempfile.mkdtemp()) / "profile"
     profile_dir.mkdir()
     real_config.browser_profile_path = str(profile_dir)
     guardrails.register_browse_callback(confirmation=_always_allow)
+    # Launch the browser once so it's ready for all tests.
+    await session.get_session()
     try:
         yield
     finally:
         await session.close_session()
         guardrails.register_browse_callback(confirmation=None)
         real_config.browser_profile_path = saved_path
+
+
+@pytest.fixture
+async def throwaway_browser(_shared_browser: None) -> AsyncIterator[None]:
+    """Per-test fixture: ensures the shared browser is alive."""
+    yield

@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
-import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,6 +31,24 @@ from .gemini_codec import message_to_content
 _STALE_HANDLE_ERRORS = ("session not found", "invalid session handle")
 
 
+def _is_key_error(error: BaseException) -> bool:
+    """Return True if the error is likely key-attributable (quota/auth)."""
+    message = str(error).lower()
+    status = getattr(error, "status", None) or getattr(error, "code", None)
+    if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+        return True
+    key_patterns = (
+        "api key not valid",
+        "api_key_invalid",
+        "permission_denied",
+        "quota exceeded",
+        "resource_exhausted",
+        "rate limit",
+        "free tier",
+    )
+    return any(p in message for p in key_patterns)
+
+
 def _to_seconds(time_left: Any) -> float | None:
     if time_left is None:
         return None
@@ -40,6 +58,87 @@ def _to_seconds(time_left: Any) -> float | None:
         return float(time_left.total_seconds())
     except AttributeError:
         return None
+
+
+@dataclass
+class _LiveTurnState:
+    """Mutable state shared by the receive loop in generate/generate_stream."""
+
+    full_response: list[str] = field(default_factory=list)
+    thoughts: list[str] = field(default_factory=list)
+    grounding: Any = None
+    turn_complete: bool = False
+    draining: bool = False
+
+
+def _process_response(
+    provider: GeminiLiveProvider,
+    session: Any,
+    response: Any,
+    state: _LiveTurnState,
+) -> list[str]:
+    """Handle one live response. Returns text chunks produced (empty if none).
+
+    Shared by generate() and generate_stream() to avoid duplicating the
+    receive-loop body. Tool calls are dispatched; session resumption,
+    go_away, content processing, and drain logic are handled inline.
+    """
+    summary = _summarize_live_response(response)
+    if summary is not None:
+        logger.debug(f"Live receive: {summary}")
+
+    if response.tool_call:
+        # Caller handles _handle_tool_call (async) — return empty.
+        return []
+
+    if (
+        response.session_resumption_update
+        and response.session_resumption_update.resumable
+        and response.session_resumption_update.new_handle
+    ):
+        provider._session_handle = response.session_resumption_update.new_handle
+        provider._handle_resumed_pending = False
+        return []
+
+    if response.go_away:
+        logger.info(
+            "Live go_away received "
+            f"(time_left={response.go_away.time_left}); "
+            "reconnecting before next turn"
+        )
+        provider._reconnect_pending = True
+        tl = _to_seconds(response.go_away.time_left)
+        if tl is not None:
+            provider._go_away_deadline = (
+                time.monotonic() + tl - config.prewarm_safety_margin
+            )
+        return []
+
+    content = response.server_content
+    if not content:
+        return []
+
+    chunks: list[str] = []
+    if content.model_turn:
+        for part in content.model_turn.parts:
+            if part.thought and part.text:
+                state.thoughts.append(part.text)
+            elif part.text:
+                state.full_response.append(part.text)
+                chunks.append(part.text)
+
+    if content.grounding_metadata and not state.grounding:
+        state.grounding = content.grounding_metadata
+
+    if content.output_transcription and content.output_transcription.text:
+        text = content.output_transcription.text
+        state.full_response.append(text)
+        chunks.append(text)
+
+    if content.turn_complete:
+        state.turn_complete = True
+
+    return chunks
 
 
 def _is_native_audio(model_name: str) -> bool:
@@ -382,8 +481,8 @@ class GeminiLiveProvider:
         return turns
 
     async def _send_user_turn(
-        self, session: Any, prompt: str | list[NeutralMessage]
-    ) -> None:
+        self, session: Any, prompt: str | list[NeutralMessage] | list[Content]
+    ) -> Any:
         gemini_prompt = (
             [message_to_content(m) for m in prompt]
             if isinstance(prompt, list)
@@ -408,14 +507,45 @@ class GeminiLiveProvider:
                     await session.send_client_content(turns=turns, turn_complete=True)
                     if config.replay_image_count > 0:
                         await self._reinject_recent_images(session)
-                    return
+                    return session
                 except Exception as exc:
                     logger.warning(
                         f"Live history replay failed [{type(exc).__name__}: "
-                        f"{exc}]; sending prompt without restored context"
+                        f"{exc}]; reconnecting and retrying replay"
                     )
-                    self._emit("context_partial", {})
+                    # Retry: tear down the broken session, reconnect, and replay
+                    # with full history so context is never silently dropped.
+                    try:
+                        await self._teardown_session()
+                        session = await self._ensure_session()
+                        turns = self._replay_turns()
+                        turns.append(Content(role="user", parts=[Part(text=text)]))
+                        logger.info(
+                            f"Live: retry-replaying {len(self._history)} history "
+                            "turns after reconnect"
+                        )
+                        self._emit(
+                            "replaying",
+                            {"turns": len(self._history), "retry": True},
+                        )
+                        await session.send_client_content(
+                            turns=turns, turn_complete=True
+                        )
+                        if config.replay_image_count > 0:
+                            await self._reinject_recent_images(session)
+                        return session
+                    except Exception as retry_exc:
+                        logger.error(
+                            f"Live history replay retry also failed "
+                            f"[{type(retry_exc).__name__}: {retry_exc}]; "
+                            "cannot deliver turn with full context"
+                        )
+                        raise RuntimeError(
+                            "Live history replay failed twice; "
+                            "cannot deliver turn with full context"
+                        ) from retry_exc
         await session.send_realtime_input(text=text)
+        return session
 
     async def _handle_tool_call(self, session: Any, tool_call: Any) -> None:
         from google.genai import types
@@ -687,7 +817,9 @@ class GeminiLiveProvider:
             await task  # MUST await — guarantees recv() unwound before turn reads
 
     async def _prepare_turn(
-        self, prompt: str | list[Content], options: GenOptions | None = None
+        self,
+        prompt: str | list[NeutralMessage] | list[Content],
+        options: GenOptions | None = None,
     ) -> Any:
         if options:
             raw_history = (
@@ -724,8 +856,7 @@ class GeminiLiveProvider:
                 session = await self._ensure_session()
 
         self._last_turn_complete = False
-        await self._send_user_turn(session, prompt)
-        return session
+        return await self._send_user_turn(session, prompt)
 
     async def generate(
         self,
@@ -742,71 +873,35 @@ class GeminiLiveProvider:
         async with self._turn_lock:
             session = await self._prepare_turn(gemini_prompt, options)
             start_time = time.perf_counter()
-            full_response, thoughts, grounding = [], [], None
+            state = _LiveTurnState()
+            loop = asyncio.get_running_loop()
 
             try:
-                async for response in session.receive():
-                    summary = _summarize_live_response(response)
-                    if summary is not None:
-                        logger.debug(f"Live receive: {summary}")
-                    if response.tool_call:
-                        await self._handle_tool_call(session, response.tool_call)
-                        continue
-
-                    if (
-                        response.session_resumption_update
-                        and response.session_resumption_update.resumable
-                        and response.session_resumption_update.new_handle
-                    ):
-                        self._session_handle = (
-                            response.session_resumption_update.new_handle
-                        )
-                        self._handle_resumed_pending = False
-                        continue
-
-                    if response.go_away:
-                        logger.info(
-                            "Live go_away received "
-                            f"(time_left={response.go_away.time_left}); "
-                            "reconnecting before next turn"
-                        )
-                        self._reconnect_pending = True
-                        tl = _to_seconds(response.go_away.time_left)
-                        if tl is not None:
-                            self._go_away_deadline = (
-                                time.monotonic() + tl - config.prewarm_safety_margin
-                            )
-                        continue
-
-                    content = response.server_content
-                    if not content:
-                        continue
-
-                    if content.model_turn:
-                        for part in content.model_turn.parts:
-                            if part.thought and part.text:
-                                thoughts.append(part.text)
-                            elif part.text:
-                                full_response.append(part.text)
-
-                    if content.grounding_metadata and not grounding:
-                        grounding = content.grounding_metadata
-
-                    if (
-                        content.output_transcription
-                        and content.output_transcription.text
-                    ):
-                        full_response.append(content.output_transcription.text)
-
-                    if content.turn_complete or (
-                        self._ends_turn_early and content.generation_complete
-                    ):
-                        self._last_turn_complete = bool(content.turn_complete)
-                        break
+                async with asyncio.timeout(None) as _drain_cm:
+                    async for response in session.receive():
+                        if response.tool_call:
+                            await self._handle_tool_call(session, response.tool_call)
+                            continue
+                        _process_response(self, session, response, state)
+                        if state.turn_complete:
+                            self._last_turn_complete = True
+                            break
+                        if (
+                            self._ends_turn_early
+                            and response.server_content
+                            and response.server_content.generation_complete
+                            and not state.draining
+                        ):
+                            state.draining = True
+                            _drain_cm.reschedule(loop.time() + 0.3)
+            except TimeoutError:
+                self._last_turn_complete = False
             except Exception as e:
                 logger.error(f"generate() error [{type(e).__name__}]: {e}")
                 self._last_turn_complete = True
                 self._reconnect_pending = True
+                if _is_key_error(e):
+                    self._rotate_key()
 
             if self._handle_resumed_pending:
                 self._emit("empty_resume_suspected", {})
@@ -815,17 +910,17 @@ class GeminiLiveProvider:
             self._schedule_prewarm()
             if self._prewarm_task is None and not self._reconnect_pending:
                 await self._start_monitor()
-            text = "".join(full_response)
-            if grounding:
-                text += _format_grounding_sources(grounding)
+            text = "".join(state.full_response)
+            if state.grounding:
+                text += _format_grounding_sources(state.grounding)
 
             return LLMResult(
                 text=text,
                 model=self.model_name,
                 duration=time.perf_counter() - start_time,
-                thoughts="".join(thoughts),
+                thoughts="".join(state.thoughts),
                 usage={},
-                raw=grounding,
+                raw=state.grounding,
                 history=[],
             )
 
@@ -843,112 +938,112 @@ class GeminiLiveProvider:
         )
         async with self._turn_lock:
             session = await self._prepare_turn(gemini_prompt, options)
-            grounding: Any = None
+            state = _LiveTurnState()
+            self._turn_did_complete = False
+            loop = asyncio.get_running_loop()
+
+            def _final_chunks() -> Iterator[LLMChunk]:
+                sources = (
+                    _format_grounding_sources(state.grounding)
+                    if state.grounding
+                    else ""
+                )
+                if sources:
+                    yield LLMChunk(
+                        text=sources,
+                        is_last=False,
+                        model=self.model_name,
+                        raw=state.grounding,
+                    )
+                yield LLMChunk(text="", is_last=True, model=self.model_name)
 
             try:
-                async for response in session.receive():
-                    if logger.isEnabledFor(logging.DEBUG):
-                        summary = _summarize_live_response(response)
-                        if summary is not None:
-                            logger.debug("Live receive: %s", summary)
-                    if response.tool_call:
-                        for fc in response.tool_call.function_calls:
-                            yield LLMChunk(
-                                text="",
-                                is_last=False,
-                                is_tool_call=True,
-                                tool_name=fc.name,
-                                tool_args=fc.args or {},
-                                model=self.model_name,
-                            )
-                        await self._handle_tool_call(session, response.tool_call)
-                        continue
-
-                    if (
-                        response.session_resumption_update
-                        and response.session_resumption_update.resumable
-                        and response.session_resumption_update.new_handle
-                    ):
-                        self._session_handle = (
-                            response.session_resumption_update.new_handle
-                        )
-                        self._handle_resumed_pending = False
-                        continue
-
-                    if response.go_away:
-                        logger.info(
-                            "Live go_away received "
-                            f"(time_left={response.go_away.time_left}); "
-                            "reconnecting before next turn"
-                        )
-                        self._reconnect_pending = True
-                        tl = _to_seconds(response.go_away.time_left)
-                        if tl is not None:
-                            self._go_away_deadline = (
-                                time.monotonic() + tl - config.prewarm_safety_margin
-                            )
-                        continue
-
-                    content = response.server_content
-                    if not content:
-                        continue
-
-                    if content.model_turn:
-                        for part in content.model_turn.parts:
-                            if part.thought and part.text:
+                async with asyncio.timeout(None) as _drain_cm:
+                    async for response in session.receive():
+                        if response.tool_call:
+                            for fc in response.tool_call.function_calls:
                                 yield LLMChunk(
-                                    text=part.text,
+                                    text="",
                                     is_last=False,
-                                    is_thought=True,
+                                    is_tool_call=True,
+                                    tool_name=fc.name,
+                                    tool_args=fc.args or {},
                                     model=self.model_name,
                                 )
-                            elif part.text:
-                                yield LLMChunk(
-                                    text=part.text, is_last=False, model=self.model_name
-                                )
-
-                    if content.grounding_metadata and not grounding:
-                        grounding = content.grounding_metadata
-
-                    if (
-                        content.output_transcription
-                        and content.output_transcription.text
-                    ):
-                        yield LLMChunk(
-                            text=content.output_transcription.text,
-                            is_last=False,
-                            model=self.model_name,
-                        )
-
-                    if content.turn_complete or (
-                        self._ends_turn_early and content.generation_complete
-                    ):
-                        self._last_turn_complete = bool(content.turn_complete)
-                        sources = (
-                            _format_grounding_sources(grounding) if grounding else ""
-                        )
-                        if sources:
+                            await self._handle_tool_call(session, response.tool_call)
+                            continue
+                        # _process_response handles common logic; we yield text chunks.
+                        _process_response(self, session, response, state)
+                        # Yield text chunks that _process_response collected.
+                        # (thoughts are yielded inline below for streaming)
+                        content = response.server_content
+                        if content and content.model_turn:
+                            for part in content.model_turn.parts:
+                                if part.thought and part.text:
+                                    yield LLMChunk(
+                                        text=part.text,
+                                        is_last=False,
+                                        is_thought=True,
+                                        model=self.model_name,
+                                    )
+                                elif part.text:
+                                    yield LLMChunk(
+                                        text=part.text,
+                                        is_last=False,
+                                        model=self.model_name,
+                                    )
+                        if (
+                            response.server_content
+                            and response.server_content.output_transcription
+                            and response.server_content.output_transcription.text
+                        ):
                             yield LLMChunk(
-                                text=sources,
+                                text=response.server_content.output_transcription.text,
                                 is_last=False,
                                 model=self.model_name,
-                                raw=grounding,
                             )
-                        yield LLMChunk(text="", is_last=True, model=self.model_name)
-                        break
+                        if state.turn_complete:
+                            self._last_turn_complete = True
+                            for chunk in _final_chunks():
+                                yield chunk
+                            self._turn_did_complete = True
+                            break
+                        if (
+                            self._ends_turn_early
+                            and response.server_content
+                            and response.server_content.generation_complete
+                            and not state.draining
+                        ):
+                            state.draining = True
+                            _drain_cm.reschedule(loop.time() + 0.3)
+                if not self._turn_did_complete:
+                    self._last_turn_complete = False
+                    for chunk in _final_chunks():
+                        yield chunk
+                    self._turn_did_complete = True
+            except TimeoutError:
+                self._last_turn_complete = False
+                for chunk in _final_chunks():
+                    yield chunk
+                self._turn_did_complete = True
             except Exception as e:
                 logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
                 self._last_turn_complete = True
                 self._reconnect_pending = True
+                if _is_key_error(e):
+                    self._rotate_key()
                 raise
             finally:
-                # ALWAYS run the turn-end epilogue, even if a consumer
-                # breaks early (async generator aclose() injects
-                # GeneratorExit at the last yield, bypassing the except
-                # clause). Without this, a TUI abort would leave the
-                # monitor unstarted and the next turn would catch idle
-                # go_away inline (the "jerking" the plan was designed
-                # to prevent).
+                if not self._turn_did_complete:
+                    if self._session_handle is not None:
+                        self._reconnect_pending = True
+                        logger.info(
+                            "generate_stream() consumer broke early; "
+                            "deferring session resume via handle"
+                        )
+                    else:
+                        await self._teardown_session()
+
                 if self._handle_resumed_pending:
                     self._emit("empty_resume_suspected", {})
                     self._handle_resumed_pending = False

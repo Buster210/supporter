@@ -283,3 +283,82 @@ def display_capsule(capsule: dict[str, Any]) -> dict[str, Any]:
 
 def _escape_table(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
+
+
+def format_plan_capsule(payload: dict[str, Any]) -> str:
+    """Render a planner delegation capsule as clean markdown for a visible bubble.
+
+    Input is the serialized capsule result dict (from ``serialize_capsule_result``).
+    Output is human-readable markdown sections — no raw JSON dump.
+    """
+    from .capsule_query import jsonish
+
+    milestone = payload.get("milestone", "")
+    job_id = payload.get("job_id", "")
+    status = payload.get("status", "")
+    lines: list[str] = []
+    if milestone:
+        lines.append(f"## Plan: {milestone}")
+    if job_id or status:
+        parts = []
+        if job_id:
+            parts.append(f"**Job:** `{job_id}`")
+        if status:
+            parts.append(f"**Status:** {status}")
+        lines.append(" · ".join(parts))
+        lines.append("")
+
+    tasks = payload.get("tasks", [])
+    if tasks:
+        lines.append("### Tasks")
+        for t in tasks:
+            tid = t.get("id", "?")
+            tstatus = t.get("status", "")
+            summary = t.get("summary", "")
+            confidence = t.get("confidence", "")
+            parts = [f"**{tid}**"]
+            if tstatus:
+                parts.append(f"[{tstatus}]")
+            if summary:
+                parts.append(f"— {preview(summary, 200)}")
+            if confidence and confidence != "unknown":
+                parts.append(f"({confidence})")
+            lines.append("  " + " ".join(parts))
+        lines.append("")
+
+    totals = payload.get("totals", {})
+    if isinstance(totals, dict) and any(totals.values()):
+        done = totals.get("completed", 0)
+        failed = totals.get("failed", 0)
+        skipped = totals.get("skipped", 0)
+        timed_out = totals.get("timed_out", 0)
+        lines.append(
+            f"**Summary:** {done} completed"
+            + (f", {failed} failed" if failed else "")
+            + (f", {skipped} skipped" if skipped else "")
+            + (f", {timed_out} timed out" if timed_out else "")
+        )
+        lines.append("")
+
+    findings = payload.get("key_findings", [])
+    if findings:
+        lines.append("### Key Findings")
+        for f in findings:
+            lines.append(f"- {preview(jsonish(f), 300)}")
+        lines.append("")
+
+    failed_tasks = payload.get("failed_or_skipped_tasks", [])
+    if failed_tasks:
+        lines.append("### Failed or Skipped")
+        for f in failed_tasks:
+            lines.append(f"- {preview(jsonish(f), 300)}")
+        lines.append("")
+
+    next_steps = payload.get("recommended_next_steps", [])
+    if next_steps:
+        lines.append("### Recommended Next Steps")
+        for s in next_steps:
+            lines.append(f"- {preview(jsonish(s), 300)}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()

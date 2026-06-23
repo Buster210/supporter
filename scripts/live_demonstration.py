@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from supporter import config as _config_mod
 from supporter.lifecycle import reset_runtime_state
 from supporter.llm.types import GenOptions, Message
-from supporter.recover import AutoRecover, note_recovery
+from supporter.recover import AutoRecover, RecoveryStatus
 from supporter.types import LLMChunk, LLMProvider, LLMResult
 from supporter.verify import (
     VerificationConfig,
@@ -46,7 +46,7 @@ from supporter.verify import (
 # ---------------------------------------------------------------------------
 
 
-class FakeProvider(LLMProvider):  # type: ignore[misc]
+class FakeProvider(LLMProvider):
     """A scripted Gemini stand-in.
 
     `responses` is a list of LLMResult OR Exception. We pop one per
@@ -97,9 +97,9 @@ async def main() -> int:
 
     env_overrides = {
         "WORKING_MEMORY_PATH": str(tmp / "wm.jsonl"),
-        "GEMINI_API_KEYS": "k1,k2,k3",
+        "GEMINI_API_KEYS": "k1,k2,k3",  # pragma: allowlist secret
     }
-    saved_env = {k: os.environ.get(k) for k in env_overrides}
+    saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in env_overrides}
     for k, v in env_overrides.items():
         os.environ[k] = v
 
@@ -249,7 +249,7 @@ async def main() -> int:
         # -------------------------------------------------------------
         section("4) Verification loop: reject bad output, retry, succeed")
         # -------------------------------------------------------------
-        provider = FakeProvider(
+        provider = FakeProvider(  # type: ignore[assignment]
             [
                 LLMResult(text="x", model="fake", duration=0.01),
                 LLMResult(
@@ -274,7 +274,7 @@ async def main() -> int:
         )
 
         async def _caller(prompt: str) -> LLMResult:
-            return await provider.generate(prompt)
+            return await provider.generate(prompt)  # type: ignore[no-any-return]
 
         loop = VerificationLoop(
             VerificationConfig(max_attempts=3),
@@ -303,9 +303,13 @@ async def main() -> int:
                 LLMResult(text="all good", model="fake", duration=0.01),
             ]
         )
+
+        async def _note_recovery(*args: Any, **kwargs: Any) -> RecoveryStatus:
+            return RecoveryStatus(action="note:manual", healed=True, detail="")
+
         recover = AutoRecover(
             name="provider.generate",
-            actions=[note_recovery("manual")],
+            actions=[_note_recovery],
             backoff_base=0,
             backoff_cap=0,
         )
@@ -322,7 +326,7 @@ async def main() -> int:
         section("6) Pool <-> keypool bridge: 5xx on a slot marks key sick")
         # -------------------------------------------------------------
         fake_gp = MagicMock()
-        fake_gp.api_key = "k1"
+        fake_gp.api_key = "k1"  # pragma: allowlist secret
         fake_gp.get_name.return_value = "fake"
         fake_gp.generate = AsyncMock(side_effect=Exception("internal error 503"))
         pool_mod._notify_keypool_failure(fake_gp, Exception("internal error 503"))
@@ -350,11 +354,11 @@ async def main() -> int:
         # -------------------------------------------------------------
         return 0
     finally:
-        for k, v in saved_env.items():
+        for k, v in saved_env.items():  # type: ignore[assignment]
             if v is None:
                 os.environ.pop(k, None)
             else:
-                os.environ[k] = v  # type: ignore[assignment]
+                os.environ[k] = v
         reset_runtime_state()
         with contextlib.suppress(Exception):
             shutil.rmtree(tmp)

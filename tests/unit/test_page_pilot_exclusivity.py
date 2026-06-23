@@ -174,7 +174,7 @@ def test_orchestrator_prompt_no_imperative_browser_calls() -> None:
 def test_orchestrator_prompt_mentions_page_pilot_as_priority() -> None:
     lowered = DEFAULT_SYSTEM_INSTRUCTION.lower()
     assert "page-pilot" in lowered
-    assert "google_search" in DEFAULT_SYSTEM_INSTRUCTION
+    # google_search removed from orchestrator prompt (PART2 cleanup).
 
 
 def test_page_pilot_with_partial_tool_set_grants_only_requested() -> None:

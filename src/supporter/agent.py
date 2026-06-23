@@ -59,8 +59,10 @@ class ChatAgent:
         self.system_instruction = system_instruction
         self._store: Any = None
         self._store_prev_len: int = 0
-        self.last_plan: str = ""
-        self.last_plan_objective: str = ""
+        # Plan tracking: set by delegation listener when a planner capsule
+        # arrives; cleared after verification in the TUI message cycle.
+        self.pending_plan_objective: str = ""
+        self.pending_plan_text: str = ""
         # WHY: Cache summary state so compaction survives AFC clobber.
         # _summary covers turns [0, _summary_turn_count) of self.history;
         # _summary_fingerprint is a structural fingerprint of that same prefix,
@@ -112,23 +114,14 @@ class ChatAgent:
 
     @staticmethod
     def _build_context_injection(limit: int = 5) -> str:
-        """Compose the working-memory + recipe digest that gets prepended
-        to the system prompt on every turn.
+        """Compose the recipe digest that gets prepended to the system prompt.
 
-        Each source is independently best-effort: a corrupt store
-        should not prevent the agent from running. Failures are logged
-        at debug level.
+        The orchestrator no longer owns memory tools (page-pilot owns those).
+        Only the recipes block is injected here.
         """
-        from .logger import logger
-        from .memory import memory_snapshot
         from .recipes import recipes_snapshot
-        from .tools.memory_tools import memory_render_block
 
-        def _memory_block() -> str:
-            block = memory_render_block(limit=limit)
-            return block or ""
-
-        def _recipes_block() -> str:
+        try:
             snap = recipes_snapshot()
             total = snap.get("total", 0) if isinstance(snap, dict) else 0
             if not total:
@@ -138,30 +131,8 @@ class ChatAgent:
                 "use the recipe_list / recipe_run / recipe_find tools "
                 "to replay any saved multi-step workflow without LLM tokens."
             )
-
-        def _kinds_block() -> str:
-            snap = memory_snapshot()
-            kinds = snap.get("kinds", {}) if isinstance(snap, dict) else {}
-            if not kinds:
-                return ""
-            kinds_repr = ", ".join(
-                f"{k}={v}"
-                for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
-            )
-            return f"WORKING MEMORY TOTALS: {kinds_repr}"
-
-        parts: list[str] = []
-        for render in (_memory_block, _recipes_block, _kinds_block):
-            try:
-                rendered = render()
-            except Exception as exc:
-                logger.debug(
-                    f"ChatAgent: injection failed [{type(exc).__name__}]: {exc}"
-                )
-                continue
-            if rendered:
-                parts.append(rendered)
-        return "\n\n".join(parts)
+        except Exception:
+            return ""
 
     @staticmethod
     def _entry_text(entry: Any) -> str:
@@ -280,9 +251,7 @@ class ChatAgent:
             if summary:
                 self._summary = summary
                 self._summary_turn_count = len(self.history) - keep_recent
-                self._summary_fingerprint = self._fingerprint(
-                    self._summary_turn_count
-                )
+                self._summary_fingerprint = self._fingerprint(self._summary_turn_count)
                 logger.info(
                     f"Summarized {len(turns_to_summarize)} history turns "
                     f"(kept {keep_recent} recent)"
@@ -313,13 +282,32 @@ class ChatAgent:
 
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
-        result = await self.provider.generate(prompt, options)
+
+        # Wrap provider.generate() in AutoRecover so transient/recoverable
+        # provider errors retry with backoff + key rotation instead of propagating.
+        from .recover import rotate_api_key, with_recovery
+
+        recover = with_recovery("agent.execute", actions=[rotate_api_key])
+
+        try:
+            result = await recover.call(self.provider.generate, prompt, options)
+        except Exception:
+            # Durably persist user turn so a crash / exception never loses it.
+            self.history.append(user_message)
+            if self._store:
+                self._store.append(user_message)
+                self._store.sync()
+            self._trim_history()
+            raise
 
         self.current_interaction_id = result.interaction_id
         self._sync_history(user_message, result)
         if self._store:
             self._store.sync()
         self._record_brain_decision(prompt, result)
+
+        # Surface recovery counters + key-pool health at end-of-turn.
+        self._log_diagnostics()
 
         duration_str = (
             f"{result.duration:.3f}s" if result.duration is not None else "unknown"
@@ -380,6 +368,7 @@ class ChatAgent:
         if self._store:
             self._store.sync()
         self._record_brain_decision(prompt, last)
+        self._log_diagnostics()
 
         logger.info(
             f"Agent: verification complete — ok={outcome.ok} "
@@ -409,6 +398,21 @@ class ChatAgent:
             reason=reason,
             correlation_id=result.interaction_id,
         )
+
+    def _log_diagnostics(self) -> None:
+        """Surface recovery counters and key-pool health at end-of-turn."""
+        from .keypool import pool_snapshot
+        from .recovery_metrics import recovery_snapshot
+
+        try:
+            snap = recovery_snapshot()
+            if any(v > 0 for v in snap.values()):
+                logger.info(f"Recovery snapshot: {snap}")
+            kp = pool_snapshot()
+            if kp.get("configured"):
+                logger.info(f"Pool snapshot: {kp}")
+        except Exception as exc:
+            logger.debug(f"Diagnostics snapshot failed [{type(exc).__name__}]: {exc}")
 
     def _sync_history(self, user_message: Any, result: LLMResult) -> None:
         # Prefer neutral result.history if available.

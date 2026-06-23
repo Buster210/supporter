@@ -40,6 +40,7 @@ __all__ = [
     "list_playbooks",
     "query_playbook",
     "replay_playbook",
+    "session",
     "start_task",
 ]
 
@@ -266,8 +267,7 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
         )
     final_page = f"\n\nFinal page:\n{final_snapshot}"
     return (
-        f"Replayed playbook {goal!r} on {host}: {n}/{n} steps succeeded."
-        + final_page
+        f"Replayed playbook {goal!r} on {host}: {n}/{n} steps succeeded." + final_page
     )
 
 

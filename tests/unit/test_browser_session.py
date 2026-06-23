@@ -344,7 +344,7 @@ async def test_get_session_bring_to_front_failure_returns_page(
     page.bring_to_front = boom_bring  # type: ignore[attr-defined]
 
     async def fake_acquire(aid: str) -> Any:
-        session._PAGES[aid] = page
+        session._PAGES[aid] = page  # type: ignore[assignment]
         return page
 
     monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
@@ -381,7 +381,7 @@ async def test_get_session_reuse_path_sets_launching_guard(
     page = _FakePage()
 
     async def fake_acquire(aid: str) -> Any:
-        session._PAGES[aid] = page
+        session._PAGES[aid] = page  # type: ignore[assignment]
         return page
 
     monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
@@ -426,7 +426,7 @@ async def test_get_session_concurrent_reuse_does_not_double_launch(
         nonlocal acquire_count
         acquire_count += 1
         page = pages[acquire_count - 1]
-        session._PAGES[aid] = page
+        session._PAGES[aid] = page  # type: ignore[assignment]
         return page
 
     monkeypatch.setattr(session, "_acquire_agent_page", fake_acquire)
@@ -456,10 +456,10 @@ async def test_get_session_concurrent_reuse_does_not_double_launch(
     # Both got valid (pws, context, page) tuples.
     for r in results:
         assert not isinstance(r, Exception), f"Unexpected exception: {r}"
-        assert r[0] is pws
-        assert r[1] is context
+        assert r[0] is pws  # type: ignore[index]
+        assert r[1] is context  # type: ignore[index]
     # The second caller reused the first caller's page (no double launch).
-    assert results[0][2] is results[1][2]
+    assert results[0][2] is results[1][2]  # type: ignore[index]
     # _LAUNCHING was properly reset.
     assert session._LAUNCHING is False
 

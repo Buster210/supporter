@@ -35,7 +35,7 @@ async def _run(objective: str, verdict: tuple[bool, str]) -> _FakeTarget:
         "supporter.worker.verify_plan", new=AsyncMock(return_value=verdict)
     ) as mock_verify:
         await SupporterApp._verify_planned_turn(
-            object(),  # self is unused beyond imports
+            object(),  # type: ignore[arg-type]  # self is unused beyond imports
             objective,
             "PLAN: do X",
             "the result text",

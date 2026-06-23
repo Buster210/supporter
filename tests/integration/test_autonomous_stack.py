@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from supporter.recover import note_recovery
 from supporter.types import LLMResult
 
 
@@ -117,7 +118,7 @@ async def test_verification_loop_persists_only_final(
 async def test_recover_wraps_flaky_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from supporter.recover import AutoRecover, note_recovery
+    from supporter.recover import AutoRecover
 
     seen_args: list[tuple[Any, ...]] = []
 
@@ -183,7 +184,7 @@ async def test_agent_execute_with_verification_and_recover(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter.agent import ChatAgent
-    from supporter.recover import AutoRecover, note_recovery
+    from supporter.recover import AutoRecover
     from supporter.verify import _named
 
     call_count = {"n": 0}

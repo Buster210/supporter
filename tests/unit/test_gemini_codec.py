@@ -37,6 +37,7 @@ class TestMessageToContent:
         msg = Message(role="user", parts=[TextPart(text="hello")])
         c = message_to_content(msg)
         assert c.role == "user"
+        assert c.parts is not None
         assert len(c.parts) == 1
         assert c.parts[0].text == "hello"
 
@@ -46,7 +47,9 @@ class TestMessageToContent:
             parts=[ToolCallPart(name="read_file", args={"path": "x.py"})],
         )
         c = message_to_content(msg)
+        assert c.parts is not None
         fc = c.parts[0].function_call
+        assert fc is not None
         assert fc.name == "read_file"
         assert fc.args == {"path": "x.py"}
 
@@ -56,7 +59,9 @@ class TestMessageToContent:
             parts=[ToolResultPart(name="read_file", response={"content": "hi"})],
         )
         c = message_to_content(msg)
+        assert c.parts is not None
         fr = c.parts[0].function_response
+        assert fr is not None
         assert fr.name == "read_file"
         assert fr.response == {"content": "hi"}
 
@@ -66,7 +71,9 @@ class TestMessageToContent:
             parts=[ImagePart(mime_type="image/png", data=b"\x89PNG")],
         )
         c = message_to_content(msg)
+        assert c.parts is not None
         idata = c.parts[0].inline_data
+        assert idata is not None
         assert idata.mime_type == "image/png"
         assert idata.data == b"\x89PNG"
 
@@ -76,6 +83,7 @@ class TestMessageToContent:
             parts=[ImagePart(mime_type="image/jpeg", ref="photo.jpg")],
         )
         c = message_to_content(msg)
+        assert c.parts is not None
         assert c.parts[0].text == "[image:photo.jpg]"
 
     def test_mixed_parts(self) -> None:
@@ -87,8 +95,10 @@ class TestMessageToContent:
             ],
         )
         c = message_to_content(msg)
+        assert c.parts is not None
         assert len(c.parts) == 2
         assert c.parts[0].text == "let me check"
+        assert c.parts[1].function_call is not None
         assert c.parts[1].function_call.name == "read_file"
 
 
@@ -193,16 +203,16 @@ class TestRoundTripIdentity:
             for orig, rt in zip(msg.parts, roundtripped.parts, strict=True):
                 assert type(orig) is type(rt)
                 if isinstance(orig, TextPart):
-                    assert orig.text == rt.text
+                    assert orig.text == rt.text  # type: ignore[union-attr]
                 elif isinstance(orig, ToolCallPart):
-                    assert orig.name == rt.name
-                    assert orig.args == rt.args
+                    assert orig.name == rt.name  # type: ignore[union-attr]
+                    assert orig.args == rt.args  # type: ignore[union-attr]
                 elif isinstance(orig, ToolResultPart):
-                    assert orig.name == rt.name
-                    assert orig.response == rt.response
+                    assert orig.name == rt.name  # type: ignore[union-attr]
+                    assert orig.response == rt.response  # type: ignore[union-attr]
                 elif isinstance(orig, ImagePart):
-                    assert orig.data == rt.data
-                    assert orig.mime_type == rt.mime_type
+                    assert orig.data == rt.data  # type: ignore[union-attr]
+                    assert orig.mime_type == rt.mime_type  # type: ignore[union-attr]
 
     def test_gemini_to_neutral_to_gemini(self) -> None:
         """content_to_message then message_to_content preserves Gemini structure."""
@@ -226,14 +236,16 @@ class TestRoundTripIdentity:
             msg = content_to_message(c)
             roundtripped = message_to_content(msg)
             assert roundtripped.role == c.role
-            assert len(roundtripped.parts) == len(c.parts)
-            for orig, rt in zip(c.parts, roundtripped.parts, strict=True):
+            assert len(roundtripped.parts) == len(c.parts)  # type: ignore[arg-type]
+            for orig, rt in zip(c.parts, roundtripped.parts, strict=True):  # type: ignore[arg-type]
                 if orig.text:
                     assert rt.text == orig.text
                 if orig.function_call:
+                    assert rt.function_call is not None
                     assert rt.function_call.name == orig.function_call.name
                     assert rt.function_call.args == orig.function_call.args
                 if orig.function_response:
+                    assert rt.function_response is not None
                     assert rt.function_response.name == orig.function_response.name
 
 
@@ -275,9 +287,9 @@ class TestAfcHistoryDecode:
         assert messages[1].role == "model"
         assert isinstance(messages[1].parts[0], ToolCallPart)
         assert messages[1].parts[0].name == "google_search"
-        assert messages[2].parts[0].name == "google_search"
+        assert messages[2].parts[0].name == "google_search"  # type: ignore[union-attr]
         assert isinstance(messages[2].parts[0], ToolResultPart)
-        assert messages[3].parts[0].text == "X is about..."
+        assert messages[3].parts[0].text == "X is about..."  # type: ignore[union-attr]
 
     def test_empty_history(self) -> None:
         assert afc_history_to_messages([]) == []
@@ -343,4 +355,3 @@ class TestGenOptionsToConfig:
         opts = GenOptions(system_instruction=None)
         cfg = gen_options_to_config(opts, None, default_system_instruction="Fallback")
         assert cfg.system_instruction == "Fallback"
-

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import shutil
 import stat
 from pathlib import Path
@@ -448,31 +447,6 @@ class TestTier1Dispatch:
         sub.assert_not_awaited()
         assert ok is True
         assert out == "llm fallback report"
-
-    @pytest.mark.asyncio
-    async def test_objective_disabled_via_env_routes_to_llm(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(qa_gate, "resolve_tier1_commands", lambda _repo: [["echo"]])
-
-        async def fake_llm(*_a: Any, **_k: Any) -> tuple[bool, str]:
-            return True, "llm via env"
-
-        monkeypatch.setattr(qa_gate, "_tier1_llm", fake_llm)
-        with (
-            patch.dict(os.environ, {"DELEGATE_TIER1_OBJECTIVE": "0"}),
-            patch.object(qa_gate, "run_sub_agent", new=AsyncMock()) as sub,
-        ):
-            ok, out = await qa_gate._tier1(
-                {"id": "t", "task": "x", "timeout": 5},
-                0,
-                asyncio.Semaphore(1),
-                MagicMock(),
-                "job",
-            )
-        sub.assert_not_awaited()
-        assert out == "llm via env"
-        assert ok is True
 
 
 class TestCmdListEnv:

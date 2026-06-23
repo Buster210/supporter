@@ -116,9 +116,7 @@ def _notify_keypool_failure(provider: LLMProvider, error: BaseException) -> None
             return
         pool.report_failure(api_key, error)
     except Exception as exc:
-        logger.debug(
-            f"keypool notification skipped [{type(exc).__name__}]: {exc}"
-        )
+        logger.debug(f"keypool notification skipped [{type(exc).__name__}]: {exc}")
 
 
 def _prune_expired_cooldowns() -> None:
@@ -187,6 +185,7 @@ class DynamicPool(LLMProvider):
         pool = None
         try:
             from .keypool import get_key_pool
+
             pool = get_key_pool()
         except Exception:
             pool = None

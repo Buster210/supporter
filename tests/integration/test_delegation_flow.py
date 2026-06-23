@@ -13,6 +13,7 @@ from supporter.tools.delegate.api import (
     cancel_delegation,
     check_delegation,
     delegate_tasks,
+    set_delegation_start_callback,
 )
 from supporter.tools.delegate.bus import get_bus
 from supporter.tools.delegate.capsule import capsule_path, load_capsule
@@ -115,7 +116,12 @@ async def test_delegation_lifecycle_completes_with_capsule_and_query(
         ]
     )
 
-    plan = await delegate_tasks("Integration lifecycle", tasks_json, max_parallel=2)
+    captured: dict[str, str] = {}
+    set_delegation_start_callback(lambda jid, table: captured.update(table=table))
+    try:
+        plan = await delegate_tasks("Integration lifecycle", tasks_json, max_parallel=2)
+    finally:
+        set_delegation_start_callback(None)
     job_id = _job_id(plan)
     snapshot = await check_delegation(job_id)
     events = await _collect_until_complete(job_id)
@@ -128,7 +134,7 @@ async def test_delegation_lifecycle_completes_with_capsule_and_query(
     task_detail = query_delegation(job_id=job_id, task_id="synthesize")
 
     assert "Delegation started" in plan
-    assert "after: map" in plan
+    assert "after: map" in captured["table"]
     assert "Integration lifecycle" in snapshot or job_id in snapshot
     assert completed
     assert capsule_path(job_id).exists()

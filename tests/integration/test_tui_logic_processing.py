@@ -43,7 +43,9 @@ async def test_process_streaming_basic() -> None:
     assert isinstance(bubble, MockBubble)
     assert bubble.content == "Hello World"
     assert bubble.finalized is True
-    assert app.status_label == "Streaming"
+    # After the stream loop ends the label must leave "Streaming" (bug fix:
+    # post-turn formatting/verify window otherwise stranded it there).
+    assert app.status_label == "Thinking"
 
 
 @pytest.mark.asyncio
@@ -89,7 +91,9 @@ async def test_process_streaming_with_tool_calls() -> None:
     assert bubble.tool_calls[0][0] == "read_file"
     assert "Thinking..." in bubble.tokens
     assert "Result" in bubble.tokens
-    assert app.status_label == "Streaming"
+    # After the stream loop ends the label must leave "Streaming" (bug fix:
+    # post-turn formatting/verify window otherwise stranded it there).
+    assert app.status_label == "Thinking"
 
 
 @pytest.mark.asyncio

@@ -177,6 +177,3 @@ class MockTurn:
 
     async def mount_bubble(self, bubble: Any) -> None:
         self.mounted_bubbles.append(bubble)
-
-    def auto_collapse(self) -> None:
-        pass

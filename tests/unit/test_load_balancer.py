@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -151,7 +151,7 @@ async def test_load_balancer_notifies_keypool_on_failure(
 
     provider = MagicMock()
     provider.get_name.return_value = "P_A"
-    provider.api_key = "key-a"
+    provider.api_key = "key-a"  # pragma: allowlist secret
 
     async def gen(*args: Any, **kwargs: Any) -> LLMResult:
         call_count["n"] += 1
@@ -168,21 +168,17 @@ async def test_load_balancer_notifies_keypool_on_failure(
             self.api_key = api_key
 
         def get_name(self) -> str:
-            return self._provider.get_name()
+            return self._provider.get_name()  # type: ignore[no-any-return]
 
-        async def generate(
-            self, prompt: str, options: Any = None
-        ) -> LLMResult:
-            return await self._provider.generate(prompt, options)
+        async def generate(self, prompt: str, options: Any = None) -> LLMResult:
+            return await self._provider.generate(prompt, options)  # type: ignore[no-any-return]
 
     monkeypatch.setattr(pool_mod, "GeminiProvider", FakeGeminiProvider)
     # Bypass model-level cooldown so we can see the key-level effect. Use
     # monkeypatch (not raw assignment) so it's restored at teardown — a raw
     # assign here leaks the stub into later tests and silently disables their
     # model-cooldown guard, sending them to the real network.
-    monkeypatch.setattr(
-        pool_mod, "_is_model_in_cooldown", lambda *_a, **_k: False
-    )
+    monkeypatch.setattr(pool_mod, "_is_model_in_cooldown", lambda *_a, **_k: False)
 
     pool = DynamicPool(["key-a", "key-b"], model_name="P_A")
     res = await pool.generate("test")
@@ -191,16 +187,17 @@ async def test_load_balancer_notifies_keypool_on_failure(
     # keypool was notified of key-a's failure.
     assert res.text.startswith("ok from key-")
 
-    pool_snapshot = keypool.get_key_pool().all_health()
+    pool_snapshot = keypool.get_key_pool().all_health()  # type: ignore[union-attr]
     key_a_health = next(h for h in pool_snapshot if h.key == "key-a")
     assert not key_a_health.is_available()
     assert key_a_health.last_category == "transient"
     keypool.reset_key_pool()
 
 
-
 @pytest.fixture()
-def keypool_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def keypool_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[Any, None, None]:
     """Set up a fresh KeyPool for each test and tear it down after."""
     from supporter import keypool
 
@@ -209,11 +206,16 @@ def keypool_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     keypool.reset_key_pool()
 
 
-def _make_pool(keys, model_name="test-model", pool_size=2, provider_factory=None):
+def _make_pool(
+    keys: list[str],
+    model_name: str = "test-model",
+    pool_size: int = 2,
+    provider_factory: Any = None,
+) -> DynamicPool:
     """Create a DynamicPool with a trivial factory that tracks created keys."""
     created = []
 
-    def _factory(key, model):
+    def _factory(key: str, model: str) -> MagicMock:
         p = MagicMock()
         p.get_name.return_value = f"P-{key[-2:]}"
         p.api_key = key
@@ -222,8 +224,10 @@ def _make_pool(keys, model_name="test-model", pool_size=2, provider_factory=None
 
     factory = provider_factory or _factory
     pool = DynamicPool(
-        keys, model_name=model_name,
-        pool_size=pool_size, provider_factory=factory,
+        keys,
+        model_name=model_name,
+        pool_size=pool_size,
+        provider_factory=factory,
     )
     pool._created_keys = created  # type: ignore[attr-defined]
     return pool
@@ -244,17 +248,19 @@ async def test_fill_slot_round_robin_when_keypool_unconfigured() -> None:
         pool._fill_slot()
         pool._fill_slot()
         pool._fill_slot()
-        assert pool._created_keys == ["k1", "k2", "k3"]
+        assert pool._created_keys == ["k1", "k2", "k3"]  # type: ignore[attr-defined]
         # Next cycle: k1 again.
         pool._fill_slot()
-        assert pool._created_keys[-1] == "k1"
+        assert pool._created_keys[-1] == "k1"  # type: ignore[attr-defined]
     finally:
         monkeypatch.undo()
         keypool.reset_key_pool()
 
 
 @pytest.mark.asyncio
-async def test_fill_slot_skips_sick_key(keypool_isolated) -> None:
+async def test_fill_slot_skips_sick_key(
+    keypool_isolated: Any,
+) -> None:
     """Key A in cooldown, key B healthy -> repeated _fill_slot always picks B."""
     kp_mod = keypool_isolated
     kp_mod.reset_key_pool()
@@ -276,14 +282,16 @@ async def test_fill_slot_skips_sick_key(keypool_isolated) -> None:
         # Fill slots — should always get key-b.
         pool._fill_slot()
         pool._fill_slot()
-        assert all(k == "key-b" for k in pool._created_keys)
+        assert all(k == "key-b" for k in pool._created_keys)  # type: ignore[attr-defined]
     finally:
         monkeypatch.undo()
         kp_mod.reset_key_pool()
 
 
 @pytest.mark.asyncio
-async def test_fill_slot_all_keys_sick_returns_least_sick(keypool_isolated) -> None:
+async def test_fill_slot_all_keys_sick_returns_least_sick(
+    keypool_isolated: Any,
+) -> None:
     """All keys in cooldown -> returns least-sick key, never raises."""
     kp_mod = keypool_isolated
     kp_mod.reset_key_pool()
@@ -311,7 +319,7 @@ async def test_fill_slot_all_keys_sick_returns_least_sick(keypool_isolated) -> N
         assert rec_b < rec_a
         # _fill_slot should pick key-b (least-sick).
         pool._fill_slot()
-        assert pool._created_keys[-1] == "key-b"
+        assert pool._created_keys[-1] == "key-b"  # type: ignore[attr-defined]
     finally:
         monkeypatch.undo()
         kp_mod.reset_key_pool()

@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import hashlib
 
-from supporter.llm.types import Message, TextPart, ToolCallPart, ToolResultPart
+from supporter.llm.types import (
+    GenOptions,
+    Message,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
 
 from .config import config
 
@@ -27,8 +33,10 @@ _SUMMARIZATION_INSTRUCTION = (
 )
 
 # In-process LRU for summarization results. Bounded so memory does not grow
-# unbounded across long-lived sessions. Caching is safe because summarize_turns
-# is a pure function of the transcript (no side effects, no streaming state).
+# unbounded across long-lived sessions. Caching is safe because
+# summarize_turns is a pure function of the transcript (no side effects,
+# no streaming state). Kept as a plain dict because the function is async
+# and functools.lru_cache does not support async callables.
 _SUMMARIZER_CACHE_MAX = 32
 _SUMMARIZER_CACHE: dict[str, str] = {}
 
@@ -128,10 +136,10 @@ async def summarize_turns(turns: list[Message]) -> str:
 
     result = await summarizer.generate(
         transcript,
-        {
-            "system_instruction": _SUMMARIZATION_INSTRUCTION,
-            "temperature": 0.2,
-        },
+        GenOptions(
+            system_instruction=_SUMMARIZATION_INSTRUCTION,
+            temperature=0.2,
+        ),
     )
 
     summary = result.text.strip()

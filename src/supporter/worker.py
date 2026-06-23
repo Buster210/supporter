@@ -35,6 +35,7 @@ from .tools.browser import guardrails
 from .tools.browser.session import close_session
 from .tools.catalog import build_tool_catalog, select_tools
 
+__all__ = ["sys"]
 _EXECUTOR_TOOLS = ("read_file", "write_file", "browse", "web_search")
 _MIN_REPORT_BYTES = 200
 _DEFAULT_MAX_TURNS = 8
@@ -126,23 +127,34 @@ def _install_headless_callbacks() -> Callable[[], None]:
 
 def _planner_profile() -> dict[str, Any]:
     roster = getattr(config, "delegate_agent_roster", None) or {}
-    profile = roster.get("planner")
+    profile = roster.get("worker_planner")
     if profile is None:
         from .prompts import DELEGATE_AGENT_ROSTER
 
-        profile = DELEGATE_AGENT_ROSTER["planner"]
+        profile = DELEGATE_AGENT_ROSTER["worker_planner"]
     return profile
 
 
-async def make_plan(objective: str, persona: str, model: str) -> str:
+async def make_plan(
+    objective: str, persona: str, model: str, tools_roster: str = ""
+) -> str:
     """Shared planner: ask a model with *persona* to plan *objective*.
+
+    When *tools_roster* is given, the planner is told exactly which tools the
+    orchestrator has so the plan is grounded in real capabilities.
 
     Returns the plan text, or empty string on failure. Never raises.
     """
     try:
         provider = get_provider(model_name=model, shared=False)
         options = GenOptions(system_instruction=persona)
-        result = await provider.generate(f"OBJECTIVE:\n{objective}", options)
+        prompt = f"OBJECTIVE:\n{objective}"
+        if tools_roster:
+            prompt = (
+                "ORCHESTRATOR TOOLS (the executor has exactly these — plan using "
+                f"only them):\n{tools_roster}\n\n{prompt}"
+            )
+        result = await provider.generate(prompt, options)
         plan = (getattr(result, "text", "") or "").strip()
         logger.info(f"planner produced a {len(plan)}-char plan")
         return plan
@@ -165,7 +177,6 @@ async def format_response(text: str, model: str) -> str:
     except Exception as exc:
         logger.warning(f"format_response failed: {exc}")
         return ""
-
 
 
 async def verify_plan(
@@ -317,9 +328,7 @@ async def run_worker(
                     result_text = report_path.read_text(encoding="utf-8")
                 except OSError:
                     result_text = ""
-                ok, reason = await verify_plan(
-                    task, plan, result_text, planner_model
-                )
+                ok, reason = await verify_plan(task, plan, result_text, planner_model)
                 if ok:
                     logger.info(f"worker: planner verified report after turn {turn}")
                     verified = True
@@ -331,9 +340,7 @@ async def run_worker(
             else:
                 prompt = _continuation_prompt(report_path)
         else:
-            logger.warning(
-                "worker: exhausted executor turns without a verified report"
-            )
+            logger.warning("worker: exhausted executor turns without a verified report")
     finally:
         await _teardown(agent)
         restore_callbacks()

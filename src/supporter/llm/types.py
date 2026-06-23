@@ -87,7 +87,7 @@ def _type_hint_to_json_schema(hint: typing.Any) -> dict[str, typing.Any]:
             return _type_hint_to_json_schema(args[0])
         return {"anyOf": [_type_hint_to_json_schema(a) for a in args]}
     if origin is list:
-        args = getattr(hint, "__args__", (str,))
+        args = list(getattr(hint, "__args__", [str]))
         return {"type": "array", "items": _type_hint_to_json_schema(args[0])}
     if origin is dict:
         return {"type": "object"}

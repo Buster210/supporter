@@ -86,11 +86,11 @@ class ChatContainer(Vertical):
             self._follow = False
         super()._on_mouse_scroll_up(event)
 
-    def scroll_page_up(self, *args: object, **kwargs: object) -> None:
+    def scroll_page_up(self, *args: Any, **kwargs: Any) -> None:
         self._follow = False
         super().scroll_page_up(*args, **kwargs)
 
-    def scroll_home(self, *args: object, **kwargs: object) -> None:
+    def scroll_home(self, *args: Any, **kwargs: Any) -> None:
         self._follow = False
         super().scroll_home(*args, **kwargs)
 

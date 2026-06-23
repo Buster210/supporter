@@ -35,10 +35,7 @@ __all__ = [
 
 
 def _format_recipe(recipe: Recipe) -> str:
-    head = (
-        f"# {recipe.name} — uses={recipe.uses} "
-        f"updated={recipe.updated_at or '?'}\n"
-    )
+    head = f"# {recipe.name} — uses={recipe.uses} updated={recipe.updated_at or '?'}\n"
     if recipe.description:
         head += f"  {recipe.description}\n"
     if recipe.tags:
@@ -131,7 +128,7 @@ async def recipe_find(name: str) -> str:
 async def recipe_run(name: str, fail_fast: bool = True) -> str:
     if not name or not isinstance(name, str):
         return "ERROR: name must be a non-empty string"
-    result = run_recipe(name, fail_fast=fail_fast)
+    result = await run_recipe(name, fail_fast=fail_fast)
     if result is None:
         return f"ERROR: no recipe named {name!r} (or store unavailable)"
     return _format_result(result)

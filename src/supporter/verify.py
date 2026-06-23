@@ -97,18 +97,6 @@ def _named(name: str, c: Callable[[LLMResult, str], Any]) -> Check:
     return _Wrapped()
 
 
-def _sync(c: Callable[[LLMResult, str], Any]) -> Check:
-    """Adapter for tests / simple callers that pass a sync function.
-
-    Best-effort: derives the check name from the wrapped function's
-    ``__name__``. Lambdas fall back to ``"check"``.
-    """
-    name = getattr(c, "__name__", "check")
-    if name == "<lambda>":
-        name = "check"
-    return _named(name, c)
-
-
 # ---------------------------------------------------------------------------
 # Built-in checks
 # ---------------------------------------------------------------------------
@@ -197,7 +185,7 @@ def check_recipe_passes(recipe_name: str) -> Check:
 
     name = f"recipe_passes:{recipe_name}"
 
-    def _check(result: LLMResult, _prompt: str) -> CheckResult:
+    async def _check(result: LLMResult, _prompt: str) -> CheckResult:
         recipe = find_recipe(recipe_name)
         if recipe is None:
             return CheckResult(
@@ -205,7 +193,7 @@ def check_recipe_passes(recipe_name: str) -> Check:
                 ok=False,
                 detail=f"recipe {recipe_name!r} not found",
             )
-        run = run_recipe(recipe_name)
+        run = await run_recipe(recipe_name)
         if run is None:
             return CheckResult(name=name, ok=False, detail="recipe run failed")
         if not run.ok:
@@ -353,9 +341,10 @@ class VerificationLoop:
             current_prompt = prompt
             if attempt_idx > 0 and last_result is not None:
                 last_failures = history[-1]["failures"] if history else []
-                checks_text = "\n".join(
-                    f"- [{f['name']}] {f['detail']}" for f in last_failures
-                ) or "(no detail captured)"
+                checks_text = (
+                    "\n".join(f"- [{f['name']}] {f['detail']}" for f in last_failures)
+                    or "(no detail captured)"
+                )
                 retry_prompt = self.config.retry_template.format(checks=checks_text)
                 current_prompt = f"{prompt}\n\n---\n{retry_prompt}"
             start = time.perf_counter()

@@ -74,6 +74,7 @@ async def _handle_navigate(req: BrowseRequest) -> str:
     )
     await asyncio.sleep(req.delay_ms / 1000.0)
     if not await _effective_fast(page):
+        humanize.reset_cursor()
         await humanize.reading_pause(page)
     result, has_turnstile = await asyncio.gather(
         _snapshot_full(page, req),

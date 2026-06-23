@@ -19,7 +19,6 @@ ORCHESTRATOR_TOOL_NAMES = (
     "research_assess",
     "verify_claims",
     "research_report",
-    "plan",
 )
 
 
@@ -62,7 +61,6 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         memory_status,
         memory_write,
     )
-    from .planning import plan_tool
     from .recipe_tools import (
         recipe_delete,
         recipe_find,
@@ -145,13 +143,48 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
             default_enabled=include_bash,
             delegate_allowed=True,
         ),
-        "memory_write": ToolSpec("memory_write", memory_write),
-        "memory_read": ToolSpec("memory_read", memory_read),
-        "memory_search": ToolSpec("memory_search", memory_search),
-        "memory_list_kinds": ToolSpec("memory_list_kinds", memory_list_kinds),
-        "memory_compact": ToolSpec("memory_compact", memory_compact),
-        "memory_clear": ToolSpec("memory_clear", memory_clear),
-        "memory_status": ToolSpec("memory_status", memory_status),
+        "memory_write": ToolSpec(
+            "memory_write",
+            memory_write,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "memory_read": ToolSpec(
+            "memory_read",
+            memory_read,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "memory_search": ToolSpec(
+            "memory_search",
+            memory_search,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "memory_list_kinds": ToolSpec(
+            "memory_list_kinds",
+            memory_list_kinds,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "memory_compact": ToolSpec(
+            "memory_compact",
+            memory_compact,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "memory_clear": ToolSpec(
+            "memory_clear",
+            memory_clear,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
+        "memory_status": ToolSpec(
+            "memory_status",
+            memory_status,
+            delegate_allowed=True,
+            allowed_roles=frozenset({"page-pilot"}),
+        ),
         "recipe_save": ToolSpec("recipe_save", recipe_save),
         "recipe_find": ToolSpec("recipe_find", recipe_find),
         "recipe_search": ToolSpec("recipe_search", recipe_search),
@@ -159,7 +192,6 @@ def _builtin_catalog(include_bash: bool) -> dict[str, ToolSpec]:
         "recipe_delete": ToolSpec("recipe_delete", recipe_delete),
         "recipe_list": ToolSpec("recipe_list", recipe_list),
         "recipe_status": ToolSpec("recipe_status", recipe_status),
-        "plan": ToolSpec("plan", plan_tool),
     }
     # ToolSpec is frozen=True dataclass — safe to share cached refs without copying
     _BUILTIN_CATALOG_CACHE[include_bash] = catalog

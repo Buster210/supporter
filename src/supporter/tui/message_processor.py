@@ -61,11 +61,26 @@ class ChatMessageProcessor:
             ):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
+            # Leave "Streaming" no matter how the stream ended. is_last only
+            # fires on the clean text path; a tool-call/exception end would
+            # otherwise strand the label on "Streaming".
+            self._update_status("Thinking")
             if state.bubble:
                 duration = time.perf_counter() - start_time
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
-                await self._maybe_format_bubble(state.bubble)
+            # The answer is fully on screen now. Drop the thinking spinner BEFORE
+            # the fallback formatter's LLM round-trip (and the cycle's later
+            # verify call) — otherwise "Thinking" lingers long after the response
+            # is visible. The cycle's own stop_thinking() in its finally is then
+            # an idempotent no-op (active_queries clamps at 0).
+            self._app.stop_thinking()
+            if state.bubble:
+                # Fire-and-forget: the answer is already painted, formatting only
+                # swaps an already-finalized bubble. Awaiting it would hold the
+                # cycle's _is_processing gate during the fallback model's round-trip
+                # and wrongly queue the next message while only the formatter is busy.
+                self._app.run_worker(self._maybe_format_bubble(state.bubble))
 
         return state.bubble
 
@@ -160,10 +175,22 @@ class ChatMessageProcessor:
             from ..worker import format_response
 
             formatted = await format_response(bubble.content, model)
-            if formatted and formatted != bubble.content:
-                bubble.replace_content(formatted)
-        except Exception as exc:
-            logger.warning(f"_maybe_format_bubble failed: {exc}")
+            logger.debug(
+                "formatter returned %d chars (original=%d)",
+                len(formatted),
+                len(bubble.content),
+            )
+            if not formatted or formatted == bubble.content:
+                logger.debug("formatter returned unchanged content")
+                return
+            logger.info(
+                "formatter changed content (%d -> %d chars), replacing bubble",
+                len(bubble.content),
+                len(formatted),
+            )
+            bubble.replace_content(formatted)
+        except Exception:
+            logger.warning("_maybe_format_bubble failed", exc_info=True)
 
     def _update_status(self, status: str) -> None:
         self._app.status_label = status

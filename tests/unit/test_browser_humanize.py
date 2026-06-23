@@ -122,6 +122,21 @@ def test_reset_cursor_clears_position() -> None:
     assert humanize._LAST_POS is None
 
 
+def test_origin_uses_viewport_relative_range_after_reset() -> None:
+    """After reset_cursor(), _origin_for uses 0.15-0.85 viewport fraction."""
+    humanize.reset_cursor()
+    # Small viewport: 0.15-0.85 range is [7.5, 42.5], clearly outside old [100, 800]
+    viewport: ViewportSize = {"width": 50, "height": 50}
+    random.seed(42)
+    x, y = humanize._origin_for(viewport)
+    # Must be within 0.15-0.85 fraction of viewport dimensions
+    assert 0.15 * 50 <= x <= 0.85 * 50
+    assert 0.15 * 50 <= y <= 0.85 * 50
+    # Must NOT fall in the old hardcoded 100-800 / 100-600 box
+    assert not (100.0 <= x <= 800.0), f"x={x:.1f} outside viewport-relative range"
+    assert not (100.0 <= y <= 600.0), f"y={y:.1f} outside viewport-relative range"
+
+
 async def test_reading_pause_sleeps_within_documented_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

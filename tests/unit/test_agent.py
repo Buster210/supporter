@@ -159,9 +159,7 @@ def test_summary_invalidated_on_branch_swap_same_length() -> None:
         agent = ChatAgent(provider=provider)
 
         # Branch A: 6 turns. Summary covers the first 4 (len - keep_recent).
-        branch_a = [
-            Content(role="user", parts=[Part(text=f"A-{i}")]) for i in range(6)
-        ]
+        branch_a = [Content(role="user", parts=[Part(text=f"A-{i}")]) for i in range(6)]
         agent.history = list(branch_a)
         n = len(branch_a) - mock_config.history_summary_keep_recent  # 4
         agent._summary = "OLD SUMMARY"
@@ -175,9 +173,7 @@ def test_summary_invalidated_on_branch_swap_same_length() -> None:
 
         # Branch swap: replace history with a DIFFERENT 6-turn branch. Count
         # check (4 >= 6) is False — only the fingerprint catches the swap.
-        branch_b = [
-            Content(role="user", parts=[Part(text=f"B-{i}")]) for i in range(6)
-        ]
+        branch_b = [Content(role="user", parts=[Part(text=f"B-{i}")]) for i in range(6)]
         agent.history = list(branch_b)
         assert agent._summary_is_stale() is True
         view_b = agent._build_compacted_history()

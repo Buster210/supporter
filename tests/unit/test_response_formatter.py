@@ -38,7 +38,7 @@ def _make_bubble(tokens: list[str]) -> MessageBubble:
     """Build a finalized pure-text bubble without mounting it."""
     bubble = MessageBubble(role="agent", content="", streaming=True)
     # Suppress timer so append_token doesn't try to schedule on an unmounted widget.
-    bubble.set_timer = lambda _interval, callback: None  # type: ignore[method-assign]
+    bubble.set_timer = lambda _interval, callback: None  # type: ignore[method-assign,misc,assignment]
     for tok in tokens:
         bubble.append_token(tok)
     # Simulate finalize without UI (no _meta_label / _message_view attached).
@@ -114,7 +114,7 @@ class TestReplaceContent:
 
     def test_preserves_non_content_elements(self) -> None:
         bubble = MessageBubble(role="agent", content="", streaming=True)
-        bubble.set_timer = lambda _i, _c: None  # type: ignore[method-assign]
+        bubble.set_timer = lambda _i, _c: None  # type: ignore[method-assign,misc,assignment]
         bubble.append_token("thinking", is_thought=True)
         bubble.append_token("answer text")
         bubble.streaming = False

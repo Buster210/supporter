@@ -46,9 +46,9 @@ def test_coerce_keys_rejects_bad_json() -> None:
 
 def test_coerce_keys_rejects_bad_shape() -> None:
     with pytest.raises(ValueError):
-        coerce_keys({"a": 1})  # type: ignore[arg-type]
+        coerce_keys({"a": 1})
     with pytest.raises(ValueError):
-        coerce_keys([1, 2])  # type: ignore[list-item]
+        coerce_keys([1, 2])
 
 
 # ---------------------------------------------------------------------------

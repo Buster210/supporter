@@ -11,6 +11,7 @@ from .prompts import (
     DELEGATE_DEFAULT_PERSONA,
     MODEL_GEMINI_LIVE,
     MODEL_GEMINI_LIVE_FALLBACK,
+    MODEL_GEMMA_26B,
     MODEL_GEMMA_31B,
 )
 from .types import AppConfig
@@ -166,8 +167,8 @@ def load_config() -> AppConfig:
         gemini_live_fallback_model=os.getenv(
             "GEMINI_LIVE_FALLBACK_MODEL", MODEL_GEMINI_LIVE_FALLBACK
         ),
-        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", DEFAULT_MODEL),
-        log_file=os.getenv("LOG_FILE", "app.log"),
+        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", MODEL_GEMMA_26B),
+        log_file=os.getenv("LOG_FILE", "logs/app.log"),
         voice_name=os.getenv("GEMINI_VOICE_NAME", "Puck"),
         default_system_instruction=os.getenv(
             "DEFAULT_SYSTEM_INSTRUCTION", DEFAULT_SYSTEM_INSTRUCTION
@@ -207,7 +208,6 @@ def load_config() -> AppConfig:
         delegate_persist_noncode=_bool_env(
             "DELEGATE_PERSIST_NONCODE", DELEGATE_PERSIST_NONCODE
         ),
-        delegate_qa_gate_enabled=_bool_env("DELEGATE_QA_GATE_ENABLED", True),
         delegate_result_repair=_bool_env(
             "DELEGATE_RESULT_REPAIR", DELEGATE_RESULT_REPAIR
         ),
@@ -248,6 +248,8 @@ def load_config() -> AppConfig:
         browser_micro_behavior_rate=float(os.getenv("MICRO_BEHAVIOR_RATE", "0.06")),
         browser_promotion_threshold=_int_env("BROWSER_PROMOTION_THRESHOLD", 5),
         browser_auto_approve=_bool_env("BROWSER_AUTO_APPROVE", True),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
     )
 
 

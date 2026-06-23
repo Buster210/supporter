@@ -13,6 +13,15 @@ from .loop import assess_research
 from .search import _MAX_RESULTS_CAP, fetch_tavily
 from .verify import build_report, verify_research
 
+__all__ = [
+    "_loads_lenient",
+    "_reset_store",
+    "deep_research",
+    "ingest_claims",
+    "question_id_for",
+    "run_deep_research",
+]
+
 # Driver defaults. The loop is bounded by code, not by the model's discretion:
 # rounds are capped, results-per-query are capped, and the stop decision comes
 # from assess_research (saturation OR budget), never from a prompt.

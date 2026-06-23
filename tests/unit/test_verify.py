@@ -45,7 +45,7 @@ def _sync_check(name: str, ok: bool, detail: str = "") -> Any:
     return _Stub()
 
 
-async def _async_check(name: str, ok: bool, detail: str = ""):
+async def _async_check(name: str, ok: bool, detail: str = "") -> Any:
     class _Stub:
         def __init__(self) -> None:
             self.name = name
@@ -63,45 +63,45 @@ async def _async_check(name: str, ok: bool, detail: str = ""):
 
 def test_check_min_chars_passes() -> None:
     c = check_min_chars(min_chars=3)
-    assert c(_result("hello"), "p").ok is True
-    assert c(_result("hi"), "p").ok is False
+    assert c(_result("hello"), "p").ok is True  # type: ignore[union-attr]
+    assert c(_result("hi"), "p").ok is False  # type: ignore[union-attr]
 
 
 def test_check_no_unicode_garble_passes_normal_text() -> None:
     c = check_no_unicode_garble()
-    assert c(_result("Hello world, this is clean."), "p").ok is True
+    assert c(_result("Hello world, this is clean."), "p").ok is True  # type: ignore[union-attr]
 
 
 def test_check_no_unicode_garble_flags_repeat_run() -> None:
     c = check_no_unicode_garble()
     bad = "x" * 50
-    assert c(_result(bad), "p").ok is False
+    assert c(_result(bad), "p").ok is False  # type: ignore[union-attr]
 
 
 def test_check_no_unicode_garble_flags_nbsp_run() -> None:
     c = check_no_unicode_garble()
-    assert c(_result("hello\u00a0\u00a0\u00a0\u00a0world"), "p").ok is False
+    assert c(_result("hello\u00a0\u00a0\u00a0\u00a0world"), "p").ok is False  # type: ignore[union-attr]
 
 
 def test_check_json_shape_passes_with_required_keys() -> None:
     c = check_json_shape(required_keys=("summary", "ok"))
     payload = json.dumps({"summary": "x", "ok": True})
-    assert c(_result(payload), "p").ok is True
+    assert c(_result(payload), "p").ok is True  # type: ignore[union-attr]
 
 
 def test_check_json_shape_fails_on_invalid() -> None:
     c = check_json_shape()
-    assert c(_result("not json"), "p").ok is False
+    assert c(_result("not json"), "p").ok is False  # type: ignore[union-attr]
 
 
 def test_check_json_shape_fails_on_missing_keys() -> None:
     c = check_json_shape(required_keys=("summary",))
-    assert c(_result('{"x": 1}'), "p").ok is False
+    assert c(_result('{"x": 1}'), "p").ok is False  # type: ignore[union-attr]
 
 
 def test_check_json_shape_fails_on_non_object() -> None:
     c = check_json_shape(required_keys=("x",))
-    assert c(_result("[1,2,3]"), "p").ok is False
+    assert c(_result("[1,2,3]"), "p").ok is False  # type: ignore[union-attr]
 
 
 def test_check_files_exist_missing(
@@ -109,14 +109,12 @@ def test_check_files_exist_missing(
 ) -> None:
     from supporter import verify as verify_mod
 
-    monkeypatch.setattr(
-        verify_mod.config, "allowed_directories", [str(tmp_path)]
-    )
+    monkeypatch.setattr(verify_mod.config, "allowed_directories", [str(tmp_path)])  # type: ignore[attr-defined]
     (tmp_path / "present.txt").touch()
     c = check_files_exist(paths=("present.txt", "missing.txt"))
     res = c(_result(""), "p")
-    assert res.ok is False
-    assert "missing" in res.detail
+    assert res.ok is False  # type: ignore[union-attr]
+    assert "missing" in res.detail  # type: ignore[union-attr]
 
 
 def test_check_files_exist_passes(
@@ -124,66 +122,61 @@ def test_check_files_exist_passes(
 ) -> None:
     from supporter import verify as verify_mod
 
-    monkeypatch.setattr(
-        verify_mod.config, "allowed_directories", [str(tmp_path)]
-    )
+    monkeypatch.setattr(verify_mod.config, "allowed_directories", [str(tmp_path)])  # type: ignore[attr-defined]
     (tmp_path / "present.txt").touch()
     c = check_files_exist(paths=("present.txt",))
     res = c(_result(""), "p")
-    assert res.ok is True
+    assert res.ok is True  # type: ignore[union-attr]
 
 
-def test_check_recipe_passes_runs_recipe(
+@pytest.mark.asyncio
+async def test_check_recipe_passes_runs_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 
     from supporter import recipes as recipes_mod
 
-    monkeypatch.setattr(
-        recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl"
-    )
-    recipes_mod._STORE = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    recipes_mod._STORE = None
     recipes_mod.save_recipe(
         "demo",
         "d",
         [{"kind": "emit", "value": "hi"}],
     )
     c = check_recipe_passes("demo")
-    res = c(_result(""), "p")
+    res = await c(_result(""), "p")  # type: ignore[misc]
     assert res.ok is True
     assert "steps" in res.detail
 
 
-def test_check_recipe_passes_missing_recipe(
+@pytest.mark.asyncio
+async def test_check_recipe_passes_missing_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter import recipes as recipes_mod
 
-    monkeypatch.setattr(
-        recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl"
-    )
-    recipes_mod._STORE = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    recipes_mod._STORE = None
     c = check_recipe_passes("nope")
-    res = c(_result(""), "p")
+    res = await c(_result(""), "p")  # type: ignore[misc]
     assert res.ok is False
 
 
-def test_check_recipe_passes_failing_recipe(
+@pytest.mark.asyncio
+async def test_check_recipe_passes_failing_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter import recipes as recipes_mod
 
-    monkeypatch.setattr(
-        recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl"
-    )
-    recipes_mod._STORE = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    recipes_mod._STORE = None
     recipes_mod.save_recipe(
         "failing",
         "d",
         [{"kind": "assert_eq", "value": "a||b"}],
     )
     c = check_recipe_passes("failing")
-    res = c(_result(""), "p")
+    res = await c(_result(""), "p")  # type: ignore[misc]
     assert res.ok is False
     assert "failed" in res.detail
 
@@ -312,10 +305,8 @@ async def test_loop_records_to_memory_by_default(
 ) -> None:
     from supporter import memory as memory_mod
 
-    monkeypatch.setattr(
-        memory_mod, "_memory_path", lambda: tmp_path / "wm.jsonl"
-    )
-    memory_mod._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(memory_mod, "_memory_path", lambda: tmp_path / "wm.jsonl")
+    memory_mod._MEMORY_SINGLETON = None
     loop = VerificationLoop(
         VerificationConfig(max_attempts=2),
         [_sync_check("c", True)],
@@ -332,10 +323,8 @@ async def test_loop_skips_memory_when_disabled(
 ) -> None:
     from supporter import memory as memory_mod
 
-    monkeypatch.setattr(
-        memory_mod, "_memory_path", lambda: tmp_path / "wm.jsonl"
-    )
-    memory_mod._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
+    monkeypatch.setattr(memory_mod, "_memory_path", lambda: tmp_path / "wm.jsonl")
+    memory_mod._MEMORY_SINGLETON = None
     loop = VerificationLoop(
         VerificationConfig(max_attempts=2, record_to_memory=False),
         [_sync_check("c", True)],
@@ -432,9 +421,7 @@ async def test_agent_execute_with_verification_with_recover() -> None:
     provider = MagicMock()
     provider.get_name.return_value = "fake"
     # First call: timeout (recoverable). Second call: ok.
-    provider.generate = AsyncMock(
-        side_effect=[TimeoutError(), _result("hi")]
-    )
+    provider.generate = AsyncMock(side_effect=[TimeoutError(), _result("hi")])
 
     recover = AutoRecover(
         name="provider.generate",

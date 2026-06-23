@@ -35,7 +35,7 @@ import os
 import re
 import threading
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -119,14 +119,6 @@ def _memory_path() -> Path:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _MemoryState:
-    path: Path
-    notes: deque[Note] = field(default_factory=deque)
-    # Index by kind for fast ``list(kind=...)`` queries.
-    by_kind: dict[str, list[Note]] = field(default_factory=dict)
-
-
 class WorkingMemory:
     """Process-wide working memory store.
 
@@ -136,9 +128,7 @@ class WorkingMemory:
 
     def __init__(self, path: Path | str | None = None) -> None:
         self._path: Path = (
-            Path(path).expanduser().resolve()
-            if path is not None
-            else _memory_path()
+            Path(path).expanduser().resolve() if path is not None else _memory_path()
         )
         self._lock = threading.RLock()
         self._notes: deque[Note] = deque(maxlen=_MAX_TOTAL_NOTES)
@@ -213,9 +203,7 @@ class WorkingMemory:
         pattern = re.compile(re.escape(needle), re.IGNORECASE)
         with self._lock:
             candidates: list[Note] = (
-                self._by_kind.get(kind, [])
-                if kind
-                else list(self._notes)
+                self._by_kind.get(kind, []) if kind else list(self._notes)
             )
             hits: list[Note] = []
             for note in candidates:
@@ -270,13 +258,6 @@ class WorkingMemory:
                 "kinds": counts,
                 "snapshot_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             }
-
-    def list(
-        self,
-        kind: str | None = None,
-        limit: int | None = None,
-    ) -> list[Note]:
-        return self.list_notes(kind=kind, limit=limit)
 
     # --- internals --------------------------------------------------------
 
@@ -375,7 +356,7 @@ def list_notes(
     memory = _get_memory()
     if memory is None:
         return []
-    return memory.list(kind=kind, limit=limit)
+    return memory.list_notes(kind=kind, limit=limit)
 
 
 def search_notes(

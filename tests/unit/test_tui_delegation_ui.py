@@ -49,7 +49,7 @@ class FakeDelegationBus:
         return queue
 
 
-def test_task_signal_contains_status_agent_and_goal() -> None:
+def test_task_signal_contains_status_and_agent() -> None:
     bus = MagicMock()
     bus.get_snapshot.return_value = {
         "get_time": {
@@ -65,7 +65,7 @@ def test_task_signal_contains_status_agent_and_goal() -> None:
     assert "Delegation task completed" in signal
     assert "`get_time`" in signal
     assert "[explorer]" in signal
-    assert "Find current time in India." in signal
+    assert "Find current time in India." not in signal
     assert "query_delegation" not in signal
     assert "DELEGATION_TASK_DONE:" not in signal
 
@@ -226,7 +226,7 @@ async def test_listener_renders_terminal_task_signals_to_ui(
     assert len(rendered) == 3
     assert "Delegation task failed" in rendered[0]
     assert "`failed`" in rendered[0] and "[agent-a]" in rendered[0]
-    assert "Fail task" in rendered[0]
+    assert "Fail task" not in rendered[0]
     assert "Delegation task timed out" in rendered[1]
     assert "Delegation task skipped" in rendered[2]
     assert all("query_delegation" not in msg for msg in rendered)
@@ -519,6 +519,56 @@ async def test_process_system_message_uses_agent_role_without_active_turn() -> N
     app._process_message_cycle.assert_awaited_once_with(
         "system-only", mount_user=True, role="agent"
     )
+
+
+def test_planner_capsule_mounts_visible_bubble_and_feeds_model() -> None:
+    inject_message = MagicMock()
+    plan_bubble_injector = MagicMock()
+    listener = DelegationListener(
+        inject_message=inject_message,
+        upsert_progress=AsyncMock(),
+        drop_progress=MagicMock(),
+        render_signal=MagicMock(),
+        plan_bubble_injector=plan_bubble_injector,
+    )
+
+    payload = {
+        "job_id": "job123",
+        "agent": "planner",
+        "milestone": "Design the thing",
+        "status": "completed",
+        "tasks": [{"id": "t1", "status": "done", "summary": "lay out modules"}],
+    }
+    listener._inject_capsule_result(payload)
+
+    # Visible bubble mounted with real markdown (not a raw JSON dump).
+    plan_bubble_injector.assert_called_once()
+    markdown = plan_bubble_injector.call_args.args[0]
+    assert "## Plan: Design the thing" in markdown
+    assert "lay out modules" in markdown
+    assert "DELEGATION_CAPSULE_RESULT" not in markdown
+    # ...and the full JSON still reaches the model for synthesis.
+    model_msg = inject_message.call_args.args[0]
+    assert "DELEGATION_CAPSULE_RESULT (json):" in model_msg
+    assert '"agent": "planner"' in model_msg
+
+
+def test_worker_capsule_does_not_mount_bubble() -> None:
+    inject_message = MagicMock()
+    plan_bubble_injector = MagicMock()
+    listener = DelegationListener(
+        inject_message=inject_message,
+        upsert_progress=AsyncMock(),
+        drop_progress=MagicMock(),
+        render_signal=MagicMock(),
+        plan_bubble_injector=plan_bubble_injector,
+    )
+
+    payload = {"job_id": "job123", "agent": "worker", "status": "completed"}
+    listener._inject_capsule_result(payload)
+
+    plan_bubble_injector.assert_not_called()
+    assert "DELEGATION_CAPSULE_RESULT (json):" in inject_message.call_args.args[0]
 
 
 def test_drop_delegation_progress_removes_stale_entry() -> None:

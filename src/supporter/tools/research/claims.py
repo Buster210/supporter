@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 from ...logger import logger
 from .. import resolved_project_root
 
+__all__ = ["ingest_claims"]
+
 _STANCES = frozenset({"support", "refute"})
 _STRIP_CHARS = " \t\n\r.,;:!?\"'()[]{}"
 
@@ -265,13 +267,4 @@ def dedup_to_assertions(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
         group["refuting_domains"] = refuting
         group["status"] = assertion_status(supporting, refuting)
         assertions.append(group)
-    return assertions
-
-
-def query_assertions(
-    question_id: str, status: str | None = None
-) -> list[dict[str, Any]]:
-    assertions = dedup_to_assertions(load_claims(question_id))
-    if status is not None:
-        assertions = [a for a in assertions if a["status"] == status]
     return assertions

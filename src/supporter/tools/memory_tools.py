@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from typing import Any
 
 from ..memory import (
     Note,
@@ -37,16 +36,6 @@ __all__ = [
     "memory_status",
     "memory_write",
 ]
-
-
-def _note_to_dict(note: Note) -> dict[str, Any]:
-    return {
-        "timestamp": note.timestamp,
-        "kind": note.kind,
-        "label": note.label,
-        "source": note.source,
-        "value": note.value,
-    }
 
 
 def _format_notes(notes: Iterable[Note]) -> str:
@@ -111,9 +100,7 @@ async def memory_read(kind: str = "", limit: int = 20) -> str:
     return _format_notes(notes)
 
 
-async def memory_search(
-    query: str, kind: str = "", limit: int = 20
-) -> str:
+async def memory_search(query: str, kind: str = "", limit: int = 20) -> str:
     """Search notes whose kind, label, source, or value contains ``query``."""
     if not query:
         return "ERROR: query must be non-empty"

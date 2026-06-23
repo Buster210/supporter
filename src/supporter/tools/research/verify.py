@@ -9,16 +9,6 @@ from .claims import dedup_to_assertions, load_claims
 _MAX_SOURCES_PER_ASSERTION = 5
 
 
-def _first_snippet(sources: list[dict[str, Any]], stance: str | None = None) -> str:
-    for s in sources:
-        if stance is not None and s.get("stance") != stance:
-            continue
-        snippet = str(s.get("snippet", "")).strip()
-        if snippet:
-            return snippet
-    return ""
-
-
 def _citations(sources: list[dict[str, Any]], stance: str) -> list[dict[str, str]]:
     seen: set[str] = set()
     cites: list[dict[str, str]] = []

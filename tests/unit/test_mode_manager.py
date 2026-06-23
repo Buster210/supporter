@@ -201,7 +201,6 @@ async def test_setup_agent_registry_tools() -> None:
         "research_assess",
         "verify_claims",
         "research_report",
-        "plan",
     }
 
 

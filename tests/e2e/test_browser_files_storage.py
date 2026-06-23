@@ -1,19 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
-from supporter.config import config as real_config
-from supporter.tools import resolved_project_root
-from supporter.tools.browser import guardrails, session
 from supporter.tools.browser.tool import browse
 
 STORAGE_BODY = b"<html><body><h1>Storage</h1></body></html>"
+_UPLOAD_SRC = Path(__file__).resolve().parent / "to_upload.txt"
 
 
 class _StorageHandler(BaseHTTPRequestHandler):
@@ -64,31 +63,6 @@ DOWNLOAD_PAGE = (
 )
 
 
-async def _always_allow(_title: str, _detail: str) -> bool:
-    return True
-
-
-@pytest.fixture
-async def throwaway_browser(tmp_path: Path) -> AsyncIterator[Path]:
-    saved_path = real_config.browser_profile_path
-    profile_dir = tmp_path / "profile"
-    profile_dir.mkdir()
-    real_config.browser_profile_path = str(profile_dir)
-    guardrails.register_browse_callback(confirmation=_always_allow)
-
-    work = resolved_project_root() / ".tier4_tmp"
-    work.mkdir(exist_ok=True)
-    try:
-        yield work
-    finally:
-        await session.close_session()
-        guardrails.register_browse_callback(confirmation=None)
-        real_config.browser_profile_path = saved_path
-        for f in work.glob("*"):
-            f.unlink()
-        work.rmdir()
-
-
 def _first_ref(snapshot: str, needle: str) -> str:
     for line in snapshot.splitlines():
         if needle in line:
@@ -99,18 +73,22 @@ def _first_ref(snapshot: str, needle: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_upload_attaches_file(throwaway_browser: Path) -> None:
-    src = throwaway_browser / "to_upload.txt"
-    src.write_text("payload")
+async def test_upload_attaches_file(throwaway_browser: None) -> None:
+    # Navigate first, then create the file just before upload to avoid
+    # external file cleanup (macOS Spotlight/indexer) deleting it.
     snap = await browse("navigate", url=UPLOAD_PAGE)
     ref = _first_ref(snap, '"Pick file"')
-    after = await browse("upload", ref=ref, path=str(src))
-    assert "picked:to_upload.txt" in after
+    await asyncio.to_thread(_UPLOAD_SRC.write_text, "payload")
+    try:
+        after = await browse("upload", ref=ref, path=str(_UPLOAD_SRC))
+        assert "picked:to_upload.txt" in after
+    finally:
+        _UPLOAD_SRC.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
 async def test_storage_set_then_get(
-    throwaway_browser: Path, storage_origin: str
+    throwaway_browser: None, storage_origin: str
 ) -> None:
     await browse("navigate", url=storage_origin)
     set_result = await browse("storage", key="tok", value="abc123")
