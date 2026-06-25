@@ -208,7 +208,8 @@ def test_store_tolerates_corrupt_lines(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_recipe_emit_and_assert(
+@pytest.mark.asyncio
+async def test_recipe_emit_and_assert(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
@@ -220,13 +221,14 @@ def test_recipe_emit_and_assert(
             {"kind": "assert_eq", "value": "hello||hello"},
         ],
     )
-    result = run_recipe("simple")
+    result = await run_recipe("simple")
     assert result is not None
     assert result.ok
     assert result.emitted == ["hello"]
 
 
-def test_recipe_assert_eq_mismatch(
+@pytest.mark.asyncio
+async def test_recipe_assert_eq_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
@@ -235,14 +237,17 @@ def test_recipe_assert_eq_mismatch(
         "d",
         [{"kind": "assert_eq", "value": "a||b"}],
     )
-    result = run_recipe("fail")
+    result = await run_recipe("fail")
     assert result is not None
     assert not result.ok
     assert result.failed_step_index == 0
     assert "mismatch" in result.error
 
 
-def test_recipe_read_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_recipe_read_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     monkeypatch.setattr(recipes_mod.config, "allowed_directories", [str(tmp_path)])
     (tmp_path / "x.txt").write_text("contents", encoding="utf-8")
@@ -251,13 +256,16 @@ def test_recipe_read_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         "d",
         [{"kind": "read", "value": "x.txt"}],
     )
-    result = run_recipe("read")
+    result = await run_recipe("read")
     assert result is not None
     assert result.ok
     assert "read 8 chars" in result.step_results[0]["detail"]
 
 
-def test_recipe_write_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_recipe_write_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     monkeypatch.setattr(recipes_mod.config, "allowed_directories", [str(tmp_path)])
     save_recipe(
@@ -265,13 +273,16 @@ def test_recipe_write_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         "d",
         [{"kind": "write", "value": "y.txt||hello world"}],
     )
-    result = run_recipe("write")
+    result = await run_recipe("write")
     assert result is not None
     assert result.ok
     assert (tmp_path / "y.txt").read_text(encoding="utf-8") == "hello world"
 
 
-def test_recipe_assert_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_recipe_assert_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     monkeypatch.setattr(recipes_mod.config, "allowed_directories", [str(tmp_path)])
     (tmp_path / "ok.txt").touch()
@@ -283,13 +294,14 @@ def test_recipe_assert_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             {"kind": "assert_exists", "value": "missing.txt"},
         ],
     )
-    result = run_recipe("exists", fail_fast=False)
+    result = await run_recipe("exists", fail_fast=False)
     assert result is not None
     assert not result.ok
     assert result.failed_step_index == 1
 
 
-def test_recipe_path_traversal_blocked(
+@pytest.mark.asyncio
+async def test_recipe_path_traversal_blocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
@@ -299,12 +311,13 @@ def test_recipe_path_traversal_blocked(
         "d",
         [{"kind": "read", "value": "../secrets.txt"}],
     )
-    result = run_recipe("evil")
+    result = await run_recipe("evil")
     assert result is not None
     assert not result.ok
 
 
-def test_recipe_memory_write_step(
+@pytest.mark.asyncio
+async def test_recipe_memory_write_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter import memory as memory_mod
@@ -316,7 +329,7 @@ def test_recipe_memory_write_step(
         "d",
         [{"kind": "memory_write", "value": "todo||{\"task\":\"ship\"}"}],
     )
-    result = run_recipe("remember")
+    result = await run_recipe("remember")
     assert result is not None
     assert result.ok
     notes = memory_mod.list_notes(kind="todo")
@@ -324,7 +337,8 @@ def test_recipe_memory_write_step(
     assert notes[0].value == {"task": "ship"}
 
 
-def test_recipe_fail_fast_stops_at_first_failure(
+@pytest.mark.asyncio
+async def test_recipe_fail_fast_stops_at_first_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
@@ -336,13 +350,14 @@ def test_recipe_fail_fast_stops_at_first_failure(
             {"kind": "emit", "value": "never"},
         ],
     )
-    result = run_recipe("x", fail_fast=True)
+    result = await run_recipe("x", fail_fast=True)
     assert result is not None
     assert not result.ok
     assert len(result.step_results) == 1
 
 
-def test_recipe_fail_fast_false_continues(
+@pytest.mark.asyncio
+async def test_recipe_fail_fast_false_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
@@ -354,20 +369,22 @@ def test_recipe_fail_fast_false_continues(
             {"kind": "emit", "value": "ran"},
         ],
     )
-    result = run_recipe("x", fail_fast=False)
+    result = await run_recipe("x", fail_fast=False)
     assert result is not None
     assert not result.ok
     assert len(result.step_results) == 2
 
 
-def test_run_recipe_unknown_returns_none(
+@pytest.mark.asyncio
+async def test_run_recipe_unknown_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
-    assert run_recipe("nope") is None
+    assert await run_recipe("nope") is None
 
 
-def test_run_recipe_persists_run_to_memory(
+@pytest.mark.asyncio
+async def test_run_recipe_persists_run_to_memory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter import memory as memory_mod
@@ -375,9 +392,30 @@ def test_run_recipe_persists_run_to_memory(
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     monkeypatch.setattr(memory_mod, "_memory_path", lambda: tmp_path / "wm.jsonl")
     save_recipe("a", "d", [{"kind": "emit", "value": "x"}])
-    run_recipe("a")
+    await run_recipe("a")
     runs = memory_mod.list_notes(kind="recipe_run")
     assert len(runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_recipe_browser_step_replays_playbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
+    from unittest.mock import AsyncMock
+
+    replay = AsyncMock(return_value="replayed ok")
+    monkeypatch.setattr("supporter.tools.browser.task.replay_playbook", replay)
+    save_recipe(
+        "browse",
+        "d",
+        [{"kind": "browser", "value": "buy milk||{\"qty\": \"2\"}"}],
+    )
+    result = await run_recipe("browse")
+    assert result is not None
+    assert result.ok
+    replay.assert_awaited_once_with("buy milk", {"qty": "2"})
+    assert "replayed ok" in result.step_results[0]["detail"]
 
 
 @pytest.fixture(autouse=True)

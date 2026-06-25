@@ -133,7 +133,8 @@ def test_check_files_exist_passes(
     assert res.ok is True
 
 
-def test_check_recipe_passes_runs_recipe(
+@pytest.mark.asyncio
+async def test_check_recipe_passes_runs_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 
@@ -149,12 +150,13 @@ def test_check_recipe_passes_runs_recipe(
         [{"kind": "emit", "value": "hi"}],
     )
     c = check_recipe_passes("demo")
-    res = c(_result(""), "p")
+    res = await c(_result(""), "p")
     assert res.ok is True
     assert "steps" in res.detail
 
 
-def test_check_recipe_passes_missing_recipe(
+@pytest.mark.asyncio
+async def test_check_recipe_passes_missing_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter import recipes as recipes_mod
@@ -164,11 +166,12 @@ def test_check_recipe_passes_missing_recipe(
     )
     recipes_mod._STORE = None  # type: ignore[attr-defined]
     c = check_recipe_passes("nope")
-    res = c(_result(""), "p")
+    res = await c(_result(""), "p")
     assert res.ok is False
 
 
-def test_check_recipe_passes_failing_recipe(
+@pytest.mark.asyncio
+async def test_check_recipe_passes_failing_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from supporter import recipes as recipes_mod
@@ -183,7 +186,7 @@ def test_check_recipe_passes_failing_recipe(
         [{"kind": "assert_eq", "value": "a||b"}],
     )
     c = check_recipe_passes("failing")
-    res = c(_result(""), "p")
+    res = await c(_result(""), "p")
     assert res.ok is False
     assert "failed" in res.detail
 

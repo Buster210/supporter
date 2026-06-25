@@ -197,7 +197,7 @@ def check_recipe_passes(recipe_name: str) -> Check:
 
     name = f"recipe_passes:{recipe_name}"
 
-    def _check(result: LLMResult, _prompt: str) -> CheckResult:
+    async def _check(result: LLMResult, _prompt: str) -> CheckResult:
         recipe = find_recipe(recipe_name)
         if recipe is None:
             return CheckResult(
@@ -205,7 +205,7 @@ def check_recipe_passes(recipe_name: str) -> Check:
                 ok=False,
                 detail=f"recipe {recipe_name!r} not found",
             )
-        run = run_recipe(recipe_name)
+        run = await run_recipe(recipe_name)
         if run is None:
             return CheckResult(name=name, ok=False, detail="recipe run failed")
         if not run.ok:

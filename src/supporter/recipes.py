@@ -37,11 +37,11 @@ Design choices
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 import re
 import threading
-import time
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping
@@ -92,6 +92,7 @@ _VALID_KINDS: frozenset[str] = frozenset(
         "assert_exists",
         "assert_eq",
         "emit",
+        "browser",
     }
 )
 
@@ -117,6 +118,7 @@ class RecipeStep:
     #   assert_exists-> project-relative path
     #   assert_eq    -> "expected||actual" string (split on "||")
     #   emit         -> free-form text
+    #   browser      -> "goal" or "goal||json_overrides"; replays a saved playbook
     value: str = ""
     # Optional override: a 1-line human description, persisted for inspection.
     note: str = ""
@@ -509,14 +511,16 @@ def find_recipe(name: str) -> Recipe | None:
     return store.find(name)
 
 
-def run_recipe(name: str, *, fail_fast: bool = True) -> RecipeRunResult | None:
+async def run_recipe(
+    name: str, *, fail_fast: bool = True
+) -> RecipeRunResult | None:
     store = get_recipe_store()
     if store is None:
         return None
     recipe = store.find(name)
     if recipe is None:
         return None
-    return _execute_recipe(recipe, fail_fast=fail_fast)
+    return await _execute_recipe(recipe, fail_fast=fail_fast)
 
 
 def delete_recipe(name: str) -> bool:
@@ -584,7 +588,7 @@ def _parse_break_range(value: str) -> tuple[int, int]:
     return lo, hi
 
 
-def _execute_step(
+async def _execute_step(
     index: int,
     step: RecipeStep,
     ctx: dict[str, Any],
@@ -596,16 +600,34 @@ def _execute_step(
             ms = int(step.value)
             if ms < 0 or ms > 60_000:
                 raise ValueError("delay must be 0..60000 ms")
-            time.sleep(ms / 1000.0)
+            await asyncio.sleep(ms / 1000.0)
             head["detail"] = f"slept {ms}ms"
             return head
 
         if step.kind == "human_break":
             lo, hi = _parse_break_range(step.value)
             ms = random.randint(lo, hi)  # noqa: S311  # fresh random every run
-            time.sleep(ms / 1000.0)
+            await asyncio.sleep(ms / 1000.0)
             head["detail"] = f"human break {ms}ms (random in {lo}..{hi})"
             head["break_ms"] = ms
+            return head
+
+        if step.kind == "browser":
+            # Value: "goal" or "goal||json_overrides". Replays a saved playbook
+            # on the live page; needs an active browser session (orchestrator).
+            from .tools.browser.task import replay_playbook
+
+            goal, overrides = step.value, None
+            if "||" in step.value:
+                goal, blob = step.value.split("||", 1)
+                parsed = json.loads(blob)
+                if not isinstance(parsed, dict):
+                    head["ok"] = False
+                    head["error"] = "browser overrides must be a JSON object"
+                    return head
+                overrides = parsed
+            summary = await replay_playbook(goal, overrides)
+            head["detail"] = summary[:400]
             return head
 
         if step.kind == "emit":
@@ -694,8 +716,14 @@ def _execute_step(
                 parsed = urllib.parse.urlparse(url)
                 if parsed.scheme not in {"http", "https"}:
                     raise ValueError(f"unsupported scheme: {parsed.scheme}")
-                with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310
-                    body = response.read(1024 * 1024).decode("utf-8", errors="replace")
+
+                def _fetch() -> str:
+                    with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310
+                        return response.read(1024 * 1024).decode(
+                            "utf-8", errors="replace"
+                        )
+
+                body = await asyncio.to_thread(_fetch)
                 head["detail"] = f"http {len(body)} chars"
                 head["snippet"] = body[:240]
             except Exception as exc:
@@ -740,7 +768,7 @@ def _execute_step(
         return head
 
 
-def _execute_recipe(recipe: Recipe, *, fail_fast: bool) -> RecipeRunResult:
+async def _execute_recipe(recipe: Recipe, *, fail_fast: bool) -> RecipeRunResult:
     started_at = _now_iso()
     ctx: dict[str, Any] = {"emitted": [], "name": recipe.name}
     result = RecipeRunResult(
@@ -750,7 +778,7 @@ def _execute_recipe(recipe: Recipe, *, fail_fast: bool) -> RecipeRunResult:
         ok=True,
     )
     for i, step in enumerate(recipe.steps):
-        step_result = _execute_step(i, step, ctx)
+        step_result = await _execute_step(i, step, ctx)
         result.step_results.append(step_result)
         if not step_result["ok"]:
             result.ok = False
