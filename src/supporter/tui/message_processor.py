@@ -61,10 +61,21 @@ class ChatMessageProcessor:
             ):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
+            # Leave "Streaming" no matter how the stream ended. is_last only
+            # fires on the clean text path; a tool-call/exception end would
+            # otherwise strand the label on "Streaming".
+            self._update_status("Thinking")
             if state.bubble:
                 duration = time.perf_counter() - start_time
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
+            # The answer is fully on screen now. Drop the thinking spinner BEFORE
+            # the fallback formatter's LLM round-trip (and the cycle's later
+            # verify call) — otherwise "Thinking" lingers long after the response
+            # is visible. The cycle's own stop_thinking() in its finally is then
+            # an idempotent no-op (active_queries clamps at 0).
+            self._app.stop_thinking()
+            if state.bubble:
                 await self._maybe_format_bubble(state.bubble)
 
         return state.bubble
