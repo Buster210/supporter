@@ -271,13 +271,6 @@ class WorkingMemory:
                 "snapshot_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             }
 
-    def list(
-        self,
-        kind: str | None = None,
-        limit: int | None = None,
-    ) -> list[Note]:
-        return self.list_notes(kind=kind, limit=limit)
-
     # --- internals --------------------------------------------------------
 
     def _rebuild_index_locked(self) -> None:
@@ -375,7 +368,7 @@ def list_notes(
     memory = _get_memory()
     if memory is None:
         return []
-    return memory.list(kind=kind, limit=limit)
+    return memory.list_notes(kind=kind, limit=limit)
 
 
 def search_notes(

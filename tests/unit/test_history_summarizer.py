@@ -209,13 +209,11 @@ async def test_summarize_turns_caches_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_summarize_turns_cache_evicts_when_full() -> None:
-    """Cache evicts oldest entry when at max size."""
+async def test_summarize_turns_caches_distinct_transcripts() -> None:
+    """Each distinct transcript is cached independently."""
     from supporter import history_summarizer
 
     history_summarizer.clear_summarizer_cache()
-    # Override the cap so the test is fast.
-    history_summarizer._SUMMARIZER_CACHE_MAX = 2  # type: ignore[attr-defined]
 
     mock_result = MagicMock()
     mock_result.text = "summary"
@@ -232,8 +230,8 @@ async def test_summarize_turns_cache_evicts_when_full() -> None:
         for i in range(5):
             await summarize_turns([_make_content("user", f"msg-{i}")])
 
-        # Cache never grows past the cap.
-        assert summarizer_cache_info()["size"] <= 2
+        # All five distinct transcripts are cached.
+        assert summarizer_cache_info()["size"] == 5
         # All five LLM calls fired because each transcript is distinct.
         assert mock_provider.generate.await_count == 5
 

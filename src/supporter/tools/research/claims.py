@@ -267,11 +267,3 @@ def dedup_to_assertions(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
         assertions.append(group)
     return assertions
 
-
-def query_assertions(
-    question_id: str, status: str | None = None
-) -> list[dict[str, Any]]:
-    assertions = dedup_to_assertions(load_claims(question_id))
-    if status is not None:
-        assertions = [a for a in assertions if a["status"] == status]
-    return assertions

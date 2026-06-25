@@ -10,7 +10,6 @@ from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from pathlib import Path
 from queue import Queue
-from typing import Any
 
 from .config import config
 from .logger import logger
@@ -35,8 +34,6 @@ class DecisionEntry:
     options: tuple[str, ...] = ()
     correlation_id: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 _RING: deque[DecisionEntry] = deque(maxlen=_RING_CAPACITY)
@@ -120,7 +117,7 @@ def log_decision(
     if lg is None:
         return
     try:
-        lg.info(json.dumps(entry.to_dict(), ensure_ascii=False))
+        lg.info(json.dumps(asdict(entry), ensure_ascii=False))
     except Exception as exc:
         logger.debug(f"decisions.log write failed [{type(exc).__name__}]: {exc}")
 

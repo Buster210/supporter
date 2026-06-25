@@ -39,7 +39,7 @@ def test_memory_persists_across_instances(tmp_path: Path) -> None:
     a.append("pref", {"theme": "dark"})
 
     b = WorkingMemory(path=path)
-    notes = b.list()
+    notes = b.list_notes()
     assert len(notes) == 1
     assert notes[0].kind == "pref"
     assert notes[0].value == {"theme": "dark"}
@@ -69,7 +69,7 @@ def test_memory_list_filters_by_kind(tmp_path: Path) -> None:
     mem.append("a", {"i": 1})
     mem.append("b", {"i": 2})
     mem.append("a", {"i": 3})
-    a_notes = mem.list(kind="a")
+    a_notes = mem.list_notes(kind="a")
     assert len(a_notes) == 2
     assert all(n.kind == "a" for n in a_notes)
 
@@ -78,7 +78,7 @@ def test_memory_list_respects_limit(tmp_path: Path) -> None:
     mem = _new_memory(tmp_path)
     for i in range(10):
         mem.append("k", {"i": i})
-    assert len(mem.list(limit=3)) == 3
+    assert len(mem.list_notes(limit=3)) == 3
 
 
 def test_memory_search_matches_label_value_kind(tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ def test_memory_clear_empties_store(tmp_path: Path) -> None:
     mem = _new_memory(tmp_path)
     mem.append("k", {"v": 1})
     mem.clear()
-    assert mem.list() == []
+    assert mem.list_notes() == []
 
 
 def test_memory_compact_drops_oldest_half(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ def test_memory_compact_drops_oldest_half(tmp_path: Path) -> None:
     # Compact should remove half; the remaining notes should be the newest.
     removed = mem.compact()
     assert removed == 10
-    remaining = mem.list()
+    remaining = mem.list_notes()
     assert len(remaining) == 10
     # Newest note has i=19
     assert remaining[0].value == {"i": 19}
@@ -150,7 +150,7 @@ def test_memory_tolerates_corrupt_lines(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     mem = WorkingMemory(path=path)
-    notes = mem.list()
+    notes = mem.list_notes()
     assert len(notes) == 2
 
 
@@ -168,7 +168,7 @@ def test_memory_concurrent_writes_are_thread_safe(tmp_path: Path) -> None:
         t.start()
     for t in threads:
         t.join()
-    notes = mem.list()
+    notes = mem.list_notes()
     assert len(notes) == 200  # 4 threads * 50
 
 

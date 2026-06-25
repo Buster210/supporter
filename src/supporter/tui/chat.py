@@ -166,11 +166,6 @@ class ChatTurn(Vertical):
             self.manually_expanded = False
             self.collapsed = True
 
-    def auto_collapse(self) -> None:
-        """Collapse the turn unless user has manually expanded it."""
-        if not self.manually_expanded:
-            self.collapsed = True
-
     def expand_turn(self) -> None:
         cast("SupporterApp", self.app).active_turn = self
 

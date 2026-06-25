@@ -16,7 +16,6 @@ from supporter.tools.research.claims import (
     dedup_to_assertions,
     ingest_claims,
     load_claims,
-    query_assertions,
     registrable_domain,
     research_dir,
 )
@@ -188,22 +187,6 @@ def test_refute_marks_conflicted() -> None:
     [assertion] = dedup_to_assertions(claims)
     assert assertion["status"] == "conflicted"
     assert assertion["refuting_domains"] == ["b.com"]
-
-
-def test_query_assertions_status_filter() -> None:
-    ingest_claims(
-        "q4",
-        "t1",
-        "page-pilot",
-        [_claim("a", "https://a.com"), _claim("a", "https://b.com")],
-    )
-    ingest_claims("q4", "t2", "page-pilot", [_claim("b", "https://a.com")])
-    corroborated = query_assertions("q4", status="corroborated")
-    assert [a["statement"] for a in corroborated] == ["a"]
-    uncorroborated = query_assertions("q4", status="uncorroborated")
-    assert [a["statement"] for a in uncorroborated] == ["b"]
-
-
 # --- capsule claims parsing -----------------------------------------------
 
 
