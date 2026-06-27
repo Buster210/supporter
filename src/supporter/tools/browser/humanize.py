@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import random
 from typing import TYPE_CHECKING, Final, Literal
@@ -14,7 +15,10 @@ if TYPE_CHECKING:
 __all__ = [
     "config",
     "debug_overlay",
+    "init_cursor",
 ]
+
+_log = logging.getLogger(__name__)
 
 
 def bezier_2d(t: float, points: tuple[tuple[float, float], ...]) -> tuple[float, float]:
@@ -140,6 +144,18 @@ def reset_cursor() -> None:
     global _LAST_POS
     _LAST_POS = None
 
+def init_cursor(viewport: ViewportSize | None) -> None:
+    """Set ``_LAST_POS`` to a realistic starting point inside the viewport."""
+    global _LAST_POS
+    if viewport is None:
+        _LAST_POS = None
+        return
+    w = viewport["width"]
+    h = viewport["height"]
+    _LAST_POS = (
+        random.uniform(0.15, 0.85) * w,
+        random.uniform(0.15, 0.85) * h,
+    )
 
 def _lognormal_delay(median: float, sigma: float, lo: float, hi: float) -> float:
     value = median * math.exp(random.gauss(0.0, sigma))
@@ -182,8 +198,8 @@ def _origin_for(viewport: ViewportSize | None) -> tuple[float, float]:
         )
     if viewport:
         return (
-            random.uniform(0.1, 0.9) * viewport["width"],
-            random.uniform(0.1, 0.9) * viewport["height"],
+            random.uniform(0.15, 0.85) * viewport["width"],
+            random.uniform(0.15, 0.85) * viewport["height"],
         )
     return (
         random.uniform(*_ORIGIN_FALLBACK_X),
@@ -283,6 +299,7 @@ async def _overshoot_correction(
 
 async def _idle_cursor_drift(page: Page) -> None:
     if _LAST_POS is None:
+        _log.debug("_idle_cursor_drift skipped: cursor position unknown")
         return
     ox, oy = _LAST_POS
     drift = _clamp_to_viewport(

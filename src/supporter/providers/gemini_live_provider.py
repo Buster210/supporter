@@ -896,6 +896,7 @@ class GeminiLiveProvider:
         async with self._turn_lock:
             session = await self._prepare_turn(gemini_prompt, options)
             grounding: Any = None
+            self._turn_did_complete = False
 
             try:
                 async for response in session.receive():
@@ -987,6 +988,7 @@ class GeminiLiveProvider:
                                 raw=grounding,
                             )
                         yield LLMChunk(text="", is_last=True, model=self.model_name)
+                        self._turn_did_complete = True
                         break
             except Exception as e:
                 logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
@@ -996,6 +998,13 @@ class GeminiLiveProvider:
                     self._rotate_key()
                 raise
             finally:
+                # Track whether the receive loop completed normally.
+                # If it didn't, the consumer broke out (GeneratorExit)
+                # and the server is still generating — tear down so the
+                # next turn gets a fresh session instead of a dirty one.
+                if not self._turn_did_complete:
+                    await self._teardown_session()
+
                 # ALWAYS run the turn-end epilogue, even if a consumer
                 # breaks early (async generator aclose() injects
                 # GeneratorExit at the last yield, bypassing the except
