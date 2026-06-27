@@ -81,9 +81,7 @@ async def plan_tool(objective: str) -> str:
     _emit_signal("consulting", "Consulting planner sub-agent…")
     try:
         plan = await asyncio.wait_for(
-            make_plan(
-                objective, ORCHESTRATION_PLANNER_PERSONA, model, tools_roster
-            ),
+            make_plan(objective, ORCHESTRATION_PLANNER_PERSONA, model, tools_roster),
             timeout=15.0,
         )
     except Exception as exc:

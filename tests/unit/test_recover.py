@@ -310,7 +310,9 @@ def test_with_recovery_defaults() -> None:
 
 
 def test_with_recovery_custom() -> None:
-    action = note_recovery("manual")
-    recover = with_recovery("op", actions=[action], max_attempts=5)
+    async def _dummy_action(*args: Any, **kwargs: Any) -> RecoveryStatus:
+        return RecoveryStatus(action="dummy", healed=True)
+
+    recover = with_recovery("op", actions=[_dummy_action], max_attempts=5)
     assert recover.max_attempts == 5
-    assert recover.actions[0] is action
+    assert recover.actions[0] is _dummy_action

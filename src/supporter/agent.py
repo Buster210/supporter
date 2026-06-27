@@ -145,8 +145,7 @@ class ChatAgent:
             if not kinds:
                 return ""
             kinds_repr = ", ".join(
-                f"{k}={v}"
-                for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
+                f"{k}={v}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
             )
             return f"WORKING MEMORY TOTALS: {kinds_repr}"
 
@@ -280,9 +279,7 @@ class ChatAgent:
             if summary:
                 self._summary = summary
                 self._summary_turn_count = len(self.history) - keep_recent
-                self._summary_fingerprint = self._fingerprint(
-                    self._summary_turn_count
-                )
+                self._summary_fingerprint = self._fingerprint(self._summary_turn_count)
                 logger.info(
                     f"Summarized {len(turns_to_summarize)} history turns "
                     f"(kept {keep_recent} recent)"
@@ -313,13 +310,32 @@ class ChatAgent:
 
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
-        result = await self.provider.generate(prompt, options)
+
+        # Wrap provider.generate() in AutoRecover so transient/recoverable
+        # provider errors retry with backoff + key rotation instead of propagating.
+        from .recover import rotate_api_key, with_recovery
+
+        recover = with_recovery("agent.execute", actions=[rotate_api_key])
+
+        try:
+            result = await recover.call(self.provider.generate, prompt, options)
+        except Exception:
+            # Durably persist user turn so a crash / exception never loses it.
+            self.history.append(user_message)
+            if self._store:
+                self._store.append(user_message)
+                self._store.sync()
+            self._trim_history()
+            raise
 
         self.current_interaction_id = result.interaction_id
         self._sync_history(user_message, result)
         if self._store:
             self._store.sync()
         self._record_brain_decision(prompt, result)
+
+        # Surface recovery counters + key-pool health at end-of-turn.
+        self._log_diagnostics()
 
         duration_str = (
             f"{result.duration:.3f}s" if result.duration is not None else "unknown"
@@ -380,6 +396,7 @@ class ChatAgent:
         if self._store:
             self._store.sync()
         self._record_brain_decision(prompt, last)
+        self._log_diagnostics()
 
         logger.info(
             f"Agent: verification complete — ok={outcome.ok} "
@@ -409,6 +426,21 @@ class ChatAgent:
             reason=reason,
             correlation_id=result.interaction_id,
         )
+
+    def _log_diagnostics(self) -> None:
+        """Surface recovery counters and key-pool health at end-of-turn."""
+        from .keypool import pool_snapshot
+        from .recovery_metrics import recovery_snapshot
+
+        try:
+            snap = recovery_snapshot()
+            if any(v > 0 for v in snap.values()):
+                logger.info(f"Recovery snapshot: {snap}")
+            kp = pool_snapshot()
+            if kp.get("configured"):
+                logger.info(f"Pool snapshot: {kp}")
+        except Exception as exc:
+            logger.debug(f"Diagnostics snapshot failed [{type(exc).__name__}]: {exc}")
 
     def _sync_history(self, user_message: Any, result: LLMResult) -> None:
         # Prefer neutral result.history if available.

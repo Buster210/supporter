@@ -289,9 +289,7 @@ async def test_delegate_tasks_creates_capsule_at_start() -> None:
             "tokens": {"total_tokens": 5},
         }
 
-    async def _gate_passthrough(
-        task: Any, result: Any, *_a: Any, **_k: Any
-    ) -> Any:
+    async def _gate_passthrough(task: Any, result: Any, *_a: Any, **_k: Any) -> Any:
         return result
 
     tasks_json = json.dumps([{"id": "t1", "task": "slow task"}])

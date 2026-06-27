@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import hashlib
 
-from supporter.llm.types import Message, TextPart, ToolCallPart, ToolResultPart
+from supporter.llm.types import (
+    GenOptions,
+    Message,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
 
 from .config import config
 
@@ -26,10 +32,12 @@ _SUMMARIZATION_INSTRUCTION = (
     "Write in present tense, be factual and neutral, avoid redundancy."
 )
 
-# In-process cache for summarization results. Caching is safe because
+# In-process LRU for summarization results. Bounded so memory does not grow
+# unbounded across long-lived sessions. Caching is safe because
 # summarize_turns is a pure function of the transcript (no side effects,
 # no streaming state). Kept as a plain dict because the function is async
 # and functools.lru_cache does not support async callables.
+_SUMMARIZER_CACHE_MAX = 32
 _SUMMARIZER_CACHE: dict[str, str] = {}
 
 
@@ -128,13 +136,18 @@ async def summarize_turns(turns: list[Message]) -> str:
 
     result = await summarizer.generate(
         transcript,
-        {
-            "system_instruction": _SUMMARIZATION_INSTRUCTION,
-            "temperature": 0.2,
-        },
+        GenOptions(
+            system_instruction=_SUMMARIZATION_INSTRUCTION,
+            temperature=0.2,
+        ),
     )
 
     summary = result.text.strip()
+    if len(_SUMMARIZER_CACHE) >= _SUMMARIZER_CACHE_MAX:
+        # Drop the oldest entry (insertion order). Cheap; we never
+        # need to be exact about eviction policy here.
+        oldest = next(iter(_SUMMARIZER_CACHE))
+        del _SUMMARIZER_CACHE[oldest]
     _SUMMARIZER_CACHE[cache_key] = summary
     return summary
 
@@ -144,7 +157,7 @@ def summarizer_cache_info() -> dict[str, int]:
 
     Useful for observability / tests.
     """
-    return {"size": len(_SUMMARIZER_CACHE)}
+    return {"size": len(_SUMMARIZER_CACHE), "max": _SUMMARIZER_CACHE_MAX}
 
 
 def clear_summarizer_cache() -> None:

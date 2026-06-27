@@ -219,6 +219,7 @@ class TestIntEnv:
         with pytest.raises(ValueError, match="must be an integer"):
             _int_env("_TEST_INT_ENV_BAD", 42)
 
+
 class TestBrowserCapsConfig:
     """D1: Browser output caps are env-backed config fields with sane defaults."""
 
@@ -256,6 +257,7 @@ class TestBrowserCapsConfig:
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
         c = load_config()
         assert c.delegate_max_output_chars == 30000
+
 
 class TestD7OrchestratorPrompt:
     """D7: orchestrator prompt instructs presenting collected data for browser tasks."""

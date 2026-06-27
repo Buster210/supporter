@@ -39,7 +39,6 @@ if TYPE_CHECKING:
     from ..agent import ChatAgent
 
 
-
 class SupporterApp(App[None]):
     CSS_PATH = "styles.tcss"
 
@@ -184,6 +183,7 @@ class SupporterApp(App[None]):
             return
 
         from ..llm.types import TextPart, ToolCallPart
+
         records = self.agent._store.load(limit=None)
         if not records:
             return
@@ -366,6 +366,7 @@ class SupporterApp(App[None]):
                 clear_plan_signal_callback,
                 set_plan_signal_callback,
             )
+
             bind_agent(self.agent)
             set_plan_signal_callback(self._render_plan_signal_now)
             try:
@@ -475,7 +476,6 @@ class SupporterApp(App[None]):
                 chat_view.jump_to_bottom()
         except Exception as exc:
             logger.warning(f"verify_plan gate failed: {exc}")
-
 
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading

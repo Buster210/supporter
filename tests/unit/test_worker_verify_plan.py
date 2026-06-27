@@ -24,9 +24,7 @@ async def test_verify_plan_done() -> None:
 
 async def test_verify_plan_not_done() -> None:
     """VERDICT: NOT_DONE -> returns (False, reason)."""
-    fake_gen = SimpleNamespace(
-        text="VERDICT: NOT_DONE\nonly 12 of 50 posts collected"
-    )
+    fake_gen = SimpleNamespace(text="VERDICT: NOT_DONE\nonly 12 of 50 posts collected")
     fake_provider = SimpleNamespace(generate=AsyncMock(return_value=fake_gen))
 
     with patch("supporter.worker.get_provider", return_value=fake_provider):

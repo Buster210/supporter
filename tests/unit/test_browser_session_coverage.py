@@ -461,9 +461,7 @@ async def test_launch_with_recovery_translates_unclearable_lock_error(
     )
 
     with pytest.raises(RuntimeError, match="already using this profile"):
-        await session._launch_with_recovery(
-            None, Path("/d"), "Default", can_kill=False
-        )
+        await session._launch_with_recovery(None, Path("/d"), "Default", can_kill=False)
 
 
 async def test_launch_with_recovery_reraises_other_errors(
@@ -475,9 +473,7 @@ async def test_launch_with_recovery_reraises_other_errors(
     monkeypatch.setattr(session, "_launch_context", fake_launch)
 
     with pytest.raises(ValueError, match="unrelated boom"):
-        await session._launch_with_recovery(
-            None, Path("/d"), "Default", can_kill=False
-        )
+        await session._launch_with_recovery(None, Path("/d"), "Default", can_kill=False)
 
 
 class _FakeChromium:

@@ -20,7 +20,9 @@ async def main() -> None:
         lambda kind, text: events.append(f"{kind}:{text}")
     )
 
-    async def fake_make_plan(objective, persona, model, tools_roster=""):
+    async def fake_make_plan(
+        objective: str, persona: str, model: str, tools_roster: str = ""
+    ) -> str:
         # Plan must NOT exist yet when "consulting" fires.
         consulting = "consulting:Consulting planner sub-agent…"
         assert events == [consulting], events

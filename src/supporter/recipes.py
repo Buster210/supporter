@@ -61,6 +61,7 @@ __all__ = [
     "RecipeRunResult",
     "RecipeStep",
     "RecipeStore",
+    "config",
     "delete_recipe",
     "find_recipe",
     "get_recipe_store",
@@ -253,9 +254,7 @@ class RecipeStore:
 
     def __init__(self, path: Path | str | None = None) -> None:
         self._path: Path = (
-            Path(path).expanduser().resolve()
-            if path is not None
-            else _recipe_path()
+            Path(path).expanduser().resolve() if path is not None else _recipe_path()
         )
         self._lock = threading.RLock()
         self._by_name: dict[str, Recipe] = {}
@@ -274,9 +273,7 @@ class RecipeStore:
         tags: Iterable[str] = (),
     ) -> Recipe:
         if not _NAME_RE.match(name or ""):
-            raise ValueError(
-                "recipe name must match [A-Za-z0-9_-:]{1,64}"
-            )
+            raise ValueError("recipe name must match [A-Za-z0-9_-:]{1,64}")
         if not description or not isinstance(description, str):
             raise ValueError("recipe must have a non-empty description")
         parsed_steps: list[RecipeStep] = []
@@ -293,9 +290,7 @@ class RecipeStore:
         if not parsed_steps:
             raise ValueError("recipe must have at least one step")
         if len(parsed_steps) > MAX_STEPS_PER_RECIPE:
-            raise ValueError(
-                f"recipe exceeds max steps ({MAX_STEPS_PER_RECIPE})"
-            )
+            raise ValueError(f"recipe exceeds max steps ({MAX_STEPS_PER_RECIPE})")
         cleaned_tags = tuple(sorted({t for t in tags if isinstance(t, str) and t}))
 
         with self._lock:
@@ -379,9 +374,7 @@ class RecipeStore:
                 created_at=recipe.created_at,
                 updated_at=recipe.updated_at,
                 uses=recipe.uses + 1,
-                last_used_at=datetime.now(UTC)
-                .isoformat()
-                .replace("+00:00", "Z"),
+                last_used_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
             self._by_name[name] = updated
             self._persist_locked()
@@ -392,9 +385,7 @@ class RecipeStore:
                 "path": str(self._path),
                 "total": len(self._by_name),
                 "tags": sorted(self._by_tag.keys()),
-                "snapshot_at": datetime.now(UTC)
-                .isoformat()
-                .replace("+00:00", "Z"),
+                "snapshot_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             }
 
     # --- internals --------------------------------------------------------
@@ -458,9 +449,7 @@ class RecipeStore:
                     f.write(json.dumps(recipe.to_dict(), ensure_ascii=False) + "\n")
             tmp_path.replace(path)
         except OSError as exc:
-            logger.debug(
-                f"RecipeStore: persist failed [{type(exc).__name__}]: {exc}"
-            )
+            logger.debug(f"RecipeStore: persist failed [{type(exc).__name__}]: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -479,9 +468,7 @@ def get_recipe_store() -> RecipeStore | None:
             try:
                 _STORE = RecipeStore()
             except Exception as exc:
-                logger.debug(
-                    f"RecipeStore: init failed [{type(exc).__name__}]: {exc}"
-                )
+                logger.debug(f"RecipeStore: init failed [{type(exc).__name__}]: {exc}")
                 return None
         return _STORE
 
@@ -511,9 +498,7 @@ def find_recipe(name: str) -> Recipe | None:
     return store.find(name)
 
 
-async def run_recipe(
-    name: str, *, fail_fast: bool = True
-) -> RecipeRunResult | None:
+async def run_recipe(name: str, *, fail_fast: bool = True) -> RecipeRunResult | None:
     store = get_recipe_store()
     if store is None:
         return None
@@ -690,9 +675,7 @@ async def _execute_step(
                 head["ok"] = False
                 head["error"] = f"shell value must be JSON array: {exc}"
                 return head
-            if not isinstance(argv, list) or not all(
-                isinstance(t, str) for t in argv
-            ):
+            if not isinstance(argv, list) or not all(isinstance(t, str) for t in argv):
                 head["ok"] = False
                 head["error"] = "shell value must be a JSON array of strings"
                 return head
@@ -718,10 +701,11 @@ async def _execute_step(
                     raise ValueError(f"unsupported scheme: {parsed.scheme}")
 
                 def _fetch() -> str:
-                    with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310
-                        return response.read(1024 * 1024).decode(
+                    with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310  # nosec B310
+                        body: str = response.read(1024 * 1024).decode(
                             "utf-8", errors="replace"
                         )
+                        return body
 
                 body = await asyncio.to_thread(_fetch)
                 head["detail"] = f"http {len(body)} chars"

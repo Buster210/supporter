@@ -31,6 +31,24 @@ from .gemini_codec import message_to_content
 _STALE_HANDLE_ERRORS = ("session not found", "invalid session handle")
 
 
+def _is_key_error(error: BaseException) -> bool:
+    """Return True if the error is likely key-attributable (quota/auth)."""
+    message = str(error).lower()
+    status = getattr(error, "status", None) or getattr(error, "code", None)
+    if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+        return True
+    key_patterns = (
+        "api key not valid",
+        "api_key_invalid",
+        "permission_denied",
+        "quota exceeded",
+        "resource_exhausted",
+        "rate limit",
+        "free tier",
+    )
+    return any(p in message for p in key_patterns)
+
+
 def _to_seconds(time_left: Any) -> float | None:
     if time_left is None:
         return None
@@ -382,8 +400,8 @@ class GeminiLiveProvider:
         return turns
 
     async def _send_user_turn(
-        self, session: Any, prompt: str | list[NeutralMessage]
-    ) -> None:
+        self, session: Any, prompt: str | list[NeutralMessage] | list[Content]
+    ) -> Any:
         gemini_prompt = (
             [message_to_content(m) for m in prompt]
             if isinstance(prompt, list)
@@ -408,14 +426,45 @@ class GeminiLiveProvider:
                     await session.send_client_content(turns=turns, turn_complete=True)
                     if config.replay_image_count > 0:
                         await self._reinject_recent_images(session)
-                    return
+                    return session
                 except Exception as exc:
                     logger.warning(
                         f"Live history replay failed [{type(exc).__name__}: "
-                        f"{exc}]; sending prompt without restored context"
+                        f"{exc}]; reconnecting and retrying replay"
                     )
-                    self._emit("context_partial", {})
+                    # Retry: tear down the broken session, reconnect, and replay
+                    # with full history so context is never silently dropped.
+                    try:
+                        await self._teardown_session()
+                        session = await self._ensure_session()
+                        turns = self._replay_turns()
+                        turns.append(Content(role="user", parts=[Part(text=text)]))
+                        logger.info(
+                            f"Live: retry-replaying {len(self._history)} history "
+                            "turns after reconnect"
+                        )
+                        self._emit(
+                            "replaying",
+                            {"turns": len(self._history), "retry": True},
+                        )
+                        await session.send_client_content(
+                            turns=turns, turn_complete=True
+                        )
+                        if config.replay_image_count > 0:
+                            await self._reinject_recent_images(session)
+                        return session
+                    except Exception as retry_exc:
+                        logger.error(
+                            f"Live history replay retry also failed "
+                            f"[{type(retry_exc).__name__}: {retry_exc}]; "
+                            "cannot deliver turn with full context"
+                        )
+                        raise RuntimeError(
+                            "Live history replay failed twice; "
+                            "cannot deliver turn with full context"
+                        ) from retry_exc
         await session.send_realtime_input(text=text)
+        return session
 
     async def _handle_tool_call(self, session: Any, tool_call: Any) -> None:
         from google.genai import types
@@ -687,7 +736,9 @@ class GeminiLiveProvider:
             await task  # MUST await — guarantees recv() unwound before turn reads
 
     async def _prepare_turn(
-        self, prompt: str | list[Content], options: GenOptions | None = None
+        self,
+        prompt: str | list[NeutralMessage] | list[Content],
+        options: GenOptions | None = None,
     ) -> Any:
         if options:
             raw_history = (
@@ -724,8 +775,7 @@ class GeminiLiveProvider:
                 session = await self._ensure_session()
 
         self._last_turn_complete = False
-        await self._send_user_turn(session, prompt)
-        return session
+        return await self._send_user_turn(session, prompt)
 
     async def generate(
         self,
@@ -807,6 +857,8 @@ class GeminiLiveProvider:
                 logger.error(f"generate() error [{type(e).__name__}]: {e}")
                 self._last_turn_complete = True
                 self._reconnect_pending = True
+                if _is_key_error(e):
+                    self._rotate_key()
 
             if self._handle_resumed_pending:
                 self._emit("empty_resume_suspected", {})
@@ -940,6 +992,8 @@ class GeminiLiveProvider:
                 logger.error(f"generate_stream() error [{type(e).__name__}]: {e}")
                 self._last_turn_complete = True
                 self._reconnect_pending = True
+                if _is_key_error(e):
+                    self._rotate_key()
                 raise
             finally:
                 # ALWAYS run the turn-end epilogue, even if a consumer

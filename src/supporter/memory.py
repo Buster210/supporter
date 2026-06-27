@@ -136,9 +136,7 @@ class WorkingMemory:
 
     def __init__(self, path: Path | str | None = None) -> None:
         self._path: Path = (
-            Path(path).expanduser().resolve()
-            if path is not None
-            else _memory_path()
+            Path(path).expanduser().resolve() if path is not None else _memory_path()
         )
         self._lock = threading.RLock()
         self._notes: deque[Note] = deque(maxlen=_MAX_TOTAL_NOTES)
@@ -213,9 +211,7 @@ class WorkingMemory:
         pattern = re.compile(re.escape(needle), re.IGNORECASE)
         with self._lock:
             candidates: list[Note] = (
-                self._by_kind.get(kind, [])
-                if kind
-                else list(self._notes)
+                self._by_kind.get(kind, []) if kind else list(self._notes)
             )
             hits: list[Note] = []
             for note in candidates:

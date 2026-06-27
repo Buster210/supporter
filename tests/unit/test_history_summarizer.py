@@ -175,8 +175,8 @@ class TestSummarizeTurns:
 
             await summarize_turns([_make_content("user", "Test")])
 
-            call_kwargs = mock_provider.generate.call_args.args[1]
-            assert call_kwargs["temperature"] == 0.2
+            opts = mock_provider.generate.call_args.args[1]
+            assert opts.temperature == 0.2
 
 
 @pytest.mark.asyncio
@@ -239,7 +239,6 @@ async def test_summarize_turns_caches_distinct_transcripts() -> None:
 def test_clear_summarizer_cache() -> None:
     from supporter import history_summarizer
 
-    history_summarizer._SUMMARIZER_CACHE["x"] = "y"  # type: ignore[attr-defined]
+    history_summarizer._SUMMARIZER_CACHE["x"] = "y"
     clear_summarizer_cache()
     assert summarizer_cache_info()["size"] == 0
-

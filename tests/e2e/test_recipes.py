@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -163,10 +164,10 @@ def test_store_delete(tmp_path: Path) -> None:
 def test_store_mark_used_increments(tmp_path: Path) -> None:
     store = _new_store(tmp_path)
     store.save("a", "d", [RecipeStep(kind="emit", value="x")])
-    assert store.find("a").uses == 0
+    assert store.find("a").uses == 0  # type: ignore[union-attr]
     store.mark_used("a")
     store.mark_used("a")
-    assert store.find("a").uses == 2
+    assert store.find("a").uses == 2  # type: ignore[union-attr]
 
 
 def test_store_snapshot(tmp_path: Path) -> None:
@@ -327,7 +328,7 @@ async def test_recipe_memory_write_step(
     save_recipe(
         "remember",
         "d",
-        [{"kind": "memory_write", "value": "todo||{\"task\":\"ship\"}"}],
+        [{"kind": "memory_write", "value": 'todo||{"task":"ship"}'}],
     )
     result = await run_recipe("remember")
     assert result is not None
@@ -409,7 +410,7 @@ async def test_recipe_browser_step_replays_playbook(
     save_recipe(
         "browse",
         "d",
-        [{"kind": "browser", "value": "buy milk||{\"qty\": \"2\"}"}],
+        [{"kind": "browser", "value": 'buy milk||{"qty": "2"}'}],
     )
     result = await run_recipe("browse")
     assert result is not None
@@ -419,14 +420,14 @@ async def test_recipe_browser_step_replays_playbook(
 
 
 @pytest.fixture(autouse=True)
-def _reset_recipe_singleton() -> None:
+def _reset_recipe_singleton() -> Generator[None, None, None]:
     from supporter import memory as memory_mod
 
-    recipes_mod._STORE = None  # type: ignore[attr-defined]
-    memory_mod._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
+    recipes_mod._STORE = None
+    memory_mod._MEMORY_SINGLETON = None
     yield
-    recipes_mod._STORE = None  # type: ignore[attr-defined]
-    memory_mod._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
+    recipes_mod._STORE = None
+    memory_mod._MEMORY_SINGLETON = None
 
 
 # ---------------------------------------------------------------------------
@@ -434,9 +435,7 @@ def _reset_recipe_singleton() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_recipes_helper(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_list_recipes_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     save_recipe("a", "d", [{"kind": "emit", "value": "x"}])
     save_recipe("b", "d", [{"kind": "emit", "value": "x"}], tags=["ci"])
@@ -444,18 +443,14 @@ def test_list_recipes_helper(
     assert {r.name for r in recipes} == {"a", "b"}
 
 
-def test_find_recipe_helper(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_find_recipe_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     save_recipe("a", "d", [{"kind": "emit", "value": "x"}])
     assert find_recipe("a") is not None
     assert find_recipe("nope") is None
 
 
-def test_delete_recipe_helper(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_recipe_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     save_recipe("a", "d", [{"kind": "emit", "value": "x"}])
     assert delete_recipe("a") is True
@@ -512,9 +507,7 @@ async def test_recipe_find_tool(
 
 
 @pytest.mark.asyncio
-async def test_recipe_run_tool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_recipe_run_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recipes_mod, "_recipe_path", lambda: tmp_path / "r.jsonl")
     save_recipe("demo", "d", [{"kind": "emit", "value": "hi"}])
     out = await recipe_tools.recipe_run("demo")

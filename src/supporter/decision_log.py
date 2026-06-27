@@ -35,7 +35,6 @@ class DecisionEntry:
     correlation_id: str | None = None
 
 
-
 _RING: deque[DecisionEntry] = deque(maxlen=_RING_CAPACITY)
 _decisions_logger: logging.Logger | None = None
 _decisions_file_handler: RotatingFileHandler | None = None

@@ -353,9 +353,10 @@ class VerificationLoop:
             current_prompt = prompt
             if attempt_idx > 0 and last_result is not None:
                 last_failures = history[-1]["failures"] if history else []
-                checks_text = "\n".join(
-                    f"- [{f['name']}] {f['detail']}" for f in last_failures
-                ) or "(no detail captured)"
+                checks_text = (
+                    "\n".join(f"- [{f['name']}] {f['detail']}" for f in last_failures)
+                    or "(no detail captured)"
+                )
                 retry_prompt = self.config.retry_template.format(checks=checks_text)
                 current_prompt = f"{prompt}\n\n---\n{retry_prompt}"
             start = time.perf_counter()

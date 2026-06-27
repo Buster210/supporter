@@ -55,6 +55,8 @@ __all__ = [
     "RecoveryAction",
     "RecoveryStatus",
     "is_recoverable",
+    "note_recovery",
+    "rotate_api_key",
     "with_recovery",
 ]
 

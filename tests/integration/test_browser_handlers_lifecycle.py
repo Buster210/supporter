@@ -33,5 +33,3 @@ async def test_closenow_rejected_as_orchestrator_only(
     result = await browse("closenow")
     assert "orchestrator-only" in result
     assert close_calls == []
-
-

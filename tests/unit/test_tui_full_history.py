@@ -49,7 +49,7 @@ class _HistoryApp(App[None]):
 
 async def _settle(pilot: object) -> None:
     for _ in range(6):
-        await pilot.pause()
+        await pilot.pause()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

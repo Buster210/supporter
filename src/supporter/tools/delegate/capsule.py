@@ -398,6 +398,7 @@ async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
                     }
                 )
         capsule["synthesis"] = build_synthesis(capsule)
+
     try:
         return await update_capsule(job_id, mutate)
     finally:
@@ -491,9 +492,7 @@ def build_synthesis(capsule: dict[str, Any]) -> dict[str, Any]:
             continue
         task_id = str(task.get("id", ""))
         status = status_value(task.get("status", ""))
-        summary = str(
-            task.get("summary") or preview(task.get("output", ""), 3000)
-        )
+        summary = str(task.get("summary") or preview(task.get("output", ""), 3000))
         if summary:
             answer_parts.append(f"{task_id}: {summary}")
 

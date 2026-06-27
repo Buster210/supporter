@@ -35,10 +35,7 @@ __all__ = [
 
 
 def _format_recipe(recipe: Recipe) -> str:
-    head = (
-        f"# {recipe.name} — uses={recipe.uses} "
-        f"updated={recipe.updated_at or '?'}\n"
-    )
+    head = f"# {recipe.name} — uses={recipe.uses} updated={recipe.updated_at or '?'}\n"
     if recipe.description:
         head += f"  {recipe.description}\n"
     if recipe.tags:

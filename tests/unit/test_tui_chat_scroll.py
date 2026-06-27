@@ -47,7 +47,7 @@ async def _settle(pilot: object) -> None:
     # Auto-follow defers its scroll to after the next refresh, so geometry
     # needs a few message-queue drains to reach its final state.
     for _ in range(4):
-        await pilot.pause()
+        await pilot.pause()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

@@ -238,6 +238,7 @@ def test_recordable_actions_include_navigation_steps() -> None:
     for action in ("back", "forward", "newtab", "frame"):
         assert action in RECORDABLE_ACTIONS
 
+
 async def _run_replay_with_snapshot(monkeypatch: pytest.MonkeyPatch, snap: str) -> str:
     """Drive replay_playbook with a one-step playbook, mocking the live page.
 

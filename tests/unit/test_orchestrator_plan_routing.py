@@ -62,9 +62,7 @@ class TestPlanToolCatalog:
         )
         assert "plan" not in delegate_tools
 
-        delegate_tools2 = select_delegate_tools(
-            catalog, "all", role="page-pilot"
-        )
+        delegate_tools2 = select_delegate_tools(catalog, "all", role="page-pilot")
         assert "plan" not in delegate_tools2
 
     def test_plan_tool_selected_for_orchestrator(self) -> None:

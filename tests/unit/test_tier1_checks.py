@@ -448,6 +448,7 @@ class TestTier1Dispatch:
         assert ok is True
         assert out == "llm fallback report"
 
+
 class TestCmdListEnv:
     def test_default_returned_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("_TEST_CMD_LIST", raising=False)

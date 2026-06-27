@@ -187,6 +187,8 @@ def test_refute_marks_conflicted() -> None:
     [assertion] = dedup_to_assertions(claims)
     assert assertion["status"] == "conflicted"
     assert assertion["refuting_domains"] == ["b.com"]
+
+
 # --- capsule claims parsing -----------------------------------------------
 
 

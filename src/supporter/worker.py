@@ -35,6 +35,7 @@ from .tools.browser import guardrails
 from .tools.browser.session import close_session
 from .tools.catalog import build_tool_catalog, select_tools
 
+__all__ = ["sys"]
 _EXECUTOR_TOOLS = ("read_file", "write_file", "browse", "web_search")
 _MIN_REPORT_BYTES = 200
 _DEFAULT_MAX_TURNS = 8
@@ -176,7 +177,6 @@ async def format_response(text: str, model: str) -> str:
     except Exception as exc:
         logger.warning(f"format_response failed: {exc}")
         return ""
-
 
 
 async def verify_plan(
@@ -328,9 +328,7 @@ async def run_worker(
                     result_text = report_path.read_text(encoding="utf-8")
                 except OSError:
                     result_text = ""
-                ok, reason = await verify_plan(
-                    task, plan, result_text, planner_model
-                )
+                ok, reason = await verify_plan(task, plan, result_text, planner_model)
                 if ok:
                     logger.info(f"worker: planner verified report after turn {turn}")
                     verified = True
@@ -342,9 +340,7 @@ async def run_worker(
             else:
                 prompt = _continuation_prompt(report_path)
         else:
-            logger.warning(
-                "worker: exhausted executor turns without a verified report"
-            )
+            logger.warning("worker: exhausted executor turns without a verified report")
     finally:
         await _teardown(agent)
         restore_callbacks()

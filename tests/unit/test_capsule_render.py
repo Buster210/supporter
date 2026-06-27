@@ -44,6 +44,7 @@ class TestRenderFindings:
         out = render_findings([f"f{i}" for i in range(55)])
         assert "(+5 more)" in out
 
+
 class TestD3D5CapsuleRendering:
     """D3/D5: capsule rendering shows full findings, not truncated summaries."""
 

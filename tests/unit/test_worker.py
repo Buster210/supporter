@@ -63,9 +63,7 @@ def _patch_pipeline(
     plan: str = "PLAN BODY",
 ) -> AsyncMock:
     """Wire run_worker's collaborators to fakes; return the close_session mock."""
-    monkeypatch.setattr(
-        worker, "_install_headless_callbacks", lambda: (lambda: None)
-    )
+    monkeypatch.setattr(worker, "_install_headless_callbacks", lambda: lambda: None)
     monkeypatch.setattr(worker, "_report_path", lambda task, report_dir: report_path)
 
     async def _fake_plan(task: str) -> str:
@@ -104,7 +102,7 @@ async def test_make_plan_uses_planner_persona_and_model(
         fake_provider.calls.append((prompt, options))
         return SimpleNamespace(text="PLAN BODY")
 
-    fake_provider.generate = _generate  # type: ignore[attr-defined]
+    fake_provider.generate = _generate
     captured: dict[str, Any] = {}
 
     def _fake_get_provider(**kwargs: Any) -> Any:

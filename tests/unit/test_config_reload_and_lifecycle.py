@@ -78,9 +78,7 @@ class TestReloadConfigMutatesInPlace:
             "In-place mutation must propagate env change to existing config object"
         )
 
-    def test_teardown_restores_original(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_teardown_restores_original(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """After monkeypatch teardown, reload_config() restores the original value."""
         original = _config_mod.config.gemini_model
         monkeypatch.setenv("GEMINI_MODEL", "changed-model")

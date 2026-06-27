@@ -260,6 +260,7 @@ async def test_one_failing_url_does_not_sink_round(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A _read_page exception on one URL must not fail the whole round."""
+
     async def fake_search(query: str, n: int) -> list[dict[str, Any]]:
         return [{"url": "https://good.com/p"}, {"url": "https://bad.com/p"}]
 

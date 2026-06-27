@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -144,9 +145,11 @@ def test_memory_snapshot_shape(tmp_path: Path) -> None:
 def test_memory_tolerates_corrupt_lines(tmp_path: Path) -> None:
     path = tmp_path / "mem.jsonl"
     path.write_text(
-        json.dumps({"timestamp": "2024", "kind": "ok", "value": {}}) + "\n"
+        json.dumps({"timestamp": "2024", "kind": "ok", "value": {}})
+        + "\n"
         + "garbage line\n"
-        + json.dumps({"timestamp": "2024", "kind": "ok", "value": {"v": 2}}) + "\n",
+        + json.dumps({"timestamp": "2024", "kind": "ok", "value": {"v": 2}})
+        + "\n",
         encoding="utf-8",
     )
     mem = WorkingMemory(path=path)
@@ -178,10 +181,10 @@ def test_memory_concurrent_writes_are_thread_safe(tmp_path: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_memory_singleton() -> None:
-    memory_mod._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
+def _reset_memory_singleton() -> Generator[None, None, None]:
+    memory_mod._MEMORY_SINGLETON = None
     yield
-    memory_mod._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
+    memory_mod._MEMORY_SINGLETON = None
 
 
 def test_append_note_helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

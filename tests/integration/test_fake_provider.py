@@ -27,9 +27,7 @@ class FakeProvider:
     def __init__(self, *, model_name: str | None = None) -> None:
         self._model = model_name or "fake-model"
 
-    async def generate(
-        self, prompt: Any, options: Any = None
-    ) -> LLMResult:
+    async def generate(self, prompt: Any, options: Any = None) -> LLMResult:
         text = prompt if isinstance(prompt, str) else "fake"
         return LLMResult(text=f"fake:{text}", model=self._model)
 

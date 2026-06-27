@@ -1,6 +1,6 @@
 """plan_tool surfaces planner activity live and in order."""
 
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -9,11 +9,13 @@ from supporter.tools import planning
 
 
 @pytest.mark.asyncio
-async def test_plan_tool_emits_consulting_then_plan_in_order():
+async def test_plan_tool_emits_consulting_then_plan_in_order() -> None:
     events: list[tuple[str, str]] = []
     planning.set_plan_signal_callback(lambda kind, text: events.append((kind, text)))
 
-    async def fake_make_plan(objective, persona, model, tools_roster=""):
+    async def fake_make_plan(
+        objective: str, persona: str, model: str, tools_roster: str = ""
+    ) -> str:
         # The consult signal must already have fired before the plan returns.
         assert events == [("consulting", "Consulting planner sub-agent…")]
         return "1. do it"
@@ -32,11 +34,13 @@ async def test_plan_tool_emits_consulting_then_plan_in_order():
 
 
 @pytest.mark.asyncio
-async def test_plan_signal_callback_never_required():
+async def test_plan_signal_callback_never_required() -> None:
     # Headless (no sink bound) must not raise.
     planning.clear_plan_signal_callback()
 
-    async def fake_make_plan(objective, persona, model, tools_roster=""):
+    async def fake_make_plan(
+        objective: str, persona: str, model: str, tools_roster: str = ""
+    ) -> str:
         return "x"
 
     with patch("supporter.worker.make_plan", fake_make_plan):
@@ -44,17 +48,17 @@ async def test_plan_signal_callback_never_required():
 
 
 @pytest.mark.asyncio
-async def test_plan_tool_passes_orchestrator_tool_roster():
+async def test_plan_tool_passes_orchestrator_tool_roster() -> None:
     """The planner is told which tools the orchestrator actually has."""
 
-    def bash_run():
+    def bash_run() -> None:
         """Run a sandboxed shell command."""
 
-    def google_search():
+    def google_search() -> None:
         """Search the web."""
 
     class FakeAgent:
-        registry: ClassVar[dict] = {
+        registry: ClassVar[dict[str, Any]] = {
             "bash_run": bash_run,
             "google_search": google_search,
         }
@@ -64,7 +68,9 @@ async def test_plan_tool_passes_orchestrator_tool_roster():
     planning.bind_agent(FakeAgent())
     captured = {}
 
-    async def fake_make_plan(objective, persona, model, tools_roster=""):
+    async def fake_make_plan(
+        objective: str, persona: str, model: str, tools_roster: str = ""
+    ) -> str:
         captured["roster"] = tools_roster
         return "1. do it"
 
@@ -79,5 +85,5 @@ async def test_plan_tool_passes_orchestrator_tool_roster():
     assert "google_search: Search the web." in roster
 
 
-def test_format_tool_roster_handles_missing_registry():
+def test_format_tool_roster_handles_missing_registry() -> None:
     assert planning._format_tool_roster(object()) == ""

@@ -71,7 +71,7 @@ class _ReplayApp(App[None]):
         # Skip the full startup chain; call replay directly.
         from supporter.tui import SupporterApp
 
-        await SupporterApp._replay_history(self)
+        await SupporterApp._replay_history(self)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +95,14 @@ def _make_history(n: int = 250) -> list[Message]:
             parts: list[Any] = [TextPart(text=f"Model reply {i}")]
             # Inject a tool call in the very last model message.
             if i == n - 1:
-                parts.append(
-                    ToolCallPart(name="search", args={"query": "test"})
-                )
+                parts.append(ToolCallPart(name="search", args={"query": "test"}))
             records.append(Message(role="model", parts=parts))
     return records
 
 
 async def _settle(pilot: object) -> None:
     for _ in range(8):
-        await pilot.pause()
+        await pilot.pause()  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

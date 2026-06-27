@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,14 +16,14 @@ from supporter.types import LLMResult
 @pytest.fixture(autouse=True)
 def _reset_singletons(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+) -> Generator[None, None, None]:
     monkeypatch.setattr(memory, "_memory_path", lambda: tmp_path / "wm.jsonl")
     monkeypatch.setattr(recipes, "_recipe_path", lambda: tmp_path / "r.jsonl")
-    memory._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
-    recipes._STORE = None  # type: ignore[attr-defined]
+    memory._MEMORY_SINGLETON = None
+    recipes._STORE = None
     yield
-    memory._MEMORY_SINGLETON = None  # type: ignore[attr-defined]
-    recipes._STORE = None  # type: ignore[attr-defined]
+    memory._MEMORY_SINGLETON = None
+    recipes._STORE = None
 
 
 def _new_agent(provider: MagicMock) -> ChatAgent:
@@ -34,7 +35,7 @@ def _captured_system_instruction(provider: MagicMock) -> str:
     assert provider.generate.await_count >= 1
     call = provider.generate.await_args_list[-1]
     options = call.args[1] if len(call.args) > 1 else call.kwargs.get("options")
-    return options.system_instruction  # type: ignore[union-attr]
+    return options.system_instruction  # type: ignore[no-any-return]
 
 
 def test_context_injection_omitted_when_memory_empty() -> None:
@@ -45,9 +46,7 @@ def test_context_injection_omitted_when_memory_empty() -> None:
     )
     agent = _new_agent(provider)
     # No memory, no recipes \u2014 system prompt should be unchanged.
-    assert (
-        agent._build_context_injection() == ""
-    )
+    assert agent._build_context_injection() == ""
 
 
 def test_context_injection_contains_recent_memory() -> None:

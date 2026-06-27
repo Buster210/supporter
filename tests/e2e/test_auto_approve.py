@@ -34,7 +34,7 @@ class TestConfirmBrowseAutoApprove:
         monkeypatch.setattr("supporter.tui.config", mock_config)
 
         app = SupporterApp.__new__(SupporterApp)
-        app.push_screen_wait = AsyncMock(return_value=False)
+        app.push_screen_wait = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
         result = await app._confirm_browse("Click button?", "Click the submit button")
         assert result is False

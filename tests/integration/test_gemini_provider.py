@@ -29,7 +29,7 @@ def _make_options(**kwargs: Any) -> GenOptions:
     ):
         if k in kwargs:
             extras[k] = kwargs.pop(k)
-    return GenOptions(extras=extras, **kwargs)
+    return GenOptions(extras=extras, **kwargs)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

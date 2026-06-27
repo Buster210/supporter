@@ -677,7 +677,7 @@ def _process_cmdline(pid: int) -> str | None:
             timeout=2,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     if result.returncode != 0:
         return None
@@ -852,6 +852,7 @@ async def _discard_stale_session() -> None:
         except Exception as e:
             logger.warning(f"Error stopping playwright for stale session: {e}")
 
+
 async def get_session() -> tuple[Any, Any, Any]:
     global _PWS, _CONTEXT, _LAUNCHING, _LAUNCH_LOOP
 
@@ -928,7 +929,6 @@ async def get_session() -> tuple[Any, Any, Any]:
             # Reset _LAUNCHING on ALL exit paths: success return, exception,
             # and fall-through to the launch block below.
             _LAUNCHING = False
-
 
     loop = asyncio.get_running_loop()
     _LAUNCH_LOOP = loop

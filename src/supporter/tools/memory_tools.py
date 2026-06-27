@@ -111,9 +111,7 @@ async def memory_read(kind: str = "", limit: int = 20) -> str:
     return _format_notes(notes)
 
 
-async def memory_search(
-    query: str, kind: str = "", limit: int = 20
-) -> str:
+async def memory_search(query: str, kind: str = "", limit: int = 20) -> str:
     """Search notes whose kind, label, source, or value contains ``query``."""
     if not query:
         return "ERROR: query must be non-empty"

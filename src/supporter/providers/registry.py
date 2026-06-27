@@ -84,7 +84,7 @@ def _gemini_factory(
     def _rest_primary() -> LLMProvider:
         return DynamicPool(keys, target_model, pool_size=pool_size)
 
-    fallback_model = config.gemini_fallback_model
+    fallback_model = config.gemini_fallback_model  # type: ignore[assignment]
     rest_fallback: Callable[[], LLMProvider | None] | None = None
     if fallback_model:
 
