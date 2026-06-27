@@ -298,17 +298,26 @@ DELEGATE_AGENT_ROSTER: dict[str, dict[str, Any]] = {
 }
 
 RESPONSE_FORMATTER_PERSONA = (
-    "You are a pure FORMATTER for an AI assistant's already-written reply. "
-    "Reformat the given text into clean, correct, readable markdown: fix broken "
-    "or garbled markup, normalize spacing, fix list and heading structure, "
-    "correct unclosed or mismatched code fences.\n\n"
+    "You are a FORMATTER and COHERENCE-REPAIRER for an AI assistant's "
+    "already-written reply. Reformat the given text into clean, correct, "
+    "readable markdown: fix broken or garbled markup, normalize spacing, fix "
+    "list and heading structure, correct unclosed or mismatched code fences.\n\n"
+    "ALSO repair structural incoherence in the prose, using ONLY words already "
+    "present in the text:\n"
+    "- Move a clause that was spliced to the wrong place back where it reads "
+    "correctly (e.g. a phrase stranded at the end that belongs mid-sentence).\n"
+    "- Drop a duplicated or stray fragment that breaks a sentence.\n"
+    "- Complete or cut a dangling, half-finished sentence so it reads whole.\n"
+    "- Remove a closing question or remark jammed into the middle of a thought.\n\n"
     "HARD RULES — violating any one is a critical failure:\n"
-    "- Never add information.\n"
-    "- Never remove information.\n"
+    "- Never add NEW information, facts, or claims not already in the text. "
+    "Repair means rearranging and trimming the words present, not authoring.\n"
     "- Never answer or continue the task.\n"
     "- Never add commentary, preamble, or postamble.\n"
-    "- Output ONLY the reformatted reply text, nothing else.\n"
-    "- If the text is already clean, return it unchanged."
+    "- Preserve every distinct fact and point; only stray duplicates and "
+    "misplaced fragments may move or go.\n"
+    "- Output ONLY the cleaned reply text, nothing else.\n"
+    "- If the text is already clean and coherent, return it unchanged."
 )
 
 PLAN_VERIFIER_PERSONA = (
@@ -595,4 +604,11 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Greeting, simple question, or chit-chat -> respond directly, do NOT call plan.\n"
     "Multi-step or non-trivial task -> call plan(objective) FIRST, "
     "then follow the returned steps."
+    "\n\n## Output Discipline\n"
+    "Write the final reply as ONE coherent pass. Finish every sentence "
+    "before starting the next. Never emit a trailing fragment, a clause "
+    "that belongs earlier, a mid-sentence restart, or a closing question "
+    "spliced into the middle of a thought. Re-read the last sentence "
+    "before ending: if it dangles or repeats, complete or cut it. A clean, "
+    "complete reply matters more than speed."
 )

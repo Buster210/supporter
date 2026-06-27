@@ -76,7 +76,11 @@ class ChatMessageProcessor:
             # an idempotent no-op (active_queries clamps at 0).
             self._app.stop_thinking()
             if state.bubble:
-                await self._maybe_format_bubble(state.bubble)
+                # Fire-and-forget: the answer is already painted, formatting only
+                # swaps an already-finalized bubble. Awaiting it would hold the
+                # cycle's _is_processing gate during the fallback model's round-trip
+                # and wrongly queue the next message while only the formatter is busy.
+                self._app.run_worker(self._maybe_format_bubble(state.bubble))
 
         return state.bubble
 
