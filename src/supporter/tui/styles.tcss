@@ -298,7 +298,8 @@ ConfirmationModal {
 }
 
 #modal-header {
-    text-align: center;
+    width: 100%;
+    text-align: left;
     color: $accent;
     text-style: bold;
     margin-bottom: 1;
@@ -437,6 +438,7 @@ ProfileSelectModal {
 }
 
 WelcomeBanner {
+    width: 1fr;
     height: auto;
     content-align: left middle;
     color: $accent;

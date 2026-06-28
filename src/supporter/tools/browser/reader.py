@@ -12,7 +12,6 @@ from .support import _navigate_with_retry, _page_or_error, _wrap_action_errors
 __all__ = ["_handle_links", "_handle_read"]
 
 # ponytail: defaults overridden by config (BROWSE_PAGE_CHARS_CAP, etc.)
-# Constants below are unused; values come from config.browse_* settings.
 _AUTOSCROLL_STEPS = 12
 _AUTOSCROLL_PAUSE = 0.4
 _URL_RE = re.compile(r"https?://[^\s]+")

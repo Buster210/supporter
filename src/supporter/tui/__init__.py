@@ -140,8 +140,15 @@ class SupporterApp(App[None]):
                 resume_interrupted_jobs(), name="resume-jobs", group="resume-jobs"
             )
             self.run_worker(self._setup_agent(use_live=True), exclusive=True)
-            self.run_worker(self._mode_manager.trigger_live_greeting())
+            greeting_worker = self.run_worker(
+                self._mode_manager.trigger_live_greeting(), name="greeting"
+            )
             self.run_worker(prewarm_clone())
+
+            self.run_worker(
+                self._startup_profile_select(greeting_worker),
+                name="startup-profile-select",
+            )
             self.query_one("#user-input").focus()
         except Exception as e:
             msg = f"Startup failure [{type(e).__name__}]: {e}"
@@ -603,6 +610,17 @@ class SupporterApp(App[None]):
 
     async def _select_profile(self, profiles: list[Any]) -> str | None:
         return await self.push_screen_wait(ProfileSelectModal(profiles))
+
+    async def _startup_profile_select(self, greeting_worker: Any) -> None:
+        """Wait for greeting to finish, then prompt for profile selection."""
+        from ..tools.browser.session import select_profile_at_startup
+
+        await greeting_worker.wait()
+        chosen = await select_profile_at_startup(self._select_profile)
+        if chosen:
+            self._toast_manager.notify(
+                self, f"Browser profile: {chosen}", type="profile"
+            )
 
     def _safe_call(
         self, callback: Callable[..., Any], *args: Any, **kwargs: Any
