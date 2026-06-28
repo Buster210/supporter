@@ -10,6 +10,7 @@ from textual.containers import Vertical
 from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Label, Static
 
 from .constants import (
@@ -93,6 +94,15 @@ class MessageBubble(Vertical):
         self.tool_calls: list[dict[str, Any]] = []
         self.elements: list[dict[str, Any]] = []
         self._render_pending = False
+        # When True, finalize() keeps the meta line hidden so a deferred
+        # delegation block can be appended first; reveal_meta() shows it after.
+        self.defer_meta = False
+        # Set once a delegation block is mounted via append_before_meta — marks
+        # the bubble as having real output even when self.content is empty.
+        self._has_appended = False
+        # When True, the meta line stays hidden permanently — used so only the
+        # latest bubble in a multi-step turn shows metadata.
+        self._meta_suppressed = False
 
         if self.content:
             self.elements.append(
@@ -176,7 +186,15 @@ class MessageBubble(Vertical):
 
     def watch_collapsed(self, value: bool) -> None:
         if self._meta_label:
-            self._meta_label.display = not value
+            visible = (
+                not value
+                and not self._meta_suppressed
+                and self.role != "user"
+                and (self.model or self.duration is not None)
+            )
+            if visible:
+                self._meta_label.update(self._get_meta_text())
+            self._meta_label.display = visible
         self._update_ui_content()
 
     def watch_is_active(self, value: bool) -> None:
@@ -450,6 +468,14 @@ class MessageBubble(Vertical):
         self.model = model or self.model
         self.duration = duration or self.duration
         self.streaming = False
+        # Drop whitespace-only content elements — they render as an empty
+        # grey .main-content bar (background + padding) even with no text. Safe
+        # now: streaming is done, so no element will gain real text later.
+        self.elements = [
+            el
+            for el in self.elements
+            if el["type"] != "content" or el["content"].strip()
+        ]
         if (
             self.elements
             and self.elements[-1]["type"] in ("thought", "tool_calls")
@@ -458,10 +484,61 @@ class MessageBubble(Vertical):
             self.elements[-1]["collapsed"] = True
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
-            self._meta_label.display = not self.collapsed
+            self._meta_label.display = (
+                not self.collapsed
+                and not self.defer_meta
+                and not self._meta_suppressed
+            )
         if self._message_view and self._message_view.size.width > 0:
             self._message_view.styles.width = self._message_view.size.width
         self._update_ui_content()
+
+    def reveal_meta(self) -> None:
+        """Show a previously deferred meta line (after appended content)."""
+        self.defer_meta = False
+        if self._meta_label:
+            self._meta_label.update(self._get_meta_text())
+            self._meta_label.display = not self.collapsed and not self._meta_suppressed
+
+    def refresh_meta(self, duration: float) -> None:
+        """Update duration and re-render meta after late-arriving content."""
+        self.duration = duration
+        if self._meta_label and not self._meta_suppressed and not self.collapsed:
+            self._meta_label.update(self._get_meta_text())
+
+    def hide_meta(self) -> None:
+        """Permanently suppress this bubble's meta line.
+
+        Used so that within a multi-step turn only the latest bubble shows
+        metadata — earlier bubbles are suppressed when a new one appears.
+        """
+        self._meta_suppressed = True
+        if self._meta_label:
+            self._meta_label.display = False
+
+    def append_before_meta(self, widget: Any) -> bool:
+        """Mount *widget* after content, before the meta label.
+
+        Returns True if mounted, False when ``_meta_label`` is not composed yet
+        (caller should fall back to another target).
+        """
+        parent = self._meta_label.parent if self._meta_label else None
+        if parent is not None and isinstance(parent, Widget):
+            parent.mount(widget, before=self._meta_label)
+            self._has_appended = True
+            return True
+        return False
+
+    def has_visible_answer(self) -> bool:
+        """True when the bubble shows real output worth keeping.
+
+        Prose, a tool call, or an appended delegation block all count. Thoughts
+        alone do NOT — a model that only "thinks" and returns no answer would
+        otherwise leave an empty bordered bar.
+        """
+        return bool(
+            self.content.strip() or self.tool_calls or self._has_appended
+        )
 
     def replace_content(self, new_text: str) -> None:
         """Replace plain-text content of a finalized pure-text bubble.
@@ -518,5 +595,5 @@ class MessageBubble(Vertical):
             self.collapsed = False
             self._update_ui_content()
             if self._meta_label:
-                self._meta_label.display = True
+                self._meta_label.display = not self._meta_suppressed
         event.stop()

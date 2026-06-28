@@ -18,17 +18,17 @@ _GOAL_PREVIEW_CHARS = 200
 
 
 def _build_message(role: str, text: str) -> Message:
+    """Construct a Message with a single TextPart."""
     return Message(role=role, parts=[TextPart(text=text)])
 
 
 def _extract_assistant_message(result: LLMResult) -> Any | None:
-    # Prefer neutral result.history (last model message).
+    """Extract assistant message from LLMResult via history or candidates."""
     history = getattr(result, "history", None) or []
     for msg in reversed(history):
         if getattr(msg, "role", None) == "model":
             return msg
 
-    # Fall back to candidates using duck-typing + codec.
     candidates = getattr(result, "candidates", None) or []
     if not candidates:
         return None
@@ -39,6 +39,14 @@ def _extract_assistant_message(result: LLMResult) -> Any | None:
 
 
 class ChatAgent:
+    """Multi-turn conversational agent with durable history and auto-planning.
+
+    Wraps an LLM provider with conversation history, optional durable persistence,
+    history compaction (summarization + trimming), and integration with tool
+    registries. Supports both streaming and non-streaming execution, with built-in
+    prompt classification for trivial vs. task routing.
+    """
+
     def __init__(
         self,
         provider: LLMProvider,
@@ -272,6 +280,12 @@ class ChatAgent:
             del self.history[: len(self.history) - cap]
 
     async def execute(self, prompt: str) -> LLMResult:
+        """Execute a single turn with the LLM, return result. History auto-synced.
+
+        Summarizes old turns if past trigger threshold, sends prompt with
+        compacted history to the provider, and persists both user and assistant
+        turns to durable history (if enabled).
+        """
         logger.info(f"Agent: executing prompt — length={len(prompt)}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full prompt: {prompt!r}")
@@ -283,8 +297,6 @@ class ChatAgent:
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
 
-        # Wrap provider.generate() in AutoRecover so transient/recoverable
-        # provider errors retry with backoff + key rotation instead of propagating.
         from .recover import rotate_api_key, with_recovery
 
         recover = with_recovery("agent.execute", actions=[rotate_api_key])
@@ -292,7 +304,6 @@ class ChatAgent:
         try:
             result = await recover.call(self.provider.generate, prompt, options)
         except Exception:
-            # Durably persist user turn so a crash / exception never loses it.
             self.history.append(user_message)
             if self._store:
                 self._store.append(user_message)
@@ -306,7 +317,6 @@ class ChatAgent:
             self._store.sync()
         self._record_brain_decision(prompt, result)
 
-        # Surface recovery counters + key-pool health at end-of-turn.
         self._log_diagnostics()
 
         duration_str = (
@@ -415,7 +425,6 @@ class ChatAgent:
             logger.debug(f"Diagnostics snapshot failed [{type(exc).__name__}]: {exc}")
 
     def _sync_history(self, user_message: Any, result: LLMResult) -> None:
-        # Prefer neutral result.history if available.
         history = getattr(result, "history", None)
         if history:
             logger.info("Agent: syncing history from result.history")
@@ -423,7 +432,6 @@ class ChatAgent:
             self._commit_synced_history(new_list)
             return
 
-        # Fall back to AFC history (convert google Content → neutral Message).
         if result.automatic_function_calling_history:
             logger.info("Agent: syncing history from automatic function calling")
             new_list_raw = result.automatic_function_calling_history
@@ -445,20 +453,18 @@ class ChatAgent:
         logger.info(f"Agent: history synced — new size={len(self.history)}")
 
     def _commit_synced_history(self, new_list: list[Any] | None) -> None:
+        # WHY: Two branches because result.history is already built
+        # (replace self.history), but the fallback appends incrementally
+        # (user + assistant), so the store-bookkeeping is different.
         if new_list is not None:
             if self._store and len(new_list) > self._store_prev_len:
                 for msg in new_list[self._store_prev_len :]:
                     self._store.append(msg)
             self.history = new_list
-            # _store_prev_len reflects the POST-trim length for the
-            # replace-history branches (matches the original ordering).
             self._trim_history()
             if self._store:
                 self._store_prev_len = len(self.history)
             return
-        # Branch 3: user + assistant already appended to self.history; mirror
-        # the assistant append to the store and bookkeep the PRE-trim length,
-        # then trim (matches the original ordering for this branch).
         if self._store:
             self._store.append(self.history[-1])
             self._store_prev_len = len(self.history)
@@ -467,6 +473,12 @@ class ChatAgent:
     async def execute_stream(
         self, prompt: str, exclude_from_history: bool = False
     ) -> AsyncIterator[LLMChunk]:
+        """Stream LLM chunks, with optional history exclusion.
+
+        Routing (direct vs. delegate) is driven by the system prompt's
+        task-triage block, not by caller-side classification. Yields chunks
+        as they arrive.
+        """
         logger.info(f"Agent: executing streaming prompt — length={len(prompt)}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full streaming prompt: {prompt!r}")
@@ -505,6 +517,11 @@ class ChatAgent:
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
     def clear_history(self) -> None:
+        """Erase all conversation history and rotate durable history to a new session.
+
+        Clears in-memory history, summary cache, and spawns a new session ID
+        for durable storage (if enabled). Used when starting a fresh conversation.
+        """
         logger.info("Clearing agent session history")
         self.history = []
         self._summary = ""

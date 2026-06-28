@@ -1,3 +1,5 @@
+"""Delegation event listener with dispatch-map event loop."""
+
 from __future__ import annotations
 
 import json
@@ -7,28 +9,28 @@ from typing import Any, Protocol
 from ..logger import logger
 from ..tools.delegate.formatting import format_delegation_table
 
-# Maximum tail length for streaming output (last ~500 chars or last 3 lines)
 _OUTPUT_TAIL_MAX_CHARS = 500
 _OUTPUT_TAIL_MAX_LINES = 3
 
 
 def _truncate_output_tail(text: str) -> str:
     """Keep a bounded rolling tail of streamed output (char + line caps)."""
-    if len(text) <= _OUTPUT_TAIL_MAX_CHARS:
-        return text
-    # Prefer the last N lines, then hard-cap to the char budget so a single
-    # very long line (no newlines) still can't grow the widget unbounded.
-    tail = "\n".join(text.splitlines()[-_OUTPUT_TAIL_MAX_LINES:])
+    lines = text.splitlines(keepends=True)
+    tail = "".join(lines[-_OUTPUT_TAIL_MAX_LINES:])
     if len(tail) > _OUTPUT_TAIL_MAX_CHARS:
         tail = tail[-_OUTPUT_TAIL_MAX_CHARS:]
     return tail
 
 
 class MessageInjector(Protocol):
+    """Callback to inject a message into the chat."""
+
     def __call__(self, message: str) -> None: ...
 
 
 class ProgressUpdater(Protocol):
+    """Async callback to update delegation progress on the UI."""
+
     async def __call__(self, job_id: str, bus: Any) -> None: ...
 
 
@@ -46,18 +48,35 @@ _KIND_LABELS = {
 }
 
 
-def format_task_signal(job_id: str, kind: str, task_id: str, bus: Any) -> str:
-    state = bus.get_snapshot().get(task_id, {})
-    agent = str(state.get("agent_label", "?"))
-    label = _KIND_LABELS.get(kind.upper(), kind.lower())
-    return f"<br/>\n\nDelegation task {label} — `{task_id}` [{agent}]\n\n<br/>"
+def format_delegation_update(
+    job_id: str,
+    bus: Any,
+    *,
+    task_id: str | None = None,
+    status: str | None = None,
+) -> str:
+    """Consolidated delegation formatter — single-line signal or full table.
 
+    When *task_id* is given, emit a one-line human-readable status for that
+    task (the old ``format_task_signal`` path).  *status* is the explicit
+    status label (e.g. ``"DONE"``); if omitted, falls back to the bus
+    snapshot.  Otherwise emit the full progress table (the old
+    ``format_delegation_progress`` path).
 
-def format_delegation_progress(job_id: str, bus: Any) -> str:
+    """
+    snapshot = bus.get_snapshot()
+
+    if task_id is not None:
+        state = snapshot.get(task_id, {})
+        agent = str(state.get("agent_label", "?"))
+        kind = (status or str(state.get("status", "PENDING"))).upper()
+        label = _KIND_LABELS.get(kind, kind.lower())
+        return f"Task {task_id} ({agent}) {label}"
+
     headers = ["Task", "Agent", "Status", "Time"]
     data_rows = []
-    for task_id, state in bus.get_snapshot().items():
-        status = _display_task_status(str(state.get("status", "PENDING")))
+    for tid, state in snapshot.items():
+        st = _display_task_status(str(state.get("status", "PENDING")))
         agent = str(state.get("agent_label", "?"))
         duration = state.get("duration")
         duration_text = ""
@@ -65,49 +84,204 @@ def format_delegation_progress(job_id: str, bus: Any) -> str:
             duration_text = f"{duration:.2f}s"
         output_tail = state.get("output_tail", "")
         if output_tail:
-            # Show tail indicator for running tasks
             duration_text += f" [{output_tail.splitlines()[0][:40]}]"
-        data_rows.append([task_id, agent, status, duration_text])
+        data_rows.append([tid, agent, st, duration_text])
     table = format_delegation_table(headers, data_rows)
     return f"Job `{job_id}`\n\n{table}"
 
 
 def _display_task_status(status: str) -> str:
+    """Convert task status codes to natural-language labels."""
     normalized = status.lower()
-    if normalized == "running":
-        return "working"
-    if normalized == "done":
-        return "completed"
-    return normalized
+    status_map = {
+        "running": "working",
+        "done": "completed",
+        "pending": "waiting",
+        "failed": "failed",
+        "error": "failed",
+        "timeout": "timed out",
+        "skipped": "skipped",
+    }
+    return status_map.get(normalized, normalized)
+
+
+def format_delegation_summary(job_id: str, bus: Any) -> str:
+    """Compact one-line completion summary: tasks completed vs total."""
+    snapshot = bus.get_snapshot()
+    if not snapshot:
+        return f"Job {job_id} completed"
+    completed = sum(
+        1 for s in snapshot.values() if str(s.get("status")).upper() == "DONE"
+    )
+    failed = sum(
+        1
+        for s in snapshot.values()
+        if str(s.get("status")).upper() in ("FAIL", "ERROR", "TIMEOUT", "SKIPPED")
+    )
+    total = len(snapshot)
+    result = "completed" if failed == 0 else "completed with issues"
+    return f"Job {job_id}: {completed}/{total} tasks {result}"
+
+
+def _format_capsule_summary(payload: dict[str, Any]) -> str:
+    """Convert capsule result payload to a concise human-readable summary for LLM."""
+    agent = payload.get("agent", "unknown")
+    milestone = payload.get("milestone", "")
+    status = payload.get("status", "unknown")
+    totals = payload.get("totals", {})
+    tokens = totals.get("tokens", 0)
+    completed = totals.get("completed", 0)
+    failed = totals.get("failed", 0)
+    findings = payload.get("key_findings", [])
+    next_steps = payload.get("recommended_next_steps", [])
+    tasks = payload.get("tasks", [])
+
+    lines = [
+        f"Delegation result — agent: {agent}, status: {status}",
+        f"Objective: {milestone}",
+        f"Tasks: {completed} completed, {failed} failed — {tokens} tokens",
+    ]
+    if tasks:
+        lines.append("Task results:")
+        for t in tasks:
+            summary = t.get("summary", "")
+            status_label = t.get("status", "?")
+            lines.append(f"• [{status_label}] {t.get('id', '?')}: {summary}")
+    if findings:
+        lines.append("Key findings:")
+        lines.extend(f"• {f}" for f in findings)
+    if next_steps:
+        lines.append("Next steps:")
+        lines.extend(f"• {s}" for s in next_steps)
+    return "\n".join(lines)
 
 
 class DelegationListener:
+    """Listens for delegation events and renders task progress + signals to the UI."""
+
     def __init__(
         self,
         inject_message: MessageInjector,
-        upsert_progress: ProgressUpdater,
         drop_progress: Callable[[str], None],
         render_signal: Callable[[str], None],
+        render_progress_live: Callable[[str, str], None] | None = None,
+        render_summary: Callable[[str, str], None] | None = None,
         plan_bubble_injector: PlanBubbleInjector | None = None,
         plan_storer: Callable[[str, str], None] | None = None,
+        render_task_done: Callable[[str, str], None] | None = None,
     ) -> None:
         self._inject_message = inject_message
-        self._upsert_progress = upsert_progress
         self._drop_progress = drop_progress
         self._render_signal = render_signal
+        self._render_task_done = render_task_done
+        self._render_progress_live = render_progress_live
+        self._render_summary = render_summary
         self._plan_bubble_injector = plan_bubble_injector
         self._plan_storer = plan_storer
-        # Per-task rolling output tails (bounded)
         self._output_tails: dict[str, str] = {}
 
-    async def listen(self, job_id: str) -> None:
+
+    def _on_task_output_chunk(self, event: Any, job_id: str, bus: Any) -> None:
+        """Append to bounded tail and re-render on newline boundaries."""
+        current_tail = self._output_tails.get(event.task_id, "")
+        truncated = _truncate_output_tail(current_tail + event.chunk)
+        self._output_tails[event.task_id] = truncated
+        state = bus.get_snapshot().get(event.task_id, {})
+        bus.update_task_state(event.task_id, {**state, "output_tail": truncated})
+        if "\n" in event.chunk and self._render_progress_live is not None:
+            self._render_progress_live(job_id, format_delegation_update(job_id, bus))
+
+    def _on_task_anomaly(self, event: Any) -> None:
+        msg = (
+            f"AGENT ALERT: Task `{event.task_id}` "
+            f"[{event.agent_label}] "
+            f"has used {event.elapsed_seconds:.0f}s of its "
+            f"{event.timeout:.0f}s limit and may be hung."
+        )
+        self._render_signal(msg)
+
+    def _on_task_update_sent(self, event: Any) -> None:
+        """Handle TaskUpdateSent event — show one line to TUI."""
+        msg = f"Update sent to task {event.task_id}: {event.message}"
+        self._render_signal(msg)
+
+    def _on_task_terminal(self, event: Any, job_id: str, bus: Any, kind: str) -> None:
+        """Handle TaskCompleted/Failed/TimedOut/Skipped."""
+        self._clear_task_tail(bus, event.task_id)
+        text = format_delegation_update(
+            job_id, bus, task_id=event.task_id, status=kind
+        )
+        # Route the task-complete signal into the delegation block (ordered
+        # section) when wired; fall back to a standalone signal otherwise.
+        if self._render_task_done is not None:
+            self._render_task_done(job_id, text)
+        else:
+            self._render_signal(text)
+
+    def _serialize_milestone_result(
+        self,
+        event: Any,
+        job_id: str,
+        *,
+        status: str = "completed",
+    ) -> dict[str, Any]:
+        """Serialize milestone result with fallback to legacy format."""
         from ..tools.delegate.api import serialize_capsule_result
-        from ..tools.delegate.bus import get_bus
         from ..tools.delegate.scheduler import serialize_results
+
+        try:
+            return serialize_capsule_result(job_id)
+        except Exception as e:
+            logger.warning(
+                f"Falling back to legacy delegation result for "
+                f"{job_id} [{type(e).__name__}]: {e}"
+            )
+            if hasattr(event, "results"):
+                has_failures = any(
+                    str(r.get("status")) in {"error", "timeout", "skipped"}
+                    for r in event.results
+                )
+                return serialize_results(
+                    event.milestone,
+                    event.results,
+                    event.total_duration,
+                    job_id,
+                    status=("completed_with_failures" if has_failures else "completed"),
+                )
+            return {
+                "job_id": job_id,
+                "milestone": event.milestone,
+                "status": status,
+                "total_duration": round(event.total_duration, 2),
+            }
+
+    def _on_milestone_terminal(self, event: Any, job_id: str, bus: Any) -> bool:
+        """Handle MilestoneCompleted/Cancelled. Returns True to break loop."""
+        self._output_tails.clear()
+        status = "cancelled" if not hasattr(event, "results") else "completed"
+        payload = self._serialize_milestone_result(event, job_id, status=status)
+        self._inject_capsule_result(payload)
+        if self._render_summary is not None:
+            if status == "cancelled":
+                summary = f"Job {job_id} cancelled"
+            else:
+                summary = format_delegation_summary(job_id, bus)
+            self._render_summary(job_id, summary)
+        self._drop_progress(job_id)
+        return True
+
+
+    async def listen(self, job_id: str) -> None:
+        """Listen for delegation events on job_id and render to UI in real time.
+
+        Dispatches events (task start/complete/fail, anomaly, milestone) to
+        appropriate handler methods which render signals and progress updates.
+        """
+        from ..tools.delegate.bus import get_bus
         from ..types import (
+            HeartbeatTick,
             MilestoneCancelled,
             MilestoneCompleted,
-            MilestoneStarted,
             TaskAnomaly,
             TaskCompleted,
             TaskFailed,
@@ -115,7 +289,22 @@ class DelegationListener:
             TaskSkipped,
             TaskStarted,
             TaskTimedOut,
+            TaskUpdateSent,
         )
+
+        terminal_tasks = (
+            TaskCompleted,
+            TaskFailed,
+            TaskTimedOut,
+            TaskSkipped,
+        )
+        task_kinds = {
+            TaskCompleted: "DONE",
+            TaskFailed: "FAIL",
+            TaskTimedOut: "TIMEOUT",
+            TaskSkipped: "SKIP",
+        }
+        milestone_events = (MilestoneCompleted, MilestoneCancelled)
 
         try:
             bus = get_bus(job_id)
@@ -126,125 +315,53 @@ class DelegationListener:
                     if event is None:
                         break
 
-                    if isinstance(event, (MilestoneStarted, TaskStarted)):
-                        pass
+                    etype = type(event)
 
-                    elif isinstance(event, TaskOutputChunk):
-                        # Append to the bounded per-task tail and MERGE it into the
-                        # task's existing state — never replace, which would wipe the
-                        # scheduler-owned status/agent fields for a running task.
-                        current_tail = self._output_tails.get(event.task_id, "")
-                        truncated = _truncate_output_tail(current_tail + event.chunk)
-                        self._output_tails[event.task_id] = truncated
-                        state = bus.get_snapshot().get(event.task_id, {})
-                        bus.update_task_state(
-                            event.task_id, {**state, "output_tail": truncated}
-                        )
-                        # Coalesce: only re-render on a newline boundary.
+                    if etype is TaskOutputChunk:
+                        self._on_task_output_chunk(event, job_id, bus)
                         if "\n" in event.chunk:
-                            await self._upsert_progress(job_id, bus)
-
-                    elif isinstance(event, TaskAnomaly):
-                        msg = (
-                            f"AGENT ALERT: Task `{event.task_id}` "
-                            f"[{event.agent_label}] "
-                            f"has used {event.elapsed_seconds:.0f}s of its "
-                            f"{event.timeout:.0f}s limit and may be hung."
-                        )
-                        self._render_signal(msg)
-
-                    elif isinstance(event, TaskCompleted):
-                        self._clear_task_tail(bus, event.task_id)
-                        await self._emit_task_event(bus, job_id, "DONE", event.task_id)
-
-                    elif isinstance(event, TaskFailed):
-                        self._clear_task_tail(bus, event.task_id)
-                        await self._emit_task_event(bus, job_id, "FAIL", event.task_id)
-
-                    elif isinstance(event, TaskTimedOut):
-                        self._clear_task_tail(bus, event.task_id)
-                        await self._emit_task_event(
-                            bus, job_id, "TIMEOUT", event.task_id
-                        )
-
-                    elif isinstance(event, TaskSkipped):
-                        self._clear_task_tail(bus, event.task_id)
-                        await self._emit_task_event(bus, job_id, "SKIP", event.task_id)
-
-                    elif isinstance(event, MilestoneCompleted):
-                        # Clear all stored tails
-                        self._output_tails.clear()
-                        try:
-                            payload = serialize_capsule_result(job_id)
-                        except Exception as e:
-                            logger.warning(
-                                "Falling back to legacy delegation result for "
-                                f"{job_id} [{type(e).__name__}]: {e}"
-                            )
-                            has_failures = any(
-                                str(result.get("status"))
-                                in {"error", "timeout", "skipped"}
-                                for result in event.results
-                            )
-                            payload = serialize_results(
-                                event.milestone,
-                                event.results,
-                                event.total_duration,
-                                job_id,
-                                status="completed_with_failures"
-                                if has_failures
-                                else "completed",
-                            )
-                        self._inject_capsule_result(payload)
-                        self._drop_progress(job_id)
-                        break
-
-                    elif isinstance(event, MilestoneCancelled):
-                        # Clear all stored tails
-                        self._output_tails.clear()
-                        try:
-                            payload = serialize_capsule_result(job_id)
-                        except Exception as e:
-                            logger.warning(
-                                "Falling back to legacy cancellation result for "
-                                f"{job_id} [{type(e).__name__}]: {e}"
-                            )
-                            payload = {
-                                "job_id": job_id,
-                                "milestone": event.milestone,
-                                "status": "cancelled",
-                                "total_duration": round(event.total_duration, 2),
-                            }
-                        self._inject_capsule_result(payload)
-                        self._drop_progress(job_id)
+                            await self._upsert_progress_live(job_id, bus)
+                    elif etype in terminal_tasks:
+                        self._on_task_terminal(event, job_id, bus, task_kinds[etype])
+                        await self._upsert_progress_live(job_id, bus)
+                    elif etype is TaskStarted or etype is HeartbeatTick:
+                        await self._upsert_progress_live(job_id, bus)
+                    elif etype is TaskAnomaly:
+                        self._on_task_anomaly(event)
+                    elif etype is TaskUpdateSent:
+                        self._on_task_update_sent(event)
+                    elif etype in milestone_events:
+                        self._on_milestone_terminal(event, job_id, bus)
                         break
             finally:
                 bus.unsubscribe(queue)
-
         except Exception as e:
             logger.error(f"Delegation listener failed for {job_id}: {e}")
 
-    def _clear_task_tail(self, bus: Any, task_id: str) -> None:
-        """Drop a task's rolling tail (local + bus state) on terminal status.
 
-        Merges the tail out of the existing state rather than replacing it, so
-        the scheduler-owned status/agent fields survive for the final render.
-        """
+    def _clear_task_tail(self, bus: Any, task_id: str) -> None:
+        """Drop a task's rolling tail on terminal status."""
         self._output_tails.pop(task_id, None)
         state = bus.get_snapshot().get(task_id, {})
         if "output_tail" in state:
             bus.update_task_state(
-                task_id, {k: v for k, v in state.items() if k != "output_tail"}
+                task_id,
+                {k: v for k, v in state.items() if k != "output_tail"},
             )
 
+    async def _upsert_progress_live(self, job_id: str, bus: Any) -> None:
+        """Render live progress table to UI."""
+        if self._render_progress_live is not None:
+            self._render_progress_live(job_id, format_delegation_update(job_id, bus))
+
     def _inject_capsule_result(self, payload: dict[str, Any]) -> None:
-        # For planner capsules, mount a visible formatted bubble so the user
-        # sees the raw plan immediately, while still feeding the full JSON to
-        # the LLM for synthesis.
+        """Mount plan bubble for planner agent; log capsule result."""
         agent = payload.get("agent", "")
         if agent == "planner":
             if self._plan_bubble_injector is not None:
-                from ..tools.delegate.capsule_view import format_plan_capsule
+                from ..tools.delegate.capsule_view import (
+                    format_plan_capsule,
+                )
 
                 try:
                     plan_md = format_plan_capsule(payload)
@@ -252,34 +369,21 @@ class DelegationListener:
                         self._plan_bubble_injector(plan_md)
                 except Exception as exc:
                     logger.warning(f"Failed to render plan bubble: {exc}")
-            # Store the plan on the agent for post-execution verification.
             if self._plan_storer is not None:
                 objective = payload.get("milestone", "")
                 plan_text = json.dumps(payload, indent=2)
                 self._plan_storer(objective, plan_text)
-        msg = (
-            "DELEGATION_CAPSULE_RESULT (json):\n```json\n"
-            f"{json.dumps(payload, indent=2)}\n```"
-        )
-        self._inject_message(msg)
-
-    async def _emit_task_event(
-        self,
-        bus: Any,
-        job_id: str,
-        kind: str,
-        task_id: str,
-    ) -> None:
-        await self._upsert_progress(job_id, bus)
-        self._render_signal(format_task_signal(job_id, kind, task_id, bus))
+        self._inject_message(_format_capsule_summary(payload))
 
 
 __all__ = [
     "_OUTPUT_TAIL_MAX_CHARS",
     "_OUTPUT_TAIL_MAX_LINES",
     "DelegationListener",
+    "MessageInjector",
     "PlanBubbleInjector",
+    "ProgressUpdater",
     "_truncate_output_tail",
-    "format_delegation_progress",
-    "format_task_signal",
+    "format_delegation_summary",
+    "format_delegation_update",
 ]

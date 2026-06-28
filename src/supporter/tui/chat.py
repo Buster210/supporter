@@ -61,6 +61,11 @@ class ChatContainer(Vertical):
     _follow = True
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        # MUST call super(): Widget.watch_scroll_y runs _refresh_scroll() (the
+        # repaint that moves content to the new offset) and tracks the scrollbar.
+        # Overriding without it froze the view — scroll_y changed but the content
+        # never moved, so the wheel could never reach the top (the reported bug).
+        super().watch_scroll_y(old_value, new_value)
         at_bottom = new_value >= self.max_scroll_y - _BOTTOM_TOLERANCE_ROWS
         if new_value > old_value and at_bottom:
             self._follow = True
@@ -77,11 +82,14 @@ class ChatContainer(Vertical):
             self.scroll_end(animate=False)
         self._update_scroll_btn()
 
+    # User upward gestures (wheel/PageUp/Home) disarm auto-follow so streamed
+    # content stops yanking the viewport back to the bottom. No origin healing:
+    # native Textual reaches the true top on its own (verified empirically — the
+    # old "negative-origin" workaround was the actual cause of the unreachable
+    # top, collapsing every turn per wheel tick and jumping the viewport).
     def _on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
-        # A vertical wheel-up is the user choosing to read back, so stop chasing
-        # the bottom. Ignore it when there is no scroll range (content fits the
-        # viewport, so the gesture is a no-op and later growth must still pin to
-        # the bottom) or when it carries a horizontal modifier (ctrl/shift).
+        # Ignore when there is no scroll range (content fits, gesture is a no-op
+        # and later growth must still pin to bottom) or a horizontal modifier.
         if not (event.ctrl or event.shift) and self.max_scroll_y > 0:
             self._follow = False
         super()._on_mouse_scroll_up(event)
@@ -175,15 +183,24 @@ class ChatTurn(Vertical):
         cast("SupporterApp", self.app).active_turn = self
 
     async def mount_bubble(self, bubble: MessageBubble) -> None:
+        # Only the latest bubble in a turn keeps its meta line — suppress the
+        # previous ones so a multi-step task shows metadata just once, at the end.
+        for prev in self.agent_bubbles:
+            prev.hide_meta()
         bubble.collapsed = self.collapsed
         bubble.is_active = cast("SupporterApp", self.app).active_turn is self
         self.agent_bubbles.append(bubble)
         await self.mount(bubble)
 
     def on_click(self, event: Click) -> None:
-        if self.collapsed:
-            self.expand_turn()
+        # toggle_collapse() must run BEFORE expand_turn(): expand_turn() sets
+        # active_turn, whose watcher synchronously sets collapsed=False — if that
+        # ran first, toggle_collapse() would see an already-expanded turn and
+        # re-collapse it, so a click on a collapsed turn never expanded it.
+        was_collapsed = self.collapsed
         self.toggle_collapse()
+        if was_collapsed:
+            self.expand_turn()
         event.stop()
 
 

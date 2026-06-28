@@ -151,16 +151,21 @@ class MockQuery:
 class MockBubble:
     role: str = ""
     content: str = ""
+    thoughts: str = ""
     streaming: bool = False
     model: str | None = None
     duration: float | None = None
     tokens: list[str] = field(default_factory=list)
     tool_calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     finalized: bool = False
+    removed: bool = False
 
     def append_token(self, token: str, is_thought: bool = False) -> None:
         self.tokens.append(token)
-        self.content += token
+        if is_thought:
+            self.thoughts += token
+        else:
+            self.content += token
 
     def add_tool_call(self, name: str, args: dict[str, Any]) -> None:
         self.tool_calls.append((name, args))
@@ -169,6 +174,9 @@ class MockBubble:
         self.finalized = True
         self.model = model
         self.duration = duration
+
+    def remove(self) -> None:
+        self.removed = True
 
 
 class MockTurn:

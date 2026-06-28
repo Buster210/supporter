@@ -1,4 +1,5 @@
 $bg: #121212;
+$surface: #1e1e1e;
 $primary: #00ffcc;
 $secondary: #ff06b5;
 $accent: #ffeb3b;
@@ -88,7 +89,7 @@ MessageBubble.right {
     text-align: center;
     content-align: center middle;
     padding: 0 2;
-    margin: 0 0 1 0;
+    margin: 1 0 0 0;
 }
 
 .bubble {
@@ -113,10 +114,17 @@ MessageBubble.right {
     content-align-horizontal: left;
 }
 
+.bubble.agent-border #main-content,
+.bubble.agent-border .main-content {
+    background: $surface;
+    padding: 1;
+}
+
 .section-header {
     color: $accent;
     text-style: bold;
     width: 1fr;
+    margin-bottom: 1;
 }
 
 .section-header.collapsed {
@@ -144,6 +152,66 @@ MessageBubble.right {
     margin-top: 1;
 }
 
+/* Only two shades: default black everywhere, and one $boost panel under the
+   table and the plan. The Collapsible's own $boost bg is cleared here and on
+   its inner contents so nothing else carries a shade. */
+.delegation-block {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+.delegation-block-content {
+    width: 100%;
+    height: auto;
+    layout: vertical;
+    background: transparent;
+}
+
+.delegation-block CollapsibleContents,
+.delegation-block Contents {
+    background: transparent;
+    padding: 0;
+}
+
+.delegation-plan-content {
+    width: 100%;
+    height: auto;
+    color: $primary;
+    margin: 1 0 1 0;
+    padding: 1;
+    background: $surface;
+}
+
+.delegation-progress-content {
+    width: 100%;
+    height: auto;
+    color: $accent;
+    margin: 1 0 0 0;
+    padding: 1;
+    background: $surface;
+}
+
+.delegation-result-content {
+    width: 100%;
+    height: auto;
+    color: $success;
+    margin: 1 0;
+    background: transparent;
+    text-align: center;
+    content-align-horizontal: center;
+}
+
+.delegation-summary {
+    width: 100%;
+    height: auto;
+    text-align: center;
+    content-align-horizontal: center;
+}
+
 .delegation-progress {
     margin-top: 1;
     margin-bottom: 0;
@@ -157,7 +225,7 @@ MessageBubble.right {
 .message-meta {
     color: $accent;
     text-style: dim italic;
-    margin: 0 0 0 0;
+    margin: 0 0 1 0;
     width: 1fr;
 }
 

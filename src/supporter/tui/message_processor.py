@@ -17,10 +17,13 @@ class _StreamingState:
 
 
 class ChatMessageProcessor:
+    """Process streaming chunks, render to bubbles, handle recovery and formatting."""
+
     def __init__(self, app: Any) -> None:
         self._app = app
 
     def wire_recovery_observer(self, agent: Any) -> None:
+        """Wire recovery callback to update UI status on recovery events."""
         provider = getattr(agent, "provider", None)
         if provider is None:
             return
@@ -50,9 +53,16 @@ class ChatMessageProcessor:
         agent: ChatAgent,
         exclude_from_history: bool = False,
     ) -> Any:
+        """Stream a prompt and render chunks to bubbles, with formatting pass on finish.
+
+        Spawns the streaming execution, creates/appends to bubbles on first/subsequent
+        chunks, finalizes with duration, and asynchronously reformats the final
+        bubble (fire-and-forget to avoid blocking the message cycle).
+        """
         from .bubble import MessageBubble
 
         state = _StreamingState()
+        self._app._is_streaming = True
 
         try:
             logger.info(f"UI: starting stream process — text_len={len(text)}")
@@ -61,25 +71,27 @@ class ChatMessageProcessor:
             ):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
-            # Leave "Streaming" no matter how the stream ended. is_last only
-            # fires on the clean text path; a tool-call/exception end would
-            # otherwise strand the label on "Streaming".
+            self._app._is_streaming = False
+            # WHY: Reset status even if stream ended via exception or tool-call.
+            # is_last only fires on clean text path.
             self._update_status("Thinking")
+            self._app.stop_thinking()
+            if self._app._pending_delegation_widgets:
+                if not state.bubble:
+                    state.bubble = await self._initialize_bubble(
+                        container, MessageBubble
+                    )
+                await self._app._flush_pending_delegation_widgets(state.bubble)
             if state.bubble:
                 duration = time.perf_counter() - start_time
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
-            # The answer is fully on screen now. Drop the thinking spinner BEFORE
-            # the fallback formatter's LLM round-trip (and the cycle's later
-            # verify call) — otherwise "Thinking" lingers long after the response
-            # is visible. The cycle's own stop_thinking() in its finally is then
-            # an idempotent no-op (active_queries clamps at 0).
-            self._app.stop_thinking()
+                if not state.bubble.has_visible_answer():
+                    state.bubble.remove()
+                    state.bubble = None
             if state.bubble:
-                # Fire-and-forget: the answer is already painted, formatting only
-                # swaps an already-finalized bubble. Awaiting it would hold the
-                # cycle's _is_processing gate during the fallback model's round-trip
-                # and wrongly queue the next message while only the formatter is busy.
+                # WHY: Fire-and-forget — answer already visible. Awaiting would
+                # block the message queue until formatting completes.
                 self._app.run_worker(self._maybe_format_bubble(state.bubble))
 
         return state.bubble

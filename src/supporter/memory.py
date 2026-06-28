@@ -30,6 +30,7 @@ with the ``WORKING_MEMORY_PATH`` env var.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -166,6 +167,16 @@ class WorkingMemory:
             source=source[:200] if source else "",
         )
         with self._lock:
+            # WHY: deque.appendleft() silently evicts the oldest entry when at
+            # maxlen; clean _by_kind now so the index stays bounded with _notes.
+            if len(self._notes) == self._notes.maxlen:
+                evicted = self._notes[-1]
+                kind_list = self._by_kind.get(evicted.kind)
+                if kind_list:
+                    with contextlib.suppress(ValueError):
+                        kind_list.remove(evicted)
+                    if not kind_list:
+                        del self._by_kind[evicted.kind]
             self._notes.appendleft(note)  # newest first
             self._by_kind.setdefault(kind, []).insert(0, note)
             self._persist_locked()

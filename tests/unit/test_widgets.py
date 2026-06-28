@@ -52,6 +52,60 @@ class TestMessageBubble:
         bubble = MessageBubble(role="user", content="")
         assert bubble._should_use_markdown("# Title\n\nSome paragraph") is True
 
+    def test_has_visible_answer_thoughts_only_is_empty(self) -> None:
+        # Model thought but returned no prose -> empty bar, must be removed.
+        bubble = MessageBubble(role="agent", content="")
+        bubble.thoughts = "reasoning..."
+        assert bubble.content.strip() == ""
+        assert bubble.has_visible_answer() is False
+
+    def test_finalize_prunes_empty_content_elements(self) -> None:
+        # Whitespace content element + a tool call -> empty grey bar; prune it.
+        bubble = MessageBubble(role="agent", content="")
+        bubble.elements = [
+            {"type": "tool_calls", "calls": [{"name": "x", "args": {}}]},
+            {"type": "content", "content": "   \n", "collapsed": False},
+        ]
+        bubble.finalize()
+        assert all(
+            el["type"] != "content" for el in bubble.elements
+        ), bubble.elements
+
+    def test_finalize_keeps_real_content_elements(self) -> None:
+        bubble = MessageBubble(role="agent", content="answer")
+        bubble.elements = [{"type": "content", "content": "answer"}]
+        bubble.finalize()
+        assert any(el["type"] == "content" for el in bubble.elements)
+
+    def test_has_visible_answer_with_prose(self) -> None:
+        assert MessageBubble(role="agent", content="hi").has_visible_answer() is True
+
+    def test_has_visible_answer_with_tool_call(self) -> None:
+        bubble = MessageBubble(role="agent", content="")
+        bubble.tool_calls.append({"name": "search", "args": {}})
+        assert bubble.has_visible_answer() is True
+
+    def test_has_visible_answer_with_appended_block(self) -> None:
+        bubble = MessageBubble(role="agent", content="")
+        bubble._has_appended = True  # delegation block mounted
+        assert bubble.has_visible_answer() is True
+
+    def test_hide_meta_suppresses_through_finalize_and_expand(self) -> None:
+        bubble = MessageBubble(role="agent", content="answer")
+        bubble._meta_label = MagicMock()
+        bubble.hide_meta()
+        bubble.finalize(model="m", duration=1.0)
+        assert bubble._meta_label.display is False
+        # Re-expanding a collapsed bubble must NOT bring the meta back.
+        bubble.watch_collapsed(False)
+        assert bubble._meta_label.display is False
+
+    def test_meta_shown_when_not_suppressed(self) -> None:
+        bubble = MessageBubble(role="agent", content="answer")
+        bubble._meta_label = MagicMock()
+        bubble.finalize(model="m", duration=1.0)
+        assert bubble._meta_label.display is True
+
     def test_get_meta_text_with_model(self) -> None:
         bubble = MessageBubble(role="agent", content="test")
         bubble.model = "gemma-4-31b-it"
@@ -80,7 +134,7 @@ class TestMessageBubble:
         assert "margin-bottom: 0;" in styles
         assert "content-align-horizontal: center;" in styles
         assert ".message-meta" in styles
-        assert "margin: 0 0 0 0;" in styles
+        assert "margin: 0 0 1 0;" in styles
 
     def test_delegation_signal_uses_only_bottom_margin(self) -> None:
         styles_path = (

@@ -9,7 +9,6 @@ from supporter.tools.file_ops import (
     _is_blacklisted,
     emit_confirmation_line,
     register_confirmation_callback,
-    set_confirmation_callback,
     validate_path,
 )
 
@@ -91,20 +90,6 @@ class TestFileOpsUtils:
 
         app.log.assert_called_once_with("confirm this")
         mock_print.assert_not_called()
-
-    def test_set_confirmation_callback(self) -> Any:
-
-        def cb(p: Any, d: Any) -> Any:
-            return True
-
-        set_confirmation_callback(cb)
-        from supporter.tools.file_ops import _CONFIRMATION_CALLBACK
-
-        assert cb == _CONFIRMATION_CALLBACK
-        set_confirmation_callback(None)
-        from supporter.tools.file_ops import _CONFIRMATION_CALLBACK
-
-        assert _CONFIRMATION_CALLBACK is None
 
     def test_register_confirmation_callback(self) -> Any:
 

@@ -16,6 +16,60 @@ from .bus import DelegationBus
 from .opencode_backend import run_opencode
 
 
+def _categorize_error(exc: Exception) -> tuple[str, str]:
+    """Categorize an exception and return (category, actionable_message).
+
+    Maps specific external service errors (auth, rate-limit, network) to
+    actionable messages instead of generic error text.
+    """
+    exc_type = type(exc).__name__
+    exc_msg = str(exc)
+
+    if any(
+        x in exc_type.lower() or x in exc_msg.lower()
+        for x in ("auth", "credential", "unauthorized", "forbidden", "401", "403")
+    ):
+        return (
+            "AUTH_ERROR",
+            f"Authentication failed. Check API keys and credentials. {exc_msg[:200]}",
+        )
+
+    if any(
+        x in exc_type.lower() or x in exc_msg.lower()
+        for x in ("ratelimit", "quota", "429", "too_many_requests")
+    ):
+        return (
+            "RATE_LIMIT_ERROR",
+            f"Rate limit or quota exceeded. Wait and retry. {exc_msg[:200]}",
+        )
+
+    if any(
+        x in exc_type.lower() or x in exc_msg.lower()
+        for x in (
+            "timeout",
+            "connectionerror",
+            "network",
+            "unreachable",
+            "refused",
+        )
+    ):
+        return (
+            "NETWORK_ERROR",
+            f"Network or connection error. Check connectivity. {exc_msg[:200]}",
+        )
+
+    if any(
+        x in exc_type.lower() or x in exc_msg.lower()
+        for x in ("notfound", "404", "missing", "no such")
+    ):
+        return (
+            "NOT_FOUND_ERROR",
+            f"Resource not found. Check URL or target. {exc_msg[:200]}",
+        )
+
+    return ("UNKNOWN_ERROR", f"Error [{exc_type}]: {exc_msg[:200]}")
+
+
 class _DelegateCache:
     def __init__(self) -> None:
         self.agents: dict[tuple[str, str, bool], ChatAgent] = {}
@@ -196,6 +250,14 @@ async def run_sub_agent(
                         task,
                         provider=provider,
                     )
+
+                    # Poll for any updates sent by the orchestrator
+                    updates = bus.poll_task_updates(task_id)
+                    if updates:
+                        prompt = f"{prompt}\n\nORCHESTRATOR UPDATES:\n" + "\n".join(
+                            f"- {u}" for u in updates
+                        )
+
                     role_lock = _cache.locks.get(cache_key) if cache_key else None
                     async with role_lock or contextlib.nullcontext():
                         result = await asyncio.wait_for(
@@ -239,13 +301,14 @@ async def run_sub_agent(
                     "tokens": {},
                 }
             except Exception as e:
+                cat, msg = _categorize_error(e)
                 logger.error(
-                    f"Sub-agent '{task_id}' failed (attempt {attempt + 1}): {e}"
+                    f"Sub-agent '{task_id}' failed ({cat}, attempt {attempt + 1}): {e}"
                 )
                 last_result = {
                     "id": task_id,
                     "status": TaskStatus.ERROR,
-                    "output": f"Error [{type(e).__name__}]: {e}",
+                    "output": msg,
                     "duration": time.perf_counter() - start_time,
                     "tokens": {},
                 }

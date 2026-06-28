@@ -290,9 +290,26 @@ async def _execute_dag(
                 agent_token = browser_session.set_agent_id(task_id)
             try:
                 async with job_semaphore:
-                    result = await run_sub_agent(
-                        enriched, global_semaphore, bus, job_id
-                    )
+                    try:
+                        result = await run_sub_agent(
+                            enriched, global_semaphore, bus, job_id
+                        )
+                    except Exception as exc:
+                        # Safety guard: run_sub_agent should never raise
+                        # (it catches all errors and returns them as results),
+                        # but if it does, convert to error result to prevent
+                        # crashing the entire DAG.
+                        logger.error(
+                            f"Unexpected exception from run_sub_agent for "
+                            f"task {task_id}: {type(exc).__name__}: {exc}"
+                        )
+                        result = {
+                            "id": task_id,
+                            "status": TaskStatus.ERROR,
+                            "output": f"Internal error [{type(exc).__name__}]: {exc}",
+                            "duration": time.perf_counter() - started_at,
+                            "tokens": {},
+                        }
                 # Release job_semaphore before QA/repair: they use global_semaphore
                 # independently, so holding job_semaphore across them needlessly
                 # throttles sub-agent concurrency below the configured budget.
