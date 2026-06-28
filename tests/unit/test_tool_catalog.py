@@ -68,6 +68,7 @@ def test_orchestrator_selects_root_tools_without_search_function() -> None:
         "execute_bash",
         "browser_supervise",
         "web_search",
+        "deep_research",
         "research_assess",
         "verify_claims",
         "research_report",

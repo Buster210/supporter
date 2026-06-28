@@ -16,6 +16,7 @@ ORCHESTRATOR_TOOL_NAMES = (
     "execute_bash",
     "browser_supervise",
     "web_search",
+    "deep_research",
     "research_assess",
     "verify_claims",
     "research_report",
