@@ -62,6 +62,7 @@ class ChatMessageProcessor:
         from .bubble import MessageBubble
 
         state = _StreamingState()
+        self._app._is_streaming = True
 
         try:
             logger.info(f"UI: starting stream process — text_len={len(text)}")
@@ -70,16 +71,24 @@ class ChatMessageProcessor:
             ):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
+            self._app._is_streaming = False
             # WHY: Reset status even if stream ended via exception or tool-call.
             # is_last only fires on clean text path.
             self._update_status("Thinking")
+            self._app.stop_thinking()
+            if self._app._pending_delegation_widgets:
+                if not state.bubble:
+                    state.bubble = await self._initialize_bubble(
+                        container, MessageBubble
+                    )
+                await self._app._flush_pending_delegation_widgets(state.bubble)
             if state.bubble:
                 duration = time.perf_counter() - start_time
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
-            # WHY: Drop spinner before formatter's LLM call — otherwise "Thinking"
-            # lingers after the response is visible.
-            self._app.stop_thinking()
+                if not state.bubble.has_visible_answer():
+                    state.bubble.remove()
+                    state.bubble = None
             if state.bubble:
                 # WHY: Fire-and-forget — answer already visible. Awaiting would
                 # block the message queue until formatting completes.

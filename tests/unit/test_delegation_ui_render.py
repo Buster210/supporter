@@ -2,11 +2,55 @@
 
 from unittest.mock import MagicMock
 
+from supporter.tui.delegation import DelegationBlock
 from supporter.tui.delegation_listener import (
     DelegationListener,
     format_delegation_summary,
     format_delegation_update,
 )
+
+
+def test_task_terminal_routes_to_render_task_done() -> None:
+    """Task-complete goes to the dedicated callback, not the generic signal."""
+    render_task_done = MagicMock()
+    render_signal = MagicMock()
+    listener = DelegationListener(
+        inject_message=MagicMock(),
+        drop_progress=MagicMock(),
+        render_signal=render_signal,
+        render_task_done=render_task_done,
+    )
+    bus = MagicMock()
+    bus.get_snapshot.return_value = {"t1": {"agent_label": "planner"}}
+    event = MagicMock()
+    event.task_id = "t1"
+
+    listener._on_task_terminal(event, "job9", bus, "DONE")
+
+    render_task_done.assert_called_once_with("job9", "Task t1 (planner) completed")
+    render_signal.assert_not_called()
+
+
+def test_delegation_block_signal_accumulates() -> None:
+    """Multiple task completions accumulate into one ordered signal section."""
+    block = DelegationBlock()
+    block.set_signal("Task a completed")
+    block.set_signal("Task b completed")
+    assert block._signal_text == "Task a completed\nTask b completed"
+
+
+def test_delegation_block_section_order() -> None:
+    """compose yields progress -> signal -> result -> plan, in that order."""
+    import inspect
+
+    src = inspect.getsource(DelegationBlock.compose)
+    order = [
+        src.index("_progress_widget ="),
+        src.index("_signal_widget ="),
+        src.index("_result_widget ="),
+        src.index("_plan_widget ="),
+    ]
+    assert order == sorted(order), order
 
 
 def test_no_raw_json_in_task_signal() -> None:

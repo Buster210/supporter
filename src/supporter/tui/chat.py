@@ -183,6 +183,10 @@ class ChatTurn(Vertical):
         cast("SupporterApp", self.app).active_turn = self
 
     async def mount_bubble(self, bubble: MessageBubble) -> None:
+        # Only the latest bubble in a turn keeps its meta line — suppress the
+        # previous ones so a multi-step task shows metadata just once, at the end.
+        for prev in self.agent_bubbles:
+            prev.hide_meta()
         bubble.collapsed = self.collapsed
         bubble.is_active = cast("SupporterApp", self.app).active_turn is self
         self.agent_bubbles.append(bubble)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -78,9 +79,11 @@ class SupporterApp(App[None]):
         self._mode_manager = ModeManager(self)
         self._message_processor = ChatMessageProcessor(self)
         self._is_processing = False
+        self._is_streaming = False
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
         self._delegation_blocks: dict[str, DelegationBlock] = {}
+        self._pending_delegation_widgets: deque[Any] = deque()
         self._delegation_listener = DelegationListener(
             inject_message=self._inject_delegation_message,
             drop_progress=self._drop_delegation_progress,
@@ -89,6 +92,7 @@ class SupporterApp(App[None]):
             render_summary=self._mount_delegation_summary,
             plan_bubble_injector=self._inject_plan_bubble,
             plan_storer=self._store_pending_plan,
+            render_task_done=self._mount_task_signal,
         )
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
@@ -108,10 +112,6 @@ class SupporterApp(App[None]):
         Lazy imports defer subprocess/network initialization until app is visible.
         Spawns workers for agent setup, job resumption, and browser prewarm.
         """
-        # Tool/pool imports below are intentionally lazy: each pulls in modules
-        # that spawn subprocesses, open OS handles, or touch the network at
-        # import time (e.g. browser prewarm). Keeping them out of module top
-        # defers that work until the app is actually starting up.
         from ..tools.bash.sandbox import register_bash_callbacks
         from ..tools.browser.guardrails import register_browse_callback
         from ..tools.delegate.api import set_delegation_start_callback
@@ -136,8 +136,6 @@ class SupporterApp(App[None]):
         logger.info("Supporter TUI dashboard active")
         self._mode_manager.start_warmup()
         try:
-            # WHY: Own worker group so resume isn't cancelled by the exclusive
-            # _setup_agent worker (default group).
             self.run_worker(
                 resume_interrupted_jobs(), name="resume-jobs", group="resume-jobs"
             )
@@ -207,7 +205,6 @@ class SupporterApp(App[None]):
 
         chat_view = self.query_one("#chat-view", ChatContainer)
 
-        # Hide welcome banner when history is non-empty.
         for banner in self.query(WelcomeBanner):
             banner.message = ""
 
@@ -220,6 +217,11 @@ class SupporterApp(App[None]):
                 text = " ".join(
                     p.text for p in msg.parts if isinstance(p, TextPart) and p.text
                 )
+                if (
+                    "DELEGATION_CAPSULE_RESULT (json)" in text
+                    or "MILESTONE_RESULT (json)" in text
+                ):
+                    continue
                 current_turn = ChatTurn(MessageBubble(role="user", content=text))
                 await chat_view.mount(current_turn)
 
@@ -230,6 +232,10 @@ class SupporterApp(App[None]):
                         bubble.append_token(part.text)
                     elif isinstance(part, ToolCallPart):
                         bubble.add_tool_call(part.name, part.args)
+                # Delegation-only turns persist an empty model message; mounting
+                # it renders a bordered bubble with nothing inside (empty bar).
+                if not bubble.elements:
+                    continue
                 bubble.finalize()
                 if current_turn is not None:
                     await current_turn.mount_bubble(bubble)
@@ -265,8 +271,6 @@ class SupporterApp(App[None]):
     def action_scroll_chat(self, direction: str) -> None:
         """Scroll chat view in given direction. Non-animated for responsiveness."""
         chat_view = self.query_one("#chat-view", ChatContainer)
-        # WHY: animate=False avoids burst of repaints that stall the event loop
-        # on slow terminals; an instant jump is one repaint, not many.
         if direction == "pageup":
             chat_view.scroll_page_up(animate=False)
         elif direction == "pagedown":
@@ -360,11 +364,13 @@ class SupporterApp(App[None]):
         target: Vertical | None = None,
         exclude_from_history: bool = False,
         role: str = "user",
+        mount_text: str | None = None,
     ) -> None:
         self._is_processing = True
         chat_view = self.query_one("#chat-view", ChatContainer)
         if mount_user:
-            await self._mount_user_turn(text, role=role)
+            shown = mount_text if mount_text is not None else text
+            await self._mount_user_turn(shown, role=role)
             self.query_one("#user-input").focus()
 
         target_container = target or (
@@ -381,16 +387,8 @@ class SupporterApp(App[None]):
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
 
-            # G2: the model triages each turn — it answers directly or delegates
-            # to the planner. Run one pass, then engage the verify/replan loop
-            # only if a plan was actually produced (model chose the task route).
             from ..config import config
             from ..replan import ReplanContext
-
-            # ponytail: first pass uses the caller's exclude_from_history; a task
-            # turn that verifies first try therefore persists, unlike the old
-            # always-excluded replan path. Acceptable — the answer belongs in
-            # history. Replan re-runs below stay excluded.
             cycle_result = await self._process_streaming_execution(
                 text,
                 target_container,
@@ -406,10 +404,9 @@ class SupporterApp(App[None]):
                 replan_ctx = ReplanContext(
                     self.agent.pending_plan_objective, config.replan_max_cycles
                 )
-                replan_ctx.next_cycle()  # attempt 1 = the pass just executed
+                replan_ctx.next_cycle()
 
                 while True:
-                    # Phase 3: VERIFY
                     self.status_label = f"Verifying (attempt {replan_ctx.cycle})..."
                     objective = self.agent.pending_plan_objective
                     plan = self.agent.pending_plan_text
@@ -428,14 +425,12 @@ class SupporterApp(App[None]):
                     if verified:
                         self.status_label = "✓ Verification complete"
                         break
-                    # Not verified; capture reason and replan if budget remains.
                     last_failure_reason = (
                         replan_ctx.failures[-1] if replan_ctx.failures else "Unknown"
                     )
                     if not replan_ctx.next_cycle():
                         break
 
-                    # Phase 2: REPLAN + IMPLEMENT — feed failure context back.
                     self.status_label = (
                         f"Task: executing (attempt {replan_ctx.cycle})..."
                     )
@@ -460,7 +455,6 @@ class SupporterApp(App[None]):
                 )
                 chat_view.jump_to_bottom()
 
-            # Clear so a stale plan from a failed turn never leaks.
             if self.agent:
                 self.agent.pending_plan_objective = ""
                 self.agent.pending_plan_text = ""
@@ -481,9 +475,6 @@ class SupporterApp(App[None]):
             await self._flush_queued_messages()
 
     async def _flush_queued_messages(self) -> None:
-        # Only mark busy once we know there is work; setting it before the
-        # empty-queue check wedged the app permanently after the first turn
-        # (flag stuck True with nothing draining).
         if not self._user_message_queue:
             return
 
@@ -493,10 +484,14 @@ class SupporterApp(App[None]):
         self.query_one("#queue-display", QueuedMessagesDisplay).update_queue([])
 
         combined_text = "\n\n".join(msg for msg, _ in items)
-        has_user_message = any(not is_sys for _, is_sys in items)
+        user_text = "\n\n".join(msg for msg, is_sys in items if not is_sys)
 
-        if has_user_message:
-            self.run_worker(self._process_message_cycle(combined_text, mount_user=True))
+        if user_text:
+            self.run_worker(
+                self._process_message_cycle(
+                    combined_text, mount_user=True, mount_text=user_text
+                )
+            )
         else:
             self.run_worker(self._process_system_message(combined_text))
 
@@ -521,12 +516,10 @@ class SupporterApp(App[None]):
         chat_view: ChatContainer,
         replan_ctx: Any,
     ) -> bool:
-        """Verify result and replan on failure (G2 helper for interactive cycle).
+        """Verify result against plan; record failure for the next replan cycle.
 
-        Returns True if verified, False if failed and out of replan budget.
-        ponytail: Replan in interactive TUI reuses same verify_plan predicate
-        as worker; replan message just shows failure + status; actual replanning
-        (re-prompt) happens on next cycle via the message loop.
+        Returns True if verified. Actual re-prompting happens on the next
+        cycle via the message loop — this method only records the failure reason.
         """
         try:
             from ..prompts import DELEGATE_AGENT_ROSTER
@@ -539,13 +532,11 @@ class SupporterApp(App[None]):
             if is_done:
                 return True
 
-            # Verification failed
             logger.info(
                 f"TUI: planner says NOT done (cycle {replan_ctx.cycle}): {reason}"
             )
             replan_ctx.record_failure(reason)
 
-            # Show failure warning
             await target.mount(
                 MessageBubble(
                     role="system",
@@ -556,7 +547,7 @@ class SupporterApp(App[None]):
             return False
         except Exception as exc:
             logger.warning(f"_verify_and_possibly_replan failed: {exc}")
-            return True  # Fail-open: treat verify errors as pass
+            return True
 
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
@@ -627,9 +618,6 @@ class SupporterApp(App[None]):
         self._safe_call(self._toast_manager.notify, self, message, type="error")
 
     def _queue_display_labels(self) -> list[str]:
-        # Only user-typed messages belong in the queue badges. System messages
-        # (e.g. the delegation capsule JSON) ride the same queue to serialize
-        # behind a busy agent, but are not user input -- never show them.
         return [text for text, is_sys in self._user_message_queue if not is_sys]
 
     def _inject_system_message(self, text: str) -> None:
@@ -652,24 +640,17 @@ class SupporterApp(App[None]):
 
     async def _mount_live_progress(self, job_id: str, progress_md: str) -> None:
         """Update or create collapsible delegation block with live progress."""
-        # ponytail: reuse existing delegation block if it exists for this job,
-        # otherwise create a new one. The block updates in-place rather than
-        # creating new widgets on every progress event.
         block = self._delegation_blocks.get(job_id)
         if block is not None:
-            # Update existing block in-place.
             block.set_progress(progress_md)
             return
 
-        # Create new delegation block for this job.
         block = DelegationBlock(title=f"Delegation [{job_id}]")
         block.set_progress(progress_md)
         self._delegation_blocks[job_id] = block
         await self._mount_delegation_widget(block)
 
     def _delegation_mount_target(self) -> Vertical:
-        # Fallback target when there is no agent bubble to host delegation UI:
-        # the active turn, or the last turn, never the chat root.
         chat_view = self.query_one("#chat-view", ChatContainer)
         if self.active_turn is not None:
             return self.active_turn
@@ -677,55 +658,49 @@ class SupporterApp(App[None]):
         return turns[-1] if turns else chat_view
 
     def _delegation_host_bubble(self) -> MessageBubble | None:
-        # The delegation block belongs INSIDE the model's answer bubble (the
-        # turn's last agent bubble), before its meta line -- not as a sibling
-        # mounted after that bubble's metadata.
         turn = self.active_turn
         if turn is None:
             turns = list(self.query_one("#chat-view", ChatContainer).query(ChatTurn))
             turn = turns[-1] if turns else None
         bubbles = getattr(turn, "agent_bubbles", None)
         if bubbles:
-            return bubbles[-1]  # type: ignore[no-any-return]
+            return bubbles[-1]
         return None
 
     async def _mount_delegation_widget(self, widget: Any) -> None:
-        """Mount a delegation widget inside the triggering bubble, before its
-        meta line. Fall back to the turn when no host bubble exists yet."""
-        host = self._delegation_host_bubble()
-        if host is not None and host.append_before_meta(widget):
-            self.query_one("#chat-view", ChatContainer).follow_end()
+        """Mount widget into the current bubble. Queue only during active
+        streaming so text appears first; mount directly otherwise."""
+        if self._is_streaming:
+            self._pending_delegation_widgets.append(widget)
             return
-        target = self._delegation_mount_target()
-        if isinstance(widget, MessageBubble) and hasattr(target, "mount_bubble"):
-            await target.mount_bubble(widget)
+        bubble = self._delegation_host_bubble()
+        if bubble is not None:
+            bubble.append_before_meta(widget)
+            turn = self.active_turn or self._delegation_mount_target()
+            start = getattr(turn, "turn_start_time", None)
+            if start is not None:
+                bubble.refresh_meta(time.perf_counter() - start)
         else:
+            target = self._delegation_mount_target()
             await target.mount(widget)
+        self.query_one("#chat-view", ChatContainer).follow_end()
+
+    async def _flush_pending_delegation_widgets(self, bubble: Any) -> None:
+        while self._pending_delegation_widgets:
+            widget = self._pending_delegation_widgets.popleft()
+            bubble.append_before_meta(widget)
         self.query_one("#chat-view", ChatContainer).follow_end()
 
     async def _render_delegation_signal(self, text: str) -> None:
         body = text.replace("<br/>", "").replace("`", "").strip()
-        # ponytail: removed buffer check — signals mount directly.
         await self._mount_delegation_widget(Static(body, classes="delegation-signal"))
 
     async def _process_system_message(self, text: str) -> None:
-        suppress_bubble = (
-            "DELEGATION_CAPSULE_RESULT (json)" in text
-            or "MILESTONE_RESULT (json)" in text
-        )
-        # ponytail: removed _defer_agent_meta_once and flush coordination;
-        # delegation updates stream directly to UI as sibling widgets.
-        if self.active_turn:
-            await self._process_message_cycle(text, mount_user=False)
-        elif suppress_bubble:
-            await self._process_message_cycle(text, mount_user=False, role="agent")
-        else:
-            await self._process_message_cycle(text, mount_user=True, role="agent")
+        await self._process_message_cycle(text, mount_user=False, role="agent")
 
     def _start_delegation_listener(self, job_id: str, plan_table: str = "") -> None:
-        # Store job_id on active turn for delegation block lookup
         if self.active_turn:
-            self.active_turn._delegation_job_id = job_id  # type: ignore[attr-defined]
+            self.active_turn._delegation_job_id = job_id
         self.run_worker(self._delegation_listener.listen(job_id), exclusive=False)
 
     def _inject_delegation_message(self, message: str) -> None:
@@ -736,9 +711,6 @@ class SupporterApp(App[None]):
         self._safe_call(lambda: self.run_worker(self._mount_plan_bubble(markdown)))
 
     async def _mount_plan_bubble(self, markdown: str) -> None:
-        # G4: Plan appears IMMEDIATELY when planner finishes. If no delegation
-        # block exists yet, create one. Otherwise update the existing block.
-        # Use a generic job ID for the active turn's delegation
         job_id = getattr(self.active_turn, "_delegation_job_id", "current")
         block = self._delegation_blocks.get(job_id)
         if block is None:
@@ -753,8 +725,23 @@ class SupporterApp(App[None]):
             self.agent.pending_plan_objective = objective
             self.agent.pending_plan_text = plan_text
 
+    def _mount_task_signal(self, job_id: str, text: str) -> None:
+        """Add a task-complete signal into the job's delegation block."""
+        self._safe_call(
+            lambda: self.run_worker(self._do_mount_task_signal(job_id, text))
+        )
+
+    async def _do_mount_task_signal(self, job_id: str, text: str) -> None:
+        body = text.replace("<br/>", "").replace("`", "").strip()
+        block = self._delegation_blocks.get(job_id)
+        if block is None:
+            block = DelegationBlock(title=f"Delegation [{job_id}]")
+            self._delegation_blocks[job_id] = block
+            await self._mount_delegation_widget(block)
+        block.set_signal(body)
+
     def _mount_delegation_summary(self, job_id: str, summary: str) -> None:
-        """AC4: Add completion summary to delegation block and collapse it."""
+        """Add completion summary to delegation block and collapse it."""
         self._safe_call(
             lambda: self.run_worker(self._do_mount_summary(job_id, summary))
         )
@@ -765,15 +752,11 @@ class SupporterApp(App[None]):
             block.set_result(summary)
             block.collapse_when_done()
         else:
-            # Fallback: mount as a static widget if no block exists
             await self._mount_delegation_widget(
                 Static(summary, classes="delegation-summary")
             )
 
     def _drop_delegation_progress(self, job_id: str) -> None:
-        # ponytail: delegation blocks are cleaned up here on terminal state.
-        # Block remains visible but collapsed until user scrolls past it.
-        # Keep the block for history, but mark it as complete
         block = self._delegation_blocks.get(job_id)
         if block:
             block.collapse_when_done()

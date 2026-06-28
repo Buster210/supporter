@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
+from supporter.llm.types import Message, TextPart
+from supporter.tui import SupporterApp
 from supporter.tui.bubble import MessageBubble
+from supporter.tui.chat import ChatContainer
 
 
 class _BubbleHarness(App[None]):
@@ -47,3 +53,25 @@ async def test_defer_meta_keeps_meta_hidden_until_revealed() -> None:
         assert bubble.defer_meta is False
         assert bubble._meta_label is not None
         assert bubble._meta_label.display is True  # now shown, after content
+
+
+@pytest.mark.asyncio
+async def test_replay_skips_empty_delegation_only_model_message() -> None:
+    """A delegation-only turn persists an empty model message; replaying it
+    must not mount an empty (zero-element) agent bubble."""
+    app = SupporterApp()
+    store = MagicMock()
+    store.load.return_value = [
+        Message(role="user", parts=[TextPart(text="do the thing")]),
+        Message(role="model", parts=[]),  # delegation-only: no text/tool parts
+    ]
+    app.agent = MagicMock()
+    app.agent._store = store
+
+    async with app.run_test(size=(80, 24)):
+        await app._replay_history()
+        chat_view = app.query_one("#chat-view", ChatContainer)
+        agent_bubbles = [
+            b for b in chat_view.query(MessageBubble) if b.role == "agent"
+        ]
+        assert agent_bubbles == []

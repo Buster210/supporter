@@ -168,3 +168,7 @@ def shutdown_decision_logger() -> None:
     if _decisions_logger is not None:
         for h in _decisions_logger.handlers[:]:
             _decisions_logger.removeHandler(h)
+        # Clear the handle too: _get_decisions_logger() short-circuits when this
+        # is non-None, so leaving it set would skip rebuilding the (now removed)
+        # queue listener and handler — decision logging would stay dead.
+        _decisions_logger = None

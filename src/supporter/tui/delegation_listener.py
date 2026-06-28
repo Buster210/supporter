@@ -1,10 +1,4 @@
-"""Delegation event listener with dispatch-map event loop.
-
-ponytail: Removed the buffering system (flush-when-both-ready between
-delegation completion and answer-bubble streaming). Delegation updates
-now stream directly to the UI.  Consolidated format_task_signal +
-format_delegation_progress into format_delegation_update.
-"""
+"""Delegation event listener with dispatch-map event loop."""
 
 from __future__ import annotations
 
@@ -15,7 +9,6 @@ from typing import Any, Protocol
 from ..logger import logger
 from ..tools.delegate.formatting import format_delegation_table
 
-# Maximum tail length for streaming output (last ~500 chars or last 3 lines)
 _OUTPUT_TAIL_MAX_CHARS = 500
 _OUTPUT_TAIL_MAX_LINES = 3
 
@@ -70,8 +63,6 @@ def format_delegation_update(
     snapshot.  Otherwise emit the full progress table (the old
     ``format_delegation_progress`` path).
 
-    ponytail: merged two similar functions that both read bus snapshots
-    and emit markdown; single entry point for all delegation display.
     """
     snapshot = bus.get_snapshot()
 
@@ -100,7 +91,7 @@ def format_delegation_update(
 
 
 def _display_task_status(status: str) -> str:
-    """Convert task status codes to natural-language labels (AC3)."""
+    """Convert task status codes to natural-language labels."""
     normalized = status.lower()
     status_map = {
         "running": "working",
@@ -115,7 +106,7 @@ def _display_task_status(status: str) -> str:
 
 
 def format_delegation_summary(job_id: str, bus: Any) -> str:
-    """AC4: Compact one-line completion summary (what was done + result)."""
+    """Compact one-line completion summary: tasks completed vs total."""
     snapshot = bus.get_snapshot()
     if not snapshot:
         return f"Job {job_id} completed"
@@ -132,6 +123,39 @@ def format_delegation_summary(job_id: str, bus: Any) -> str:
     return f"Job {job_id}: {completed}/{total} tasks {result}"
 
 
+def _format_capsule_summary(payload: dict[str, Any]) -> str:
+    """Convert capsule result payload to a concise human-readable summary for LLM."""
+    agent = payload.get("agent", "unknown")
+    milestone = payload.get("milestone", "")
+    status = payload.get("status", "unknown")
+    totals = payload.get("totals", {})
+    tokens = totals.get("tokens", 0)
+    completed = totals.get("completed", 0)
+    failed = totals.get("failed", 0)
+    findings = payload.get("key_findings", [])
+    next_steps = payload.get("recommended_next_steps", [])
+    tasks = payload.get("tasks", [])
+
+    lines = [
+        f"Delegation result — agent: {agent}, status: {status}",
+        f"Objective: {milestone}",
+        f"Tasks: {completed} completed, {failed} failed — {tokens} tokens",
+    ]
+    if tasks:
+        lines.append("Task results:")
+        for t in tasks:
+            summary = t.get("summary", "")
+            status_label = t.get("status", "?")
+            lines.append(f"• [{status_label}] {t.get('id', '?')}: {summary}")
+    if findings:
+        lines.append("Key findings:")
+        lines.extend(f"• {f}" for f in findings)
+    if next_steps:
+        lines.append("Next steps:")
+        lines.extend(f"• {s}" for s in next_steps)
+    return "\n".join(lines)
+
+
 class DelegationListener:
     """Listens for delegation events and renders task progress + signals to the UI."""
 
@@ -144,18 +168,18 @@ class DelegationListener:
         render_summary: Callable[[str, str], None] | None = None,
         plan_bubble_injector: PlanBubbleInjector | None = None,
         plan_storer: Callable[[str, str], None] | None = None,
+        render_task_done: Callable[[str, str], None] | None = None,
     ) -> None:
         self._inject_message = inject_message
         self._drop_progress = drop_progress
         self._render_signal = render_signal
+        self._render_task_done = render_task_done
         self._render_progress_live = render_progress_live
         self._render_summary = render_summary
         self._plan_bubble_injector = plan_bubble_injector
         self._plan_storer = plan_storer
-        # Per-task rolling output tails (bounded)
         self._output_tails: dict[str, str] = {}
 
-    # ── event handlers (one per event type) ──────────────────────────────
 
     def _on_task_output_chunk(self, event: Any, job_id: str, bus: Any) -> None:
         """Append to bounded tail and re-render on newline boundaries."""
@@ -184,9 +208,15 @@ class DelegationListener:
     def _on_task_terminal(self, event: Any, job_id: str, bus: Any, kind: str) -> None:
         """Handle TaskCompleted/Failed/TimedOut/Skipped."""
         self._clear_task_tail(bus, event.task_id)
-        self._render_signal(
-            format_delegation_update(job_id, bus, task_id=event.task_id, status=kind)
+        text = format_delegation_update(
+            job_id, bus, task_id=event.task_id, status=kind
         )
+        # Route the task-complete signal into the delegation block (ordered
+        # section) when wired; fall back to a standalone signal otherwise.
+        if self._render_task_done is not None:
+            self._render_task_done(job_id, text)
+        else:
+            self._render_signal(text)
 
     def _serialize_milestone_result(
         self,
@@ -228,7 +258,6 @@ class DelegationListener:
     def _on_milestone_terminal(self, event: Any, job_id: str, bus: Any) -> bool:
         """Handle MilestoneCompleted/Cancelled. Returns True to break loop."""
         self._output_tails.clear()
-        # MilestoneCancelled has no .results; MilestoneCompleted does.
         status = "cancelled" if not hasattr(event, "results") else "completed"
         payload = self._serialize_milestone_result(event, job_id, status=status)
         self._inject_capsule_result(payload)
@@ -241,7 +270,6 @@ class DelegationListener:
         self._drop_progress(job_id)
         return True
 
-    # ── main event loop ──────────────────────────────────────────────────
 
     async def listen(self, job_id: str) -> None:
         """Listen for delegation events on job_id and render to UI in real time.
@@ -251,6 +279,7 @@ class DelegationListener:
         """
         from ..tools.delegate.bus import get_bus
         from ..types import (
+            HeartbeatTick,
             MilestoneCancelled,
             MilestoneCompleted,
             TaskAnomaly,
@@ -258,11 +287,11 @@ class DelegationListener:
             TaskFailed,
             TaskOutputChunk,
             TaskSkipped,
+            TaskStarted,
             TaskTimedOut,
             TaskUpdateSent,
         )
 
-        # ponytail: dispatch map replaces 10+ isinstance branches.
         terminal_tasks = (
             TaskCompleted,
             TaskFailed,
@@ -290,10 +319,12 @@ class DelegationListener:
 
                     if etype is TaskOutputChunk:
                         self._on_task_output_chunk(event, job_id, bus)
-                        if "\n" in event.chunk:  # type: ignore[attr-defined]
+                        if "\n" in event.chunk:
                             await self._upsert_progress_live(job_id, bus)
                     elif etype in terminal_tasks:
                         self._on_task_terminal(event, job_id, bus, task_kinds[etype])
+                        await self._upsert_progress_live(job_id, bus)
+                    elif etype is TaskStarted or etype is HeartbeatTick:
                         await self._upsert_progress_live(job_id, bus)
                     elif etype is TaskAnomaly:
                         self._on_task_anomaly(event)
@@ -307,7 +338,6 @@ class DelegationListener:
         except Exception as e:
             logger.error(f"Delegation listener failed for {job_id}: {e}")
 
-    # ── helpers ──────────────────────────────────────────────────────────
 
     def _clear_task_tail(self, bus: Any, task_id: str) -> None:
         """Drop a task's rolling tail on terminal status."""
@@ -325,7 +355,7 @@ class DelegationListener:
             self._render_progress_live(job_id, format_delegation_update(job_id, bus))
 
     def _inject_capsule_result(self, payload: dict[str, Any]) -> None:
-        """Inject capsule JSON as system message; mount plan bubble."""
+        """Mount plan bubble for planner agent; log capsule result."""
         agent = payload.get("agent", "")
         if agent == "planner":
             if self._plan_bubble_injector is not None:
@@ -343,11 +373,7 @@ class DelegationListener:
                 objective = payload.get("milestone", "")
                 plan_text = json.dumps(payload, indent=2)
                 self._plan_storer(objective, plan_text)
-        msg = (
-            "DELEGATION_CAPSULE_RESULT (json):\n```json\n"
-            f"{json.dumps(payload, indent=2)}\n```"
-        )
-        self._inject_message(msg)
+        self._inject_message(_format_capsule_summary(payload))
 
 
 __all__ = [
