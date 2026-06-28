@@ -83,7 +83,7 @@ class SupporterApp(App[None]):
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
         self._delegation_blocks: dict[str, DelegationBlock] = {}
-        self._pending_delegation_widgets: deque[Any] = deque()
+        self._pending_delegation_widgets: deque[tuple[Any, bool]] = deque()
         self._delegation_listener = DelegationListener(
             inject_message=self._inject_delegation_message,
             drop_progress=self._drop_delegation_progress,
@@ -667,33 +667,47 @@ class SupporterApp(App[None]):
             return bubbles[-1]
         return None
 
-    async def _mount_delegation_widget(self, widget: Any) -> None:
+    async def _mount_delegation_widget(
+        self, widget: Any, after_meta: bool = False
+    ) -> None:
         """Mount widget into the current bubble. Queue only during active
         streaming so text appears first; mount directly otherwise."""
         if self._is_streaming:
-            self._pending_delegation_widgets.append(widget)
+            self._pending_delegation_widgets.append((widget, after_meta))
             return
         bubble = self._delegation_host_bubble()
         if bubble is not None:
-            bubble.append_before_meta(widget)
             turn = self.active_turn or self._delegation_mount_target()
             start = getattr(turn, "turn_start_time", None)
             if start is not None:
-                bubble.refresh_meta(time.perf_counter() - start)
+                bubble._turn_start = start
+            if after_meta:
+                bubble.append_after_meta(widget)
+            else:
+                bubble.append_before_meta(widget)
         else:
             target = self._delegation_mount_target()
             await target.mount(widget)
         self.query_one("#chat-view", ChatContainer).follow_end()
 
     async def _flush_pending_delegation_widgets(self, bubble: Any) -> None:
+        turn = self.active_turn or self._delegation_mount_target()
+        start = getattr(turn, "turn_start_time", None)
+        if start is not None:
+            bubble._turn_start = start
         while self._pending_delegation_widgets:
-            widget = self._pending_delegation_widgets.popleft()
-            bubble.append_before_meta(widget)
+            widget, after_meta = self._pending_delegation_widgets.popleft()
+            if after_meta:
+                bubble.append_after_meta(widget)
+            else:
+                bubble.append_before_meta(widget)
         self.query_one("#chat-view", ChatContainer).follow_end()
 
     async def _render_delegation_signal(self, text: str) -> None:
         body = text.replace("<br/>", "").replace("`", "").strip()
-        await self._mount_delegation_widget(Static(body, classes="delegation-signal"))
+        await self._mount_delegation_widget(
+            Static(body, classes="delegation-signal"), after_meta=True
+        )
 
     async def _process_system_message(self, text: str) -> None:
         await self._process_message_cycle(text, mount_user=False, role="agent")
@@ -701,6 +715,12 @@ class SupporterApp(App[None]):
     def _start_delegation_listener(self, job_id: str, plan_table: str = "") -> None:
         if self.active_turn:
             self.active_turn._delegation_job_id = job_id
+        bubble = self._delegation_host_bubble()
+        if bubble is not None:
+            turn = self.active_turn or self._delegation_mount_target()
+            start = getattr(turn, "turn_start_time", None)
+            if start is not None:
+                bubble._turn_start = start
         self.run_worker(self._delegation_listener.listen(job_id), exclusive=False)
 
     def _inject_delegation_message(self, message: str) -> None:
@@ -734,11 +754,12 @@ class SupporterApp(App[None]):
     async def _do_mount_task_signal(self, job_id: str, text: str) -> None:
         body = text.replace("<br/>", "").replace("`", "").strip()
         block = self._delegation_blocks.get(job_id)
-        if block is None:
-            block = DelegationBlock(title=f"Delegation [{job_id}]")
-            self._delegation_blocks[job_id] = block
-            await self._mount_delegation_widget(block)
-        block.set_signal(body)
+        if block is not None:
+            block.set_signal(body)
+        else:
+            await self._mount_delegation_widget(
+                Static(body, classes="delegation-signal"), after_meta=True
+            )
 
     def _mount_delegation_summary(self, job_id: str, summary: str) -> None:
         """Add completion summary to delegation block and collapse it."""
@@ -753,8 +774,11 @@ class SupporterApp(App[None]):
             block.collapse_when_done()
         else:
             await self._mount_delegation_widget(
-                Static(summary, classes="delegation-summary")
+                Static(summary, classes="delegation-summary"), after_meta=True
             )
+        bubble = self._delegation_host_bubble()
+        if bubble is not None:
+            bubble.reveal_meta()
 
     def _drop_delegation_progress(self, job_id: str) -> None:
         block = self._delegation_blocks.get(job_id)

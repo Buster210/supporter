@@ -209,10 +209,12 @@ class ThinkingIndicator(Static):
     active_queries = reactive(0)
     is_activating_mode = reactive(False)
 
-    _timer: Timer | None
+    _spinner_timer: Timer | None
+    _dots_timer: Timer | None
 
     def on_mount(self) -> None:
-        self._timer = None
+        self._spinner_timer = None
+        self._dots_timer = None
         for prop in [
             "status_label",
             "active_queries",
@@ -230,26 +232,40 @@ class ThinkingIndicator(Static):
 
     def _update_timer_state(self) -> None:
         should_run = self.active_queries > 0 or self.is_activating_mode
-        if should_run and self._timer is None:
-            self._timer = self.set_interval(1 / 20, self._tick)
+        if should_run:
+            if self._spinner_timer is None:
+                self._spinner_timer = self.set_interval(1 / 40, self._spinner_tick)
+            if self._dots_timer is None:
+                self._dots_timer = self.set_interval(1 / 10, self._dots_tick)
             self._update_display(None)
-        elif not should_run and self._timer is not None:
-            self._timer.stop()
-            self._timer = None
+        else:
+            if self._spinner_timer is not None:
+                self._spinner_timer.stop()
+                self._spinner_timer = None
+            if self._dots_timer is not None:
+                self._dots_timer.stop()
+                self._dots_timer = None
             self._update_display(None)
 
-    def _tick(self) -> None:
-        self._update_display(None)
+    def _spinner_tick(self) -> None:
+        self._update_display("spinner")
 
-    def _update_display(self, _: Any) -> None:
+    def _dots_tick(self) -> None:
+        self._update_display("dots")
+
+    def _update_display(self, advance: str | None) -> None:
         if self.active_queries == 0 and not self.is_activating_mode:
             self.update("")
             self.display = False
             return
-        idx = getattr(self, "_spinner_idx", 0)
-        self._spinner_idx = idx + 1
-        frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
-        dots = "." * (idx % 4)
+        if advance == "spinner":
+            self._spinner_idx = getattr(self, "_spinner_idx", 0) + 1
+        elif advance == "dots":
+            self._dots_idx = getattr(self, "_dots_idx", 0) + 1
+        spinner_idx = getattr(self, "_spinner_idx", 0)
+        dots_idx = getattr(self, "_dots_idx", 0)
+        frame = SPINNER_FRAMES[spinner_idx % len(SPINNER_FRAMES)]
+        dots = "." * (dots_idx % 4)
         status = (
             f"Activating Mode{dots}"
             if self.is_activating_mode
