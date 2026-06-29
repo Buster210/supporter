@@ -76,6 +76,15 @@ class ModeManager:
             use_code_execution=True,
             system_instruction=config.default_system_instruction,
         )
+        # Wire summarization notification for TUI
+        def _on_summarize(turns: int, kept: int, cache_size: int) -> None:
+            self._app._toast_manager.notify(
+                self._app,
+                f"Summarized {turns} turns → {cache_size} cached",
+                type="system",
+            )
+
+        self._app.agent.on_summarize = _on_summarize
         self._app._message_processor.wire_recovery_observer(self._app.agent)
 
     async def toggle_mode(self, live: bool | None = None) -> None:

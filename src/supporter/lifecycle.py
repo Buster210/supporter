@@ -26,10 +26,11 @@ def reset_runtime_state() -> None:
     * ``recovery_metrics._counters`` — self-healing recovery counters
     * ``decision_log._RING`` — in-memory decision ring (deque)
     * ``pool._model_cooldowns`` — model-cooldown table (OrderedDict)
-
+    * ``history_summarizer._SUMMARIZER_CACHE`` — summarizer transcript cache
     Imports are deferred to function scope to avoid circular-import issues.
     """
     from .decision_log import reset_decision_log
+    from .history_summarizer import clear_summarizer_cache
     from .keypool import reset_key_pool
     from .memory import reset_memory
     from .pool import reset_model_cooldowns
@@ -42,3 +43,4 @@ def reset_runtime_state() -> None:
     reset_recovery_counters()
     reset_decision_log()
     reset_model_cooldowns()
+    clear_summarizer_cache()

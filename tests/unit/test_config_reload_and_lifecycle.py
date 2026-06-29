@@ -25,6 +25,7 @@ from supporter.lifecycle import reset_runtime_state
 def _prime_all_singletons() -> None:
     """Touch each singleton so it is non-None / non-empty before reset."""
     from supporter.decision_log import log_decision
+    from supporter.history_summarizer import _SUMMARIZER_CACHE
     from supporter.keypool import get_key_pool
     from supporter.memory import _get_memory
     from supporter.pool import _mark_model_cooldown
@@ -48,6 +49,8 @@ def _prime_all_singletons() -> None:
 
     # model cooldowns — add one entry
     _mark_model_cooldown("test-model", minutes=60)
+    # summarizer cache
+    _SUMMARIZER_CACHE["test_key"] = "test_summary"
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +206,7 @@ class TestResetRuntimeState:
         import supporter.memory as _mem
         import supporter.recipes as _rcp
         from supporter.decision_log import _RING, log_decision
+        from supporter.history_summarizer import _SUMMARIZER_CACHE
         from supporter.pool import _mark_model_cooldown, _model_cooldowns
         from supporter.recovery_metrics import record_key_rotation, recovery_snapshot
 
@@ -213,6 +217,7 @@ class TestResetRuntimeState:
         record_key_rotation()
         log_decision("bulk_site", "bulk_choice")
         _mark_model_cooldown("bulk-model", minutes=5)
+        _SUMMARIZER_CACHE["bulk_key"] = "bulk_summary"
 
         reset_runtime_state()
 
@@ -222,3 +227,14 @@ class TestResetRuntimeState:
         assert recovery_snapshot()["key_rotations"] == 0
         assert len(_RING) == 0
         assert len(_model_cooldowns) == 0
+        assert len(_SUMMARIZER_CACHE) == 0
+
+
+    def test_summarizer_cache_cleared(self) -> None:
+        """After reset, summarizer transcript cache is empty."""
+        from supporter.history_summarizer import _SUMMARIZER_CACHE
+
+        _SUMMARIZER_CACHE["abc"] = "summary"
+        assert len(_SUMMARIZER_CACHE) > 0
+        reset_runtime_state()
+        assert len(_SUMMARIZER_CACHE) == 0
