@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -427,6 +428,44 @@ async def _resolve_profile_name() -> str:
         raise RuntimeError("Browser profile selection cancelled.")
     _SELECTED_PROFILE = chosen
     return _SELECTED_PROFILE
+
+
+def is_profile_configured() -> bool:
+    """True when a browser profile is pinned via env vars."""
+    return bool(config.browser_profile_path or config.browser_profile_name)
+
+
+def list_chrome_profiles() -> list[Any]:
+    """List Chrome profiles from the default user-data directory."""
+    if is_profile_configured():
+        return []
+    return profiles_mod.list_profiles(_profile_dir())
+
+
+async def select_profile_at_startup(
+    select_cb: Callable[[list[Any]], Awaitable[str | None]],
+) -> str | None:
+    """At startup: if no env var pins a profile and Chrome has multiple
+    profiles, prompt the user to pick one. Single profile is auto-selected.
+    Returns the chosen profile dir_name, or None if already configured.
+    """
+    global _SELECTED_PROFILE
+    if is_profile_configured():
+        return None
+    if _SELECTED_PROFILE is not None:
+        return None
+    profiles = list_chrome_profiles()
+    if not profiles:
+        return None
+    if len(profiles) == 1:
+        _SELECTED_PROFILE = profiles[0].dir_name
+        return _SELECTED_PROFILE
+    chosen = await select_cb(profiles)
+    if chosen:
+        _SELECTED_PROFILE = chosen
+        return chosen
+    return None
+
 
 
 def _clone_ignore(_dir: str, names: list[str]) -> set[str]:

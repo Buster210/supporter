@@ -80,7 +80,7 @@ class ProfileSelectModal(ModalScreen[str | None]):
         from textual.widgets import OptionList
 
         with Vertical(id="modal-container"):
-            yield Label("Select Chrome profile", id="modal-header")
+            yield Label("Browser profile missing(BROWSER_PROFILE_NAME/BROWSER_PROFILE_PATH), select profile:", id="modal-header")
             yield OptionList(id="profile-list")
             with Horizontal(id="modal-buttons"):
                 yield Button("Cancel", id="cancel")
@@ -111,8 +111,7 @@ class ProfileSelectModal(ModalScreen[str | None]):
         ]
 
         max_label_len = max((len(label) for label in labels), default=40)
-        header_len = len("Select Chrome profile")
-        max_len = max(max_label_len, header_len)
+        max_len = max_label_len
 
         width = min(
             int((max_len + MODAL_PADDING) * MODAL_WIDTH_SCALE),

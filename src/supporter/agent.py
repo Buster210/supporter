@@ -8,7 +8,7 @@ from typing import Any
 
 from .config import config
 from .decision_log import log_decision
-from .history_summarizer import summarize_turns
+from .history_summarizer import summarize_turns, summarizer_cache_info
 from .llm.types import GenOptions, Message, TextPart
 from .logger import logger
 from .providers.gemini_codec import content_to_message
@@ -71,6 +71,7 @@ class ChatAgent:
         # arrives; cleared after verification in the TUI message cycle.
         self.pending_plan_objective: str = ""
         self.pending_plan_text: str = ""
+        self.on_summarize: Callable[[int, int, int], None] | None = None  # (turns_summarized, kept_recent, cache_size)
         # WHY: Cache summary state so compaction survives AFC clobber.
         # _summary covers turns [0, _summary_turn_count) of self.history;
         # _summary_fingerprint is a structural fingerprint of that same prefix,
@@ -260,10 +261,15 @@ class ChatAgent:
                 self._summary = summary
                 self._summary_turn_count = len(self.history) - keep_recent
                 self._summary_fingerprint = self._fingerprint(self._summary_turn_count)
+                cache = summarizer_cache_info()
                 logger.info(
                     f"Summarized {len(turns_to_summarize)} history turns "
-                    f"(kept {keep_recent} recent)"
+                    f"(kept {keep_recent} recent, cache={cache['size']}/{cache['max']})"
                 )
+                if self.on_summarize is not None:
+                    self.on_summarize(
+                        len(turns_to_summarize), keep_recent, cache["size"]
+                    )
                 return True
         except RuntimeError as e:
             logger.error(
@@ -278,6 +284,9 @@ class ChatAgent:
         cap = config.history_max_turns
         if cap and len(self.history) > cap:
             del self.history[: len(self.history) - cap]
+    def summarizer_cache_info(self) -> dict[str, int]:
+        """Return summarizer cache occupancy for TUI observability."""
+        return summarizer_cache_info()
 
     async def execute(self, prompt: str) -> LLMResult:
         """Execute a single turn with the LLM, return result. History auto-synced.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import time
 from typing import Any, cast
 
 from rich.markup import escape
@@ -103,6 +104,8 @@ class MessageBubble(Vertical):
         # When True, the meta line stays hidden permanently — used so only the
         # latest bubble in a multi-step turn shows metadata.
         self._meta_suppressed = False
+        self._turn_start: float | None = None
+        self._notification_widgets: list[Any] = []
 
         if self.content:
             self.elements.append(
@@ -193,6 +196,8 @@ class MessageBubble(Vertical):
                 and (self.model or self.duration is not None)
             )
             if visible:
+                if self._turn_start is not None:
+                    self.duration = time.perf_counter() - self._turn_start
                 self._meta_label.update(self._get_meta_text())
             self._meta_label.display = visible
         self._update_ui_content()
@@ -496,6 +501,8 @@ class MessageBubble(Vertical):
     def reveal_meta(self) -> None:
         """Show a previously deferred meta line (after appended content)."""
         self.defer_meta = False
+        if self._turn_start is not None:
+            self.duration = time.perf_counter() - self._turn_start
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
             self._meta_label.display = not self.collapsed and not self._meta_suppressed
@@ -505,6 +512,11 @@ class MessageBubble(Vertical):
         self.duration = duration
         if self._meta_label and not self._meta_suppressed and not self.collapsed:
             self._meta_label.update(self._get_meta_text())
+            self._meta_label.refresh()
+
+    def _refresh_meta_from_start(self) -> None:
+        if self._turn_start is not None:
+            self.refresh_meta(time.perf_counter() - self._turn_start)
 
     def hide_meta(self) -> None:
         """Permanently suppress this bubble's meta line.
@@ -519,13 +531,29 @@ class MessageBubble(Vertical):
     def append_before_meta(self, widget: Any) -> bool:
         """Mount *widget* after content, before the meta label.
 
-        Returns True if mounted, False when ``_meta_label`` is not composed yet
-        (caller should fall back to another target).
+        Returns True if mounted, False when ``_meta_label`` is not composed yet.
         """
         parent = self._meta_label.parent if self._meta_label else None
         if parent is not None and isinstance(parent, Widget):
+            for notif in self._notification_widgets:
+                with contextlib.suppress(Exception):
+                    notif.remove()
+            self._notification_widgets.clear()
             parent.mount(widget, before=self._meta_label)
             self._has_appended = True
+            self._refresh_meta_from_start()
+            self.call_after_refresh(self._refresh_meta_from_start)
+            return True
+        return False
+
+    def append_after_meta(self, widget: Any) -> bool:
+        parent = self._meta_label.parent if self._meta_label else None
+        if parent is not None and isinstance(parent, Widget):
+            parent.mount(widget, after=self._meta_label)
+            self._notification_widgets.append(widget)
+            self._has_appended = True
+            self._refresh_meta_from_start()
+            self.call_after_refresh(self._refresh_meta_from_start)
             return True
         return False
 

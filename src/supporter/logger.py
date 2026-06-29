@@ -226,12 +226,3 @@ def _close_file_handler() -> None:
 
 
 atexit.register(shutdown_logger)
-
-
-def main() -> None:
-    init_logger()
-    logger.info("Test message")
-
-
-if __name__ == "__main__":
-    main()
