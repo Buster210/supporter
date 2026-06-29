@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from ..llm.types import GenOptions, Message, TextPart
+from ..llm.types import GenOptions, Message, TextPart, ToolDef, tool_def_from_callable
 from ..types import LLMChunk, LLMResult
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -27,6 +27,26 @@ def _messages_to_openai(prompt: str | list[Message]) -> list[dict[str, str]]:
         if content:
             messages.append({"role": role, "content": content})
     return messages
+def _tools_to_openai(tools: list[Any] | None) -> list[dict[str, Any]] | None:
+    """Convert tool callables to OpenAI tools[] format via ToolDef introspection."""
+    if not tools:
+        return None
+    result = []
+    for fn in tools:
+        td: ToolDef = (
+            fn if isinstance(fn, ToolDef) else tool_def_from_callable(fn)
+        )
+        result.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": td.name,
+                    "description": td.description,
+                    "parameters": td.parameters,
+                },
+            }
+        )
+    return result or None
 
 
 class OpenRouterProvider:
@@ -69,6 +89,11 @@ class OpenRouterProvider:
                 payload["temperature"] = options.temperature
             if options.max_output_tokens is not None:
                 payload["max_tokens"] = options.max_output_tokens
+            tools = options.extras.get("tools")
+            if tools:
+                openai_tools = _tools_to_openai(tools)
+                if openai_tools:
+                    payload["tools"] = openai_tools
         return payload
 
     async def generate(

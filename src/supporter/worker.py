@@ -180,14 +180,30 @@ async def format_response(text: str, model: str) -> str:
         return ""
 
 
+def _verdict_from_text(text: str) -> tuple[bool, str]:
+    """Parse a planner verdict. Fail-closed: only an explicit first-line DONE
+    passes; NOT_DONE, an unclear verdict, or empty text all reject. Pure so the
+    trust-critical branch is testable without a provider call."""
+    text = (text or "").strip()
+    first = text.splitlines()[0].upper() if text else ""
+    reason = text.split("\n", 1)[1].strip() if "\n" in text else text
+    if "NOT_DONE" in first or "NOT DONE" in first:
+        return False, reason or "planner judged the result incomplete"
+    if "DONE" in first:
+        return True, reason or "planner verified the result"
+    return False, "verifier returned no clear verdict; rejecting as unverified"
+
+
 async def verify_plan(
     objective: str, plan: str, result: str, model: str
 ) -> tuple[bool, str]:
     """Ask the planner to verify *result* fulfils *plan* for *objective*.
 
-    Returns (is_done, reason). Fail-open: on any error or an unclear verdict
-    returns (True, ...) so a verifier outage never traps the worker loop.
-    Never raises.
+    Returns (is_done, reason). Fail-closed: only an explicit DONE verdict
+    passes; an unclear verdict or a verifier error returns (False, ...) so
+    unconfirmed work is never trusted as complete. Both callers bound their
+    replan loop (config.replan_max_cycles), so a verifier outage surfaces as
+    "not verified" after the bound rather than trapping the loop. Never raises.
     """
     from .prompts import PLAN_VERIFIER_PERSONA
 
@@ -201,17 +217,13 @@ async def verify_plan(
         )
         gen = await provider.generate(prompt, options)
         text = (getattr(gen, "text", "") or "").strip()
-        first = text.splitlines()[0].upper() if text else ""
-        reason = text.split("\n", 1)[1].strip() if "\n" in text else text
-        if "NOT_DONE" in first or "NOT DONE" in first:
-            return False, reason or "planner judged the result incomplete"
-        if "DONE" in first:
-            return True, reason or "planner verified the result"
-        logger.info("verify_plan: no clear verdict, accepting (fail-open)")
-        return True, "verifier returned no clear verdict; accepting"
+        ok, reason = _verdict_from_text(text)
+        if not ok:
+            logger.info(f"verify_plan: rejecting (fail-closed): {reason}")
+        return ok, reason
     except Exception as exc:
         logger.warning(f"verify_plan failed: {exc}")
-        return True, f"verify unavailable: {exc}"
+        return False, f"verify unavailable, treating as unverified: {exc}"
 
 
 async def _make_plan(task: str) -> str:
