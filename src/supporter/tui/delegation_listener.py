@@ -169,6 +169,8 @@ class DelegationListener:
         plan_bubble_injector: PlanBubbleInjector | None = None,
         plan_storer: Callable[[str, str], None] | None = None,
         render_task_done: Callable[[str, str], None] | None = None,
+        render_verification: Callable[[str, bool, str, str], None] | None = None,
+        collapse_verification: Callable[[str], None] | None = None,
     ) -> None:
         self._inject_message = inject_message
         self._drop_progress = drop_progress
@@ -179,6 +181,8 @@ class DelegationListener:
         self._plan_bubble_injector = plan_bubble_injector
         self._plan_storer = plan_storer
         self._output_tails: dict[str, str] = {}
+        self._render_verification = render_verification
+        self._collapse_verification = collapse_verification
 
 
     def _on_task_output_chunk(self, event: Any, job_id: str, bus: Any) -> None:
@@ -204,6 +208,15 @@ class DelegationListener:
         """Handle TaskUpdateSent event — show one line to TUI."""
         msg = f"Update sent to task {event.task_id}: {event.message}"
         self._render_signal(msg)
+
+    def _on_verification_verdict(
+        self, event: Any, job_id: str, bus: Any
+    ) -> None:
+        """Handle VerificationVerdict — add entry to verification block."""
+        if self._render_verification is not None:
+            self._render_verification(
+                job_id, event.passed, event.task_id, event.reason
+            )
 
     def _on_task_terminal(self, event: Any, job_id: str, bus: Any, kind: str) -> None:
         """Handle TaskCompleted/Failed/TimedOut/Skipped."""
@@ -268,6 +281,8 @@ class DelegationListener:
                 summary = format_delegation_summary(job_id, bus)
             self._render_summary(job_id, summary)
         self._drop_progress(job_id)
+        if self._collapse_verification is not None:
+            self._collapse_verification(job_id)
         return True
 
 
@@ -290,6 +305,7 @@ class DelegationListener:
             TaskStarted,
             TaskTimedOut,
             TaskUpdateSent,
+            VerificationVerdict,
         )
 
         terminal_tasks = (
@@ -330,6 +346,9 @@ class DelegationListener:
                         self._on_task_anomaly(event)
                     elif etype is TaskUpdateSent:
                         self._on_task_update_sent(event)
+                    elif etype is VerificationVerdict:
+                        self._on_verification_verdict(event, job_id, bus)
+
                     elif etype in milestone_events:
                         self._on_milestone_terminal(event, job_id, bus)
                         break

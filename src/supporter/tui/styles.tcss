@@ -221,6 +221,43 @@ MessageBubble.right {
 .delegation-progress #main-content, .delegation-progress .main-content {
     text-align: center;
 }
+.verification-block {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+.verification-content {
+    width: 100%;
+    height: auto;
+    layout: vertical;
+    background: transparent;
+}
+
+.verification-block CollapsibleContents,
+.verification-block Contents {
+    background: transparent;
+    padding: 0;
+}
+
+.verification-content-text {
+    width: 100%;
+    height: auto;
+    color: $success;
+    margin: 0 0 0 2;
+    padding: 0;
+}
+
+.verification-overall {
+    width: 100%;
+    height: auto;
+    color: $success;
+    margin: 0 0 0 2;
+    padding: 0;
+}
 
 .message-meta {
     color: $accent;

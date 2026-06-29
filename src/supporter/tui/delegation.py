@@ -153,9 +153,7 @@ class DelegationBlock(Collapsible):
             widget.update(_render_progress(markdown))
         elif section == "plan":
             widget.update(_render_plan(markdown))
-        elif section == "signal":
-            widget.update(Text(markdown, justify="center"))
-        elif section == "result":
+        elif section in ("signal", "result"):
             widget.update(Text(markdown, justify="center"))
         else:
             widget.update(Markdown(markdown))
@@ -182,4 +180,59 @@ class DelegationBlock(Collapsible):
 
     def collapse_when_done(self) -> None:
         """Collapse this block once delegation is complete."""
+        self.collapsed = True
+
+
+
+class VerificationBlock(Collapsible):
+    """Collapsible verification section — one paragraph per verified task.
+
+    Created collapsed; expands on first entry, collapses when settled.
+    """
+
+    def __init__(self, title: str = "Verification", **kwargs: Any) -> None:
+        super().__init__(title=title, collapsed=True, **kwargs)
+        self.add_class("verification-block")
+        self._content_widget: Static | None = None
+        self._overall_widget: Static | None = None
+        self._entries: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="verification-content"):
+            self._content_widget = Static("", classes="verification-content-text")
+            self._content_widget.display = False
+            yield self._content_widget
+
+            self._overall_widget = Static("", classes="verification-overall")
+            self._overall_widget.display = False
+            yield self._overall_widget
+
+    @staticmethod
+    def _styled(text: str) -> Text:
+        """Red for a failure line (✗ prefix), green otherwise."""
+        return Text(text, style="red" if text.startswith("✗") else "green")
+
+    def add_entry(self, text: str) -> None:
+        """Append a paragraph; auto-expand on first entry. Failure lines render
+        red, success lines green (per-line, so a mixed block colors correctly)."""
+        self._entries.append(text)
+        if self._content_widget is not None:
+            body = Text()
+            for i, entry in enumerate(self._entries):
+                if i:
+                    body.append("\n\n")
+                body.append_text(self._styled(entry))
+            self._content_widget.update(body)
+            self._content_widget.display = True
+        if self.collapsed:
+            self.collapsed = False
+
+    def set_overall(self, text: str) -> None:
+        """Set the final overall-status line (red on failure, green on success)."""
+        if self._overall_widget is not None:
+            self._overall_widget.update(self._styled(text))
+            self._overall_widget.display = True
+
+    def collapse_when_done(self) -> None:
+        """Collapse once verification settles."""
         self.collapsed = True

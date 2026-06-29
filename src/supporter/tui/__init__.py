@@ -24,7 +24,7 @@ from .chat import (
     ThinkingIndicator,
     WelcomeBanner,
 )
-from .delegation import DelegationBlock
+from .delegation import DelegationBlock, VerificationBlock
 from .delegation_listener import DelegationListener
 from .message_processor import ChatMessageProcessor
 from .modals import ConfirmationModal, ProfileSelectModal
@@ -83,6 +83,7 @@ class SupporterApp(App[None]):
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
         self._delegation_blocks: dict[str, DelegationBlock] = {}
+        self._verification_blocks: dict[str, VerificationBlock] = {}
         self._pending_delegation_widgets: deque[tuple[Any, bool]] = deque()
         self._delegation_listener = DelegationListener(
             inject_message=self._inject_delegation_message,
@@ -93,6 +94,8 @@ class SupporterApp(App[None]):
             plan_bubble_injector=self._inject_plan_bubble,
             plan_storer=self._store_pending_plan,
             render_task_done=self._mount_task_signal,
+            render_verification=self._handle_verification_verdict,
+            collapse_verification=self._collapse_verification_block,
         )
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
@@ -431,6 +434,13 @@ class SupporterApp(App[None]):
                     )
                     if verified:
                         self.status_label = "✓ Verification complete"
+                        job_id = getattr(
+                            self.active_turn, "_delegation_job_id", "current"
+                        )
+                        vblock = self._verification_blocks.get(job_id)
+                        if vblock is not None:
+                            vblock.set_overall("✓ Task completed and verified")
+                            vblock.collapse_when_done()
                         break
                     last_failure_reason = (
                         replan_ctx.failures[-1] if replan_ctx.failures else "Unknown"
@@ -461,6 +471,14 @@ class SupporterApp(App[None]):
                     )
                 )
                 chat_view.jump_to_bottom()
+                job_id = getattr(
+                    self.active_turn, "_delegation_job_id", "current"
+                )
+                vblock = self._verification_blocks.get(job_id)
+                if vblock is not None:
+                    vblock.set_overall(
+                        f"✗ Verification failed: {last_failure_reason}"
+                    )
 
             if self.agent:
                 self.agent.pending_plan_objective = ""
@@ -803,6 +821,57 @@ class SupporterApp(App[None]):
         if block:
             block.collapse_when_done()
 
+
+    def _handle_verification_verdict(
+        self, job_id: str, passed: bool, task_id: str, reason: str
+    ) -> None:
+        """Handle a VerificationVerdict: add entry to the verification block."""
+        self._safe_call(
+            lambda: self.run_worker(
+                self._do_handle_verification_verdict(job_id, passed, task_id, reason)
+            )
+        )
+
+    async def _do_handle_verification_verdict(
+        self, job_id: str, passed: bool, task_id: str, reason: str
+    ) -> None:
+        block = await self._mount_verification_block(job_id)
+        if passed:
+            block.add_entry(f"✓ {task_id} verified")
+        else:
+            block.add_entry(f"✗ {task_id} failed: {reason}")
+            # Mount a system bubble on failure so the operator sees it.
+            target = self.active_turn or self._delegation_mount_target()
+            await target.mount(
+                MessageBubble(
+                    role="system",
+                    content=f"✗ Verification failed for {task_id}: {reason}",
+                )
+            )
+            self.query_one("#chat-view", ChatContainer).follow_end()
+
+    def _collapse_verification_block(self, job_id: str) -> None:
+        """Collapse the verification block when milestone terminates."""
+        self._safe_call(
+            lambda: self.run_worker(
+                self._do_collapse_verification_block(job_id)
+            )
+        )
+
+    async def _do_collapse_verification_block(self, job_id: str) -> None:
+        block = self._verification_blocks.get(job_id)
+        if block is not None:
+            block.collapse_when_done()
+
+    async def _mount_verification_block(self, job_id: str) -> VerificationBlock:
+        """Get or create a VerificationBlock for job_id, mounting if needed."""
+        block = self._verification_blocks.get(job_id)
+        if block is not None:
+            return block
+        block = VerificationBlock(title=f"Verification [{job_id}]")
+        self._verification_blocks[job_id] = block
+        await self._mount_delegation_widget(block)
+        return block
 
 def main() -> None:
     """Launch the Supporter TUI dashboard."""

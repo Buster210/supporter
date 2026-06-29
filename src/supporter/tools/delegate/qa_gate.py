@@ -23,7 +23,7 @@ from typing import Any
 
 from ...config import config
 from ...logger import logger
-from ...types import TaskStatus
+from ...types import TaskStatus, VerificationVerdict
 from .agents import run_sub_agent
 from .backends import GEMINI_BACKEND, OPENCODE_BACKEND, QA_REJECTION_MARKER
 from .bus import DelegationBus
@@ -351,6 +351,10 @@ async def run_qa_gate(
                 if approved:
                     logger.info(f"QA gate: task '{task_id}' approved (round {attempt})")
                     result["output"] += "\n\n[QA gate: tier-1 + tier-2 PASSED]"
+                    bus.publish(VerificationVerdict(
+                        job_id=job_id, task_id=task_id, scope="task",
+                        passed=True, round=attempt,
+                    ))
                     return result
                 last_reason = f"tier-2 rejected: {rejections}"
 
@@ -377,6 +381,10 @@ async def run_qa_gate(
         result["output"] = (
             f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
         )
+        bus.publish(VerificationVerdict(
+            job_id=job_id, task_id=task_id, scope="task",
+            passed=False, reason=last_reason, round=rounds,
+        ))
         return result
 
     # Handle gemini path (when delegate_persist_noncode is enabled)

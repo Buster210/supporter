@@ -291,3 +291,17 @@ class TaskAnomaly(DelegationEvent):
 class TaskUpdateSent(DelegationEvent):
     task_id: str
     message: str
+
+@dataclass(frozen=True)
+class VerificationVerdict(DelegationEvent):
+    """A verification outcome for the UI.
+
+    scope='task' for Phase A per-subtask QA, scope='objective' for Phase B
+    verify_plan.
+    """
+
+    task_id: str          # subtask id, or the objective label for scope='objective'
+    scope: str            # "task" | "objective"
+    passed: bool
+    reason: str = ""
+    round: int = 0        # Phase A correction round (0 for objective)
