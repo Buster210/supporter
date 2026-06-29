@@ -8,7 +8,7 @@ from . import guardrails, session
 from .core import BrowseRequest, _page_host
 from .handlers import HANDLERS
 from .recorder import _record_step
-from .support import _attach_viewport_image
+from .support import _attach_fullpage_image, _attach_viewport_image
 
 __all__ = ["browse", "session"]
 
@@ -40,6 +40,8 @@ _IMAGE_ACTIONS = frozenset(
         "solve_cloudflare",
     }
 )
+
+_EXTRACT_IMAGE_ACTIONS = frozenset({"read", "links"})
 
 
 async def browse(
@@ -241,7 +243,13 @@ async def browse(
             host = await _page_host(page)
             await guardrails.record_clean_interaction(host)
 
-    if action in _IMAGE_ACTIONS and not (
+    if action in _EXTRACT_IMAGE_ACTIONS and not (
+        isinstance(result, str) and result.startswith("Error")
+    ):
+        page = session.active_page()
+        if page is not None:
+            await _attach_fullpage_image(page)
+    elif action in _IMAGE_ACTIONS and not (
         isinstance(result, str) and result.startswith("Error")
     ):
         page = session.active_page()

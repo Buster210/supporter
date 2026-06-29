@@ -85,6 +85,7 @@ class AppConfig:
     browse_batch_chars_cap: int = 150_000
     browse_max_links: int = 100
     browse_eval_chars_cap: int = 16_000
+    browse_fullpage_shot_max_px: int = 12_000
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2

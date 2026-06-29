@@ -388,6 +388,27 @@ async def _attach_viewport_image(page: Any) -> None:
         logger.debug("auto image attach failed", exc_info=True)
 
 
+async def _attach_fullpage_image(page: Any) -> None:
+    sink = guardrails.browse_image_sink
+    if sink is None:
+        return
+    try:
+        max_height_px = config.browse_fullpage_shot_max_px
+        clip = None
+        if max_height_px > 0:
+            page_height = await page.evaluate("() => document.body.scrollHeight")
+            if isinstance(page_height, (int, float)) and page_height > max_height_px:
+                page_width = await page.evaluate("() => document.body.scrollWidth")
+                clip = {"x": 0, "y": 0, "width": page_width, "height": max_height_px}
+        if clip is not None:
+            img_bytes = await page.screenshot(type="png", clip=clip)
+        else:
+            img_bytes = await page.screenshot(type="png", full_page=True)
+        await sink(img_bytes, "image/png")
+    except Exception:
+        logger.debug("auto full-page image attach failed", exc_info=True)
+
+
 async def _diff_text(page: Any, req: BrowseRequest) -> str:
     snap = await page.aria_snapshot(mode="ai", depth=req.depth)
     cleaned = snapshot.clean_snapshot(snap, _page_key(page))
