@@ -31,7 +31,7 @@ from supporter.tools.delegate.capsule_query import (
     query_delegation,
     serialize_capsule_result,
 )
-from supporter.types import MilestoneCompleted, TaskStatus
+from supporter.types import MilestoneCompleted, SubtaskVerificationResult, TaskStatus
 
 
 @pytest.fixture(autouse=True)
@@ -296,8 +296,10 @@ async def test_delegate_tasks_creates_capsule_at_start() -> None:
     with (
         patch("supporter.tools.delegate.scheduler.run_sub_agent", side_effect=slow_run),
         patch(
-            "supporter.tools.delegate.scheduler.run_qa_gate",
-            side_effect=_gate_passthrough,
+            "supporter.tools.delegate.scheduler.run_qa_gate_verify_only",
+            return_value=SubtaskVerificationResult(
+                task_id="t1", passed=True, marker="[QA gate: PASSED]"
+            ),
         ),
     ):
         plan = await delegate_tasks("Capsule start", tasks_json, max_parallel=1)

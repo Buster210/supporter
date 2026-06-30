@@ -66,7 +66,6 @@ class _ActiveTask:
 # Per-agent active task dict (lazy import from session to avoid cycles)
 _ACTIVE: dict[str, _ActiveTask] = {}
 
-# WI-2: Auto-repair recording buffer (per-agent)
 _repair_steps: dict[str, list[Step]] = {}
 _repair_context: dict[str, dict[str, Any]] = {}
 
@@ -127,7 +126,6 @@ def is_recording() -> bool:
     return aid in _ACTIVE
 
 
-# ── WI-2: Repair recording ───────────────────────────────────────────────────
 
 
 def start_repair(playbook: Playbook, good_prefix: list[Step]) -> None:
@@ -273,7 +271,6 @@ async def _record_step(req: BrowseRequest, result: str) -> None:
             variable=req.variable,
         )
         record(step)
-        # WI-2: Also record to repair buffer if active
         if is_repair_recording() and req.action in RECORDABLE_ACTIONS:
             aid = _get_agent_id()
             if aid in _repair_steps:

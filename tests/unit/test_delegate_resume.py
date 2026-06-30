@@ -96,7 +96,7 @@ async def test_seed_results_runs_only_unfinished_tasks(
     ):
         sem = asyncio.Semaphore(4)
         await create_capsule("seed-job", "seed-test", tasks, 4)
-        results = await _execute_dag(tasks, sem, sem, bus, "seed-job", seed_results)
+        results, _ = await _execute_dag(tasks, sem, sem, bus, "seed-job", seed_results)
 
     # Only t3 should have run
     assert ran_tasks == ["t3"]
@@ -136,7 +136,7 @@ async def test_settled_dependency_output_available_to_resumed(
     ):
         sem = asyncio.Semaphore(4)
         await create_capsule("dep-job", "dep-test", tasks, 4)
-        results = await _execute_dag(tasks, sem, sem, bus, "dep-job", seed_results)
+        results, _ = await _execute_dag(tasks, sem, sem, bus, "dep-job", seed_results)
 
     # t2 should have run and received t1's output in context
     assert {r["id"] for r in results} == {"t1", "t2"}
@@ -170,7 +170,7 @@ async def test_pending_task_with_failed_dependency_is_skipped_on_resume(
     ):
         sem = asyncio.Semaphore(4)
         await create_capsule("skip-job", "skip-test", tasks, 4)
-        results = await _execute_dag(tasks, sem, sem, bus, "skip-job", seed_results)
+        results, _ = await _execute_dag(tasks, sem, sem, bus, "skip-job", seed_results)
 
     by_id = {r["id"]: r for r in results}
     assert by_id["t1"]["status"] == TaskStatus.ERROR

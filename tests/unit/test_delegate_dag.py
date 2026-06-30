@@ -16,6 +16,7 @@ from supporter.tools.delegate.scheduler import _execute_dag, run_heartbeat
 from supporter.tools.delegate.validation import validate_tasks
 from supporter.types import (
     HeartbeatTick,
+    SubtaskVerificationResult,
     TaskAnomaly,
     TaskCompleted,
     TaskFailed,
@@ -96,7 +97,7 @@ async def _run_dag(
     ):
         await create_capsule("job-dag", "dag", tasks, parallel_limit)
         sem = asyncio.Semaphore(parallel_limit)
-        results = await _execute_dag(tasks, sem, sem, bus, "job-dag")
+        results, _verifications = await _execute_dag(tasks, sem, sem, bus, "job-dag")
     events = []
     while not queue.empty():
         events.append(queue.get_nowait())
@@ -341,7 +342,7 @@ async def test_per_milestone_cap_is_effective_even_with_higher_global_cap() -> N
                 break
             await asyncio.sleep(0.001)
         release.set()
-        results = await milestone_task
+        results, _verifications = await milestone_task
 
     assert peak == 2, f"Expected peak concurrency 2, observed {peak}"
     assert len(results) == 5
@@ -384,12 +385,14 @@ async def test_second_task_starts_sub_agent_while_first_is_in_qa() -> None:
 
     async def blocking_qa(
         task: dict[str, Any], result: dict[str, Any], *_args: Any, **_kwargs: Any
-    ) -> dict[str, Any]:
+    ) -> SubtaskVerificationResult:
         if task["id"] == "t1":
             # QA for t1 waits until t2's sub-agent has started.
             # If job_semaphore is still held here, t2 can never start → deadlock.
             await asyncio.wait_for(task2_sub_started.wait(), timeout=2.0)
-        return result
+        return SubtaskVerificationResult(
+            task_id=task["id"], passed=True, marker="[QA gate: PASSED]"
+        )
 
     bus = DelegationBus("narrow-sem-test")
     job_sem = asyncio.Semaphore(1)
@@ -401,13 +404,15 @@ async def test_second_task_starts_sub_agent_while_first_is_in_qa() -> None:
             side_effect=controlled_run,
         ),
         patch(
-            "supporter.tools.delegate.scheduler.run_qa_gate",
+            "supporter.tools.delegate.scheduler.run_qa_gate_verify_only",
             side_effect=blocking_qa,
         ),
         patch.object(config, "delegate_result_repair", False),
     ):
         await create_capsule("narrow-job", "narrow", tasks, 1)
-        results = await _execute_dag(tasks, job_sem, global_sem, bus, "narrow-job")
+        results, _verifications = await _execute_dag(
+            tasks, job_sem, global_sem, bus, "narrow-job"
+        )
 
     indexed = _by_id(results)
     assert indexed["t1"]["status"] == TaskStatus.COMPLETED

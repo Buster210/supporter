@@ -107,7 +107,7 @@ async def _run_dag_with_mock(
     ):
         await create_capsule("job-complex", "complex", tasks, parallel_limit)
         sem = asyncio.Semaphore(parallel_limit)
-        results = await _execute_dag(
+        results, _ = await _execute_dag(
             tasks, sem, sem, bus, "job-complex", seed_results=seed_results
         )
     return results, bus
@@ -261,7 +261,7 @@ async def test_ac2_partial_success_replan_reuses_outputs() -> None:
         sem = asyncio.Semaphore(4)
         bus2 = get_bus("job-partial-resume", "partial-resume")
         await create_capsule("job-partial-resume", "partial-resume", tasks, 4)
-        results_second = await _execute_dag(
+        results_second, _ = await _execute_dag(
             unfinished, sem, sem, bus2, "job-partial-resume", seed_results=seed_results
         )
 
@@ -307,7 +307,9 @@ async def test_ac3_external_service_error_surfacing() -> None:
     ):
         await create_capsule("job-error", "error", tasks, 4)
         sem = asyncio.Semaphore(4)
-        results = await _execute_dag(tasks, sem, sem, DelegationBus("dag"), "job-error")
+        results, _ = await _execute_dag(
+            tasks, sem, sem, DelegationBus("dag"), "job-error"
+        )
 
     result = results[0]
     assert result["status"] == TaskStatus.ERROR
@@ -338,7 +340,9 @@ async def test_ac3_safety_guard_converts_raised_exception() -> None:
     ):
         await create_capsule("job-boom", "boom", tasks, 4)
         sem = asyncio.Semaphore(4)
-        results = await _execute_dag(tasks, sem, sem, DelegationBus("dag"), "job-boom")
+        results, _ = await _execute_dag(
+            tasks, sem, sem, DelegationBus("dag"), "job-boom"
+        )
 
     assert len(results) == 1
     assert results[0]["status"] == TaskStatus.ERROR
@@ -506,5 +510,5 @@ async def test_ac5_explicit_success_criteria_preserved() -> None:
 @pytest.mark.asyncio
 async def test_ac5_qa_gate_validates_success_criteria() -> None:
     """AC5: QA gate validates that task output meets success criteria."""
-    # Documented in scheduler.py — run_qa_gate validates output against contract.
+    # Validated via run_qa_gate_verify_only in scheduler._execute_dag.
     assert True  # Placeholder for existing QA gate mechanism

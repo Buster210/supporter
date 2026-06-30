@@ -12,6 +12,7 @@ from ...types import (
     MilestoneCancelled,
     MilestoneCompleted,
     MilestoneStarted,
+    SubtaskVerificationResult,
     TaskAnomaly,
     TaskCompleted,
     TaskFailed,
@@ -22,7 +23,7 @@ from ...types import (
 )
 from ..research.claims import ingest_claims
 from .agents import delegate_allowed_tool_names, run_sub_agent
-from .backends import GEMINI_BACKEND
+from .backends import GEMINI_BACKEND, QA_REJECTION_MARKER
 from .bus import DelegationBus, bus_exists, get_bus, remove_bus
 from .capsule import (
     extract_task_capsule_fields,
@@ -35,12 +36,13 @@ from .capsule import (
     mark_task_skipped,
     mark_task_started,
     mark_task_timed_out,
+    save_verifications,
     status_value,
     validate_delegation_payload,
 )
 from .metrics import JobMetrics, subscribe_metrics
 from .project_memory import load_project_memory, memory_context_block, record_learnings
-from .qa_gate import run_qa_gate
+from .qa_gate import run_qa_gate_verify_only
 
 BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 JOB_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -131,22 +133,25 @@ async def _repair_or_rerequest(
     global_semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     """One bounded re-request when a delegated result is off-schema (SPEC §8).
 
     A malformed structured block is repaired by asking the SAME agent to re-emit
     just the JSON block exactly once. The re-request never turns a COMPLETED task
     into a failure and never crashes the scheduler: on any miss the original
     result is kept untouched.
+
+    Returns (result, was_repaired) where was_repaired is True only when the
+    output was actually replaced by a valid repair.
     """
     if (
         not config.delegate_result_repair
         or result.get("status") != TaskStatus.COMPLETED
         or not task.get("result_contract", True)
     ):
-        return result
+        return result, False
     if validate_delegation_payload(result.get("output", "")):
-        return result
+        return result, False
 
     log_decision(
         site="scheduler.repair_retry",
@@ -170,16 +175,16 @@ async def _repair_or_rerequest(
         logger.warning(
             f"capsule repair failed, using original for task {task['id']}: {exc}"
         )
-        return result
+        return result, False
 
     if repaired.get("status") == TaskStatus.COMPLETED and validate_delegation_payload(
         repaired.get("output", "")
     ):
         result["output"] = repaired.get("output", "")
         logger.info(f"capsule repaired for task {task['id']}")
-    else:
-        logger.warning(f"capsule repair failed, using original for task {task['id']}")
-    return result
+        return result, True
+    logger.warning(f"capsule repair failed, using original for task {task['id']}")
+    return result, False
 
 
 async def _execute_dag(
@@ -189,8 +194,9 @@ async def _execute_dag(
     bus: DelegationBus,
     job_id: str,
     seed_results: dict[str, dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, SubtaskVerificationResult]]:
     results: dict[str, dict[str, Any]] = dict(seed_results) if seed_results else {}
+    verifications: dict[str, SubtaskVerificationResult] = {}
     task_done: dict[str, asyncio.Event] = {t["id"]: asyncio.Event() for t in tasks}
     try:
         question_id = str(load_capsule(job_id).get("question_id", job_id))
@@ -310,15 +316,26 @@ async def _execute_dag(
                             "duration": time.perf_counter() - started_at,
                             "tokens": {},
                         }
-                # Release job_semaphore before QA/repair: they use global_semaphore
-                # independently, so holding job_semaphore across them needlessly
-                # throttles sub-agent concurrency below the configured budget.
-                result = await run_qa_gate(
+                verification = await run_qa_gate_verify_only(
                     enriched, result, global_semaphore, bus, job_id
                 )
-                result = await _repair_or_rerequest(
+                result, was_repaired = await _repair_or_rerequest(
                     enriched, result, global_semaphore, bus, job_id
                 )
+                # Re-verify only when repair actually replaced the output;
+                # otherwise reuse the pre-repair result to avoid doubled cost,
+                # duplicate sub-task ids, and non-deterministic verdict flips.
+                if was_repaired:
+                    verification = await run_qa_gate_verify_only(
+                        enriched, result, global_semaphore, bus, job_id, attempt=1
+                    )
+                verifications[task_id] = verification
+                if verification.passed:
+                    if verification.marker:
+                        result["output"] += f"\n\n{verification.marker}"
+                elif result.get("status") == TaskStatus.COMPLETED:
+                    result["status"] = TaskStatus.ERROR
+                    result["output"] = f"{QA_REJECTION_MARKER}: {verification.reason}"
             finally:
                 if browser_session is not None:
                     with contextlib.suppress(Exception):
@@ -450,7 +467,7 @@ async def _execute_dag(
     ordered = [results[t["id"]] for t in tasks if t["id"] in results]
     seen = {t["id"] for t in tasks}
     ordered.extend(v for k, v in results.items() if k not in seen)
-    return ordered
+    return ordered, verifications
 
 
 def serialize_results(
@@ -565,11 +582,24 @@ async def run_milestone(
     start_wall = time.perf_counter()
     metrics_task = subscribe_metrics(bus, job_id)
     try:
-        results = await _execute_dag(
+        results, verifications = await _execute_dag(
             tasks, job_semaphore, global_semaphore, bus, job_id, seed_results
         )
         total_wall = time.perf_counter() - start_wall
         await mark_capsule_completed(job_id)
+        try:
+            try:
+                await save_verifications(job_id, verifications)
+            except Exception:
+                # ponytail: one retry, then loud failure — verifications are
+                # read back on replan (tui/__init__.py), so silent loss must
+                # be diagnosable even though we still don't crash the milestone.
+                await save_verifications(job_id, verifications)
+        except Exception:
+            logger.error(
+                f"Failed to save verifications for job {job_id} after retry",
+                exc_info=True,
+            )
         await _record_milestone_learnings(job_id)
         bus.publish(MilestoneCompleted(job_id, milestone, results, total_wall))
     except asyncio.CancelledError:

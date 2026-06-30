@@ -80,7 +80,11 @@ class ProfileSelectModal(ModalScreen[str | None]):
         from textual.widgets import OptionList
 
         with Vertical(id="modal-container"):
-            yield Label("Browser profile missing(BROWSER_PROFILE_NAME/BROWSER_PROFILE_PATH), select profile:", id="modal-header")
+            yield Label(
+                "Browser profile missing(BROWSER_PROFILE_NAME/BROWSER_PROFILE_PATH), "
+                "select profile:",
+                id="modal-header",
+            )
             yield OptionList(id="profile-list")
             with Horizontal(id="modal-buttons"):
                 yield Button("Cancel", id="cancel")

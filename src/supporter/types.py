@@ -97,16 +97,23 @@ class AppConfig:
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
 
-    # WI-3: Generalized trust gating
     browser_trusted_hosts: str = ""
     browser_micro_behavior_rate: float = 0.06
     browser_promotion_threshold: int = 5
-    # Auto-approve browser actions (files remain gated)
     browser_auto_approve: bool = True
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-oss-120b:free"
     # G2: Plan → Implement → Verify → Replan loop: max replan cycles on verify failure
     replan_max_cycles: int = 3
+
+
+@dataclass(frozen=True)
+class SubtaskVerificationResult:
+
+    task_id: str
+    passed: bool
+    reason: str = ""
+    marker: str = ""
 
 
 @dataclass

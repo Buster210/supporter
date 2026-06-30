@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from collections.abc import Callable
@@ -14,7 +15,8 @@ from textual.widgets import Button, Input, Label, Static
 from ..config import config
 from ..logger import init_logger, logger, shutdown_logger
 from ..tools.base import ToolError
-from ..types import ModeChanged
+from ..tools.delegate.capsule import load_capsule
+from ..types import ModeChanged, SubtaskVerificationResult
 from .bubble import MessageBubble
 from .chat import (
     ChatContainer,
@@ -411,8 +413,25 @@ class SupporterApp(App[None]):
             replan_ctx = None
             last_failure_reason = ""
             if self.agent.pending_plan_objective:
+                job_id = getattr(
+                    self.active_turn, "_delegation_job_id", None
+                )
+                subtask_failures = []
+                if job_id:
+                    capsule = await asyncio.to_thread(load_capsule, job_id)
+                    verifications = capsule.get("verifications", {})
+                    subtask_failures = [
+                        SubtaskVerificationResult(
+                            task_id=v["task_id"],
+                            passed=v["passed"],
+                            reason=v.get("reason", ""),
+                        )
+                        for v in verifications.values()
+                    ]
                 replan_ctx = ReplanContext(
-                    self.agent.pending_plan_objective, config.replan_max_cycles
+                    self.agent.pending_plan_objective,
+                    config.replan_max_cycles,
+                    subtask_failures,
                 )
                 replan_ctx.next_cycle()
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ...logger import logger
-from ...types import TaskStatus
+from ...types import SubtaskVerificationResult, TaskStatus
 from .. import resolved_project_root
 from .backends import GEMINI_BACKEND
 
@@ -372,10 +372,24 @@ async def mark_capsule_completed(job_id: str) -> dict[str, Any] | None:
         capsule["completed_at"] = utc_now()
         capsule["synthesis"] = build_synthesis(capsule)
 
-    try:
-        return await update_capsule(job_id, mutate)
-    finally:
-        _release_capsule_lock(job_id)
+    return await update_capsule(job_id, mutate)
+
+
+async def save_verifications(
+    job_id: str, verifications: dict[str, SubtaskVerificationResult]
+) -> None:
+
+    def mutate(capsule: dict[str, Any]) -> None:
+        existing = capsule.get("verifications", {})
+        capsule["verifications"] = {
+            **existing,
+            **{
+                k: {"task_id": v.task_id, "passed": v.passed, "reason": v.reason}
+                for k, v in verifications.items()
+            },
+        }
+
+    await update_capsule(job_id, mutate)
 
 
 async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
@@ -399,10 +413,7 @@ async def mark_capsule_cancelled(job_id: str) -> dict[str, Any] | None:
                 )
         capsule["synthesis"] = build_synthesis(capsule)
 
-    try:
-        return await update_capsule(job_id, mutate)
-    finally:
-        _release_capsule_lock(job_id)
+    return await update_capsule(job_id, mutate)
 
 
 async def mark_capsule_metrics(
@@ -418,10 +429,7 @@ async def mark_capsule_metrics(
     def mutate(capsule: dict[str, Any]) -> None:
         capsule["metrics"] = dict(metrics_summary)
 
-    try:
-        return await update_capsule(job_id, mutate)
-    finally:
-        _release_capsule_lock(job_id)
+    return await update_capsule(job_id, mutate)
 
 
 def extract_task_capsule_fields(output: str) -> dict[str, Any]:
@@ -556,10 +564,6 @@ def _capsule_lock(job_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _CAPSULE_LOCKS[safe_job_id] = lock
     return lock
-
-
-def _release_capsule_lock(job_id: str) -> None:
-    _CAPSULE_LOCKS.pop(_safe_job_id(job_id), None)
 
 
 def _read_capsule_sync(path: Path, job_id: str) -> dict[str, Any]:

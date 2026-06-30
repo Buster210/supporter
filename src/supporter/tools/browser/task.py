@@ -88,7 +88,6 @@ async def finish_task(success: bool = True) -> str:
     """
     logger.info(f"Tool: finish_task — success={success}")
 
-    # WI-2: Handle repair mode completion
     if is_repair_recording():
         repair_steps, ctx = finish_repair()
         if success and repair_steps and ctx:
@@ -215,7 +214,6 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
                 playbook.fail_count += 1
                 playbook.last_outcome = "drift"
                 await save_playbook(playbook)
-                # WI-2: Auto-repair on drift
                 return await _enter_repair_mode(
                     playbook=playbook,
                     step_index=i,
@@ -232,7 +230,6 @@ async def replay_playbook(goal: str, overrides: dict[str, str] | None = None) ->
             playbook.fail_count += 1
             playbook.last_outcome = "error"
             await save_playbook(playbook)
-            # WI-2: Auto-repair on error with current page state
             live_page = session.active_page()
             page_state = (
                 await _live_refs_snapshot(live_page) if live_page is not None else ""

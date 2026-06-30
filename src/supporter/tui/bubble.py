@@ -189,7 +189,7 @@ class MessageBubble(Vertical):
 
     def watch_collapsed(self, value: bool) -> None:
         if self._meta_label:
-            visible = (
+            visible = bool(
                 not value
                 and not self._meta_suppressed
                 and self.role != "user"
