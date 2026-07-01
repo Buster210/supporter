@@ -27,7 +27,7 @@ from .chat import (
     WelcomeBanner,
 )
 from .delegation import DelegationBlock, VerificationBlock
-from .delegation_listener import DelegationListener
+from .delegation_listener import DelegationListener, format_delegation_summary
 from .message_processor import ChatMessageProcessor
 from .modals import ConfirmationModal, ProfileSelectModal
 from .mode_manager import ModeManager
@@ -653,10 +653,9 @@ class SupporterApp(App[None]):
         return await self.push_screen_wait(ProfileSelectModal(profiles))
 
     async def _startup_profile_select(self, greeting_worker: Any) -> None:
-        """Wait for greeting to finish, then prompt for profile selection."""
+        """Prompt for profile selection immediately at startup."""
         from ..tools.browser.session import select_profile_at_startup
 
-        await greeting_worker.wait()
         chosen = await select_profile_at_startup(self._select_profile)
         if chosen:
             self._toast_manager.notify(
@@ -697,6 +696,12 @@ class SupporterApp(App[None]):
         """Render progress table live as updates arrive (bypass buffering)."""
         self._safe_call(
             lambda: self.run_worker(self._mount_live_progress(job_id, progress_md))
+        )
+        from ..tools.delegate.bus import get_bus
+
+        bus = get_bus(job_id)
+        self._safe_call(
+            setattr, self, "status_label", format_delegation_summary(job_id, bus)
         )
 
     async def _mount_live_progress(self, job_id: str, progress_md: str) -> None:
@@ -777,6 +782,7 @@ class SupporterApp(App[None]):
     def _start_delegation_listener(self, job_id: str, plan_table: str = "") -> None:
         if self.active_turn:
             self.active_turn._delegation_job_id = job_id
+        self.status_label = "Delegating..."
         bubble = self._delegation_host_bubble()
         if bubble is not None:
             turn = self.active_turn or self._delegation_mount_target()

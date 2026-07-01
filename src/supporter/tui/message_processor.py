@@ -63,6 +63,7 @@ class ChatMessageProcessor:
 
         state = _StreamingState()
         self._app._is_streaming = True
+        stream_start = time.perf_counter()
 
         try:
             logger.info(f"UI: starting stream process — text_len={len(text)}")
@@ -83,7 +84,7 @@ class ChatMessageProcessor:
                     )
                 await self._app._flush_pending_delegation_widgets(state.bubble)
             if state.bubble:
-                duration = time.perf_counter() - start_time
+                duration = time.perf_counter() - stream_start
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
                 if not state.bubble.has_visible_answer():
@@ -99,15 +100,15 @@ class ChatMessageProcessor:
     async def _handle_chunk(
         self, chunk: Any, container: Any, state: _StreamingState, bubble_class: type
     ) -> None:
+        if chunk.model:
+            state.actual_model = chunk.model
+
         if chunk.is_tool_call:
             await self._handle_tool_chunk(chunk, container, state, bubble_class)
             return
 
         if chunk.is_last:
             self._update_status("Thinking")
-
-        if chunk.model:
-            state.actual_model = chunk.model
 
         if not state.is_first_chunk:
             self._append_to_existing_bubble(chunk, state)
