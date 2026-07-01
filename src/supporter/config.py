@@ -260,6 +260,7 @@ def load_config() -> AppConfig:
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
         replan_max_cycles=_int_env("REPLAN_MAX_CYCLES", REPLAN_MAX_CYCLES),
+        router_enabled=_bool_env("ROUTER_ENABLED", False),
     )
 
 

@@ -708,3 +708,32 @@ _TASK_TRIAGE = (
 DEFAULT_SYSTEM_INSTRUCTION = (
     _IDENTITY + STYLE_PRINCIPLES + _FULL_TOOLS_AND_PROTOCOLS + _TASK_TRIAGE
 )
+
+# WHY: when config.router_enabled, routing is decided once by router.route_prompt
+# in an isolated call (see router.py) instead of by the model re-deriving the
+# triage block from bloated conversation history every turn. The main-turn
+# system instruction must NOT also carry _TASK_TRIAGE, or the model and the
+# router can disagree ("two brains") about which route a prompt takes.
+ROUTER_SYSTEM_INSTRUCTION = _IDENTITY + STYLE_PRINCIPLES + _FULL_TOOLS_AND_PROTOCOLS
+
+# Same three routes + needs_research semantics as _TASK_TRIAGE, reworded only
+# for strict single-shot JSON output. Keep route wording in sync with
+# _TASK_TRIAGE above if that block changes.
+ROUTER_PROMPT = (
+    "Classify the user's message into exactly one route. Respond with ONLY "
+    "a single-line JSON object, no markdown fences, no prose: "
+    '{"route": "direct"|"research"|"task", "needs_research": true|false}\n\n'
+    'route="direct": greeting, chit-chat, acknowledgement, opinion, or a '
+    "single-fact question answerable from what you already know.\n"
+    'route="research": a question requiring multiple sources, fact-checking, '
+    "comparison across domains, or where being wrong matters (e.g. "
+    "'What are the tradeoffs of X vs Y?', 'Is X true?', 'Summarize the state "
+    "of Y'). Not code changes, file edits, or multi-step implementation work.\n"
+    'route="task": anything requiring multi-step implementation, file edits, '
+    "browser automation, or any action whose outcome must be verified.\n"
+    'needs_research: true if the route is "task" but the task also needs '
+    "research to ground it before implementation; false otherwise.\n\n"
+    'If unsure which route applies, choose "task" -- under-planning a simple '
+    "prompt is cheap, skipping the plan on real work is not.\n\n"
+    "User message:\n{prompt}"
+)

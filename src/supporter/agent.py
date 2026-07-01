@@ -486,9 +486,11 @@ class ChatAgent:
     ) -> AsyncIterator[LLMChunk]:
         """Stream LLM chunks, with optional history exclusion.
 
-        Routing (direct vs. delegate) is driven by the system prompt's
-        task-triage block, not by caller-side classification. Yields chunks
-        as they arrive.
+        Routing: when ``config.router_enabled`` is False, routing (direct vs.
+        delegate) is driven by the system prompt's task-triage block. When True,
+        an isolated ``route_prompt`` classifier decides caller-side and the
+        triage block is stripped from the system prompt. Yields chunks as they
+        arrive.
         """
         logger.info(f"Agent: executing streaming prompt — length={len(prompt)}")
         if logger.isEnabledFor(logging.DEBUG):
@@ -501,8 +503,36 @@ class ChatAgent:
         user_message = _build_message("user", prompt)
         options = self._prepare_execution_context()
         collected_parts: list[Any] = []
+        research_preamble = ""
 
-        async for chunk in self.provider.generate_stream(prompt, options):
+        if config.router_enabled:
+            from .prompts import _TASK_TRIAGE
+            from .router import route_prompt
+
+            # WHY (avoid two-brains): the router is now the single source of
+            # truth for routing, so the system prompt must not also carry the
+            # triage block the model would otherwise re-derive every turn.
+            if options.system_instruction:
+                options.system_instruction = options.system_instruction.replace(
+                    _TASK_TRIAGE, ""
+                )
+
+            decision = await route_prompt(self.provider, prompt)
+            if decision.route == "research" or decision.needs_research:
+                from .tools.research.driver import run_deep_research
+
+                try:
+                    report = await run_deep_research(prompt, provider=self.provider)
+                    research_preamble = (
+                        "Research findings for the user's request "
+                        f"(use these, cite sources):\n{report.get('report', '')}\n\n"
+                    )
+                except Exception as e:  # never break the stream on research failure
+                    logger.warning(f"Router: deep_research failed, continuing: {e}")
+
+        send_prompt = research_preamble + prompt if research_preamble else prompt
+
+        async for chunk in self.provider.generate_stream(send_prompt, options):
             if chunk.raw is not None:
                 raw_content = getattr(chunk.raw, "content", None)
                 if raw_content is not None:
