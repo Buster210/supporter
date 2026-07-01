@@ -105,6 +105,7 @@ class AppConfig:
     openrouter_model: str = "openai/gpt-oss-120b:free"
     # G2: Plan → Implement → Verify → Replan loop: max replan cycles on verify failure
     replan_max_cycles: int = 3
+    router_enabled: bool = False
 
 
 @dataclass(frozen=True)

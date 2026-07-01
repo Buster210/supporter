@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -417,3 +418,112 @@ async def test_second_task_starts_sub_agent_while_first_is_in_qa() -> None:
     indexed = _by_id(results)
     assert indexed["t1"]["status"] == TaskStatus.COMPLETED
     assert indexed["t2"]["status"] == TaskStatus.COMPLETED
+
+
+def test_plan_gate_injects_planner_as_root_dep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "router_enabled", True)
+    tasks = [
+        {"id": "t1", "task": "implement thing", "agent": "custom"},
+        {"id": "t2", "task": "implement other", "agent": None, "depends_on": ["t1"]},
+    ]
+    validated = validate_tasks(json.dumps(tasks))
+
+    planners = [t for t in validated if t["agent"] == "planner"]
+    assert len(planners) == 1
+    plan_id = planners[0]["id"]
+
+    by_id = {t["id"]: t for t in validated}
+    assert by_id["t1"]["depends_on"] == [plan_id]
+    # t2 already had a dep (on t1), so it is left alone -- waits transitively
+    assert by_id["t2"]["depends_on"] == ["t1"]
+
+
+def test_plan_gate_respects_existing_planner(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "router_enabled", True)
+    tasks = [
+        {"id": "p1", "task": "plan it", "agent": "planner"},
+        {
+            "id": "t1",
+            "task": "implement thing",
+            "agent": "custom",
+            "depends_on": ["p1"],
+        },
+    ]
+    validated = validate_tasks(json.dumps(tasks))
+
+    assert len(validated) == 2
+    assert [t["agent"] for t in validated] == ["planner", "custom"]
+
+
+def test_plan_gate_skips_recon_only_milestone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "router_enabled", True)
+    tasks = [
+        {"id": "e1", "task": "explore repo", "agent": "explorer"},
+        {"id": "r1", "task": "review diff", "agent": "code_reviewer"},
+    ]
+    validated = validate_tasks(json.dumps(tasks))
+
+    assert len(validated) == 2
+    assert not any(t["agent"] == "planner" for t in validated)
+
+
+def test_plan_gate_id_collision_avoidance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "router_enabled", True)
+    tasks = [
+        {"id": "__plan__", "task": "implement thing", "agent": "custom"},
+        {"id": "__plan___1", "task": "implement other", "agent": "custom"},
+    ]
+    validated = validate_tasks(json.dumps(tasks))
+
+    planners = [t for t in validated if t["agent"] == "planner"]
+    assert len(planners) == 1
+    assert planners[0]["id"] == "__plan___2"
+
+
+def test_plan_gate_augmented_graph_passes_cycle_detection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "router_enabled", True)
+    tasks = [
+        {"id": "t1", "task": "implement thing", "agent": "custom"},
+        {
+            "id": "t2",
+            "task": "implement other",
+            "agent": "custom",
+            "depends_on": ["t1"],
+        },
+        {"id": "t3", "task": "implement more", "agent": "custom"},
+    ]
+    # should not raise despite the new source node fanning out to both roots
+    validated = validate_tasks(json.dumps(tasks))
+    assert len(validated) == 4
+
+
+def test_plan_gate_rootless_milestone_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A milestone with no root (every task carries deps) cannot exist as a
+    # valid DAG. Injection may fan the plan out to nothing, but the downstream
+    # cycle / dep-existence checks must reject it, so no orphaned planner is
+    # ever returned. This locks that safety net.
+    monkeypatch.setattr(config, "router_enabled", True)
+    cyclic = [
+        {"id": "t1", "task": "a", "agent": "custom", "depends_on": ["t2"]},
+        {"id": "t2", "task": "b", "agent": "custom", "depends_on": ["t1"]},
+    ]
+    with pytest.raises(ValueError, match="cycle"):
+        validate_tasks(json.dumps(cyclic))
+
+    external = [
+        {"id": "t1", "task": "a", "agent": "custom", "depends_on": ["ext"]},
+    ]
+    with pytest.raises(ValueError, match="does not exist"):
+        validate_tasks(json.dumps(external))
+
+
+def test_plan_gate_off_by_default_unaffected() -> None:
+    assert config.router_enabled is False
+    tasks = [{"id": "t1", "task": "implement thing", "agent": "custom"}]
+    validated = validate_tasks(json.dumps(tasks))
+    assert len(validated) == 1
+    assert validated[0]["agent"] == "custom"

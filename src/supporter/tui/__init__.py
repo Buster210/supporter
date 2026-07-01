@@ -17,7 +17,7 @@ from ..logger import init_logger, logger, shutdown_logger
 from ..tools.base import ToolError
 from ..tools.delegate.capsule import load_capsule
 from ..types import ModeChanged, SubtaskVerificationResult
-from .bubble import MessageBubble
+from .bubble import MessageBubble, strip_capsule_marker
 from .chat import (
     ChatContainer,
     ChatTurn,
@@ -27,7 +27,7 @@ from .chat import (
     WelcomeBanner,
 )
 from .delegation import DelegationBlock, VerificationBlock
-from .delegation_listener import DelegationListener
+from .delegation_listener import DelegationListener, format_delegation_summary
 from .message_processor import ChatMessageProcessor
 from .modals import ConfirmationModal, ProfileSelectModal
 from .mode_manager import ModeManager
@@ -120,7 +120,6 @@ class SupporterApp(App[None]):
         from ..tools.bash.sandbox import register_bash_callbacks
         from ..tools.browser.guardrails import register_browse_callback
         from ..tools.delegate.api import set_delegation_start_callback
-        from ..tools.delegate.scheduler import resume_interrupted_jobs
         from ..tools.file_ops import register_confirmation_callback
 
         init_logger()
@@ -141,9 +140,6 @@ class SupporterApp(App[None]):
         logger.info("Supporter TUI dashboard active")
         self._mode_manager.start_warmup()
         try:
-            self.run_worker(
-                resume_interrupted_jobs(), name="resume-jobs", group="resume-jobs"
-            )
             self.run_worker(self._setup_agent(use_live=True), exclusive=True)
             greeting_worker = self.run_worker(
                 self._mode_manager.trigger_live_greeting(), name="greeting"
@@ -205,6 +201,18 @@ class SupporterApp(App[None]):
         Loads ALL records from the history store (uncapped) so sessions with
         >200 turns still display everything in the UI. Does not trigger the
         thinking indicator or any LLM call.
+
+        A session with existing records is being CONTINUED (e.g. via the
+        SUPPORTER_SESSION_ID env var) -- only then do we auto-resume interrupted
+        delegation jobs. A brand-new session (the normal case on every launch)
+        has empty history, so it skips resume entirely -- fixing the "new
+        session replays the last plan" bug. See scheduler.resume_interrupted_jobs.
+
+        ponytail: capsules are project-global (not session-scoped), so a
+        CONTINUED session can still pick up an interrupted job created by a
+        different session. That's the resume-after-crash feature working as
+        intended and is not reachable in normal always-fresh-session use; scope
+        capsules by session id if it ever becomes a real problem.
         """
         if not self.agent or not self.agent._store:
             return
@@ -214,6 +222,12 @@ class SupporterApp(App[None]):
         records = self.agent._store.load(limit=None)
         if not records:
             return
+
+        from ..tools.delegate.scheduler import resume_interrupted_jobs
+
+        self.run_worker(
+            resume_interrupted_jobs(), name="resume-jobs", group="resume-jobs"
+        )
 
         chat_view = self.query_one("#chat-view", ChatContainer)
 
@@ -229,10 +243,8 @@ class SupporterApp(App[None]):
                 text = " ".join(
                     p.text for p in msg.parts if isinstance(p, TextPart) and p.text
                 )
-                if (
-                    "DELEGATION_CAPSULE_RESULT (json)" in text
-                    or "MILESTONE_RESULT (json)" in text
-                ):
+                text = strip_capsule_marker(text).strip()
+                if not text:
                     continue
                 current_turn = ChatTurn(MessageBubble(role="user", content=text))
                 await chat_view.mount(current_turn)
@@ -653,10 +665,9 @@ class SupporterApp(App[None]):
         return await self.push_screen_wait(ProfileSelectModal(profiles))
 
     async def _startup_profile_select(self, greeting_worker: Any) -> None:
-        """Wait for greeting to finish, then prompt for profile selection."""
+        """Prompt for profile selection immediately at startup."""
         from ..tools.browser.session import select_profile_at_startup
 
-        await greeting_worker.wait()
         chosen = await select_profile_at_startup(self._select_profile)
         if chosen:
             self._toast_manager.notify(
@@ -697,6 +708,12 @@ class SupporterApp(App[None]):
         """Render progress table live as updates arrive (bypass buffering)."""
         self._safe_call(
             lambda: self.run_worker(self._mount_live_progress(job_id, progress_md))
+        )
+        from ..tools.delegate.bus import get_bus
+
+        bus = get_bus(job_id)
+        self._safe_call(
+            setattr, self, "status_label", format_delegation_summary(job_id, bus)
         )
 
     async def _mount_live_progress(self, job_id: str, progress_md: str) -> None:
@@ -777,6 +794,7 @@ class SupporterApp(App[None]):
     def _start_delegation_listener(self, job_id: str, plan_table: str = "") -> None:
         if self.active_turn:
             self.active_turn._delegation_job_id = job_id
+        self.status_label = "Delegating..."
         bubble = self._delegation_host_bubble()
         if bubble is not None:
             turn = self.active_turn or self._delegation_mount_target()

@@ -130,6 +130,60 @@ def _validate_single_task(
     }
 
 
+RECON_ONLY_ROLES = frozenset(
+    {"planner", "worker_planner", "explorer", "code_reviewer", "security_auditor"}
+)
+
+
+def _inject_plan_gate(tasks: list[Any]) -> list[Any]:
+    """Prepend a synthetic planner task when a milestone needs a plan.
+
+    ponytail: the recon-role allowlist is hardcoded because `agent` is
+    free-form (no role enum) -- upgrade path is a real role taxonomy.
+    """
+    needs_plan = any(
+        (t.get("agent") if isinstance(t, dict) else None) not in RECON_ONLY_ROLES
+        or (t.get("backend") if isinstance(t, dict) else None) == "opencode"
+        for t in tasks
+        if isinstance(t, dict)
+    )
+    if not needs_plan:
+        return tasks
+
+    has_planner = any(
+        isinstance(t, dict) and t.get("agent") == "planner" for t in tasks
+    )
+    if has_planner:
+        return tasks
+
+    existing_ids = {t.get("id") for t in tasks if isinstance(t, dict)}
+    plan_id = "__plan__"
+    n = 1
+    while plan_id in existing_ids:
+        plan_id = f"__plan___{n}"
+        n += 1
+
+    plan_task = {
+        "id": plan_id,
+        "agent": "planner",
+        "task": (
+            "Produce a Plan and Success Criteria for the milestone before execution."
+        ),
+        "depends_on": [],
+    }
+    # Wire the plan ahead of every root (empty depends_on). A valid acyclic
+    # milestone always has >=1 root (a DAG source), so the plan can never end
+    # up orphaned here: any input with zero roots is cyclic or references
+    # missing ids, and the cycle/dep-existence checks that run downstream in
+    # validate_tasks reject it before this list is ever returned.
+    # ponytail: no orphan-planner guard -- downstream validation is the net;
+    # add one only if injection ever moves after those checks.
+    for t in tasks:
+        if isinstance(t, dict) and not t.get("depends_on"):
+            t["depends_on"] = [plan_id]
+    return [plan_task, *tasks]
+
+
 def validate_tasks(raw_json: str) -> list[dict[str, Any]]:
     try:
         tasks = json.loads(raw_json)
@@ -141,6 +195,9 @@ def validate_tasks(raw_json: str) -> list[dict[str, Any]]:
 
     if not tasks:
         raise ValueError("'tasks' array cannot be empty")
+
+    if config.router_enabled:
+        tasks = _inject_plan_gate(tasks)
 
     if len(tasks) > config.delegate_max_tasks:
         raise ValueError(
