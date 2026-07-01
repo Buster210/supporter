@@ -96,10 +96,10 @@ def _run(
     bus = MagicMock(spec=DelegationBus)
     mock = AsyncMock(side_effect=fake)
     with patch.object(scheduler, "run_sub_agent", mock):
-        out = asyncio.run(
+        out, _was_repaired = asyncio.run(
             scheduler._repair_or_rerequest(task, result, asyncio.Semaphore(1), bus, "j")
         )
-    return out, mock
+    return out, mock  # type: ignore[return-value]
 
 
 class TestRepairOrRerequest:

@@ -16,6 +16,7 @@ from supporter.tools.delegate.agents import (
     _truncate_delegate_output,
     run_sub_agent,
 )
+from supporter.tools.delegate.api import _ACTIVE_DELEGATIONS
 from supporter.tools.delegate.capsule import create_capsule
 from supporter.tools.delegate.opencode_backend import run_opencode
 from supporter.tools.delegate.scheduler import (
@@ -27,7 +28,14 @@ from supporter.tools.delegate.scheduler import (
     serialize_results,
 )
 from supporter.tools.delegate.validation import _resolve_agent_profile, validate_tasks
-from supporter.types import LLMResult, TaskCompleted, TaskOutputChunk, TaskStatus
+from supporter.types import (
+    LLMResult,
+    MilestoneCompleted,
+    SubtaskVerificationResult,
+    TaskCompleted,
+    TaskOutputChunk,
+    TaskStatus,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -760,7 +768,7 @@ class TestOutputTailTruncation:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 5)
-            results = await _execute_dag(
+            results, _ = await _execute_dag(
                 tasks, semaphore, semaphore, mock_bus, "test_job"
             )
 
@@ -807,7 +815,7 @@ class TestOutputTailTruncation:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 5)
-            results = await _execute_dag(
+            results, _ = await _execute_dag(
                 tasks, semaphore, semaphore, mock_bus, "test_job"
             )
 
@@ -853,7 +861,7 @@ class TestOutputTailTruncation:
 
             mock_bus = MagicMock(spec=DelegationBus)
             await create_capsule("test_job", "test", tasks, 5)
-            results = await _execute_dag(
+            results, _ = await _execute_dag(
                 tasks, semaphore, semaphore, mock_bus, "test_job"
             )
 
@@ -925,6 +933,65 @@ class TestOutputTailTruncation:
             "sources": 1,
         }
         assert event.handoff == "Render capsule fields in task completion UI"
+
+    @pytest.mark.asyncio
+    async def test_qa_marker_appended_after_repair_not_before(self) -> None:
+        """Marker must not corrupt output before _repair_or_rerequest validates it."""
+        from supporter.tools.delegate.bus import DelegationBus
+        from supporter.types import SubtaskVerificationResult
+
+        tasks = [
+            {
+                "id": "a",
+                "task": "t",
+                "tools": {"read_file"},
+                "model": "m",
+                "persona": "p",
+                "context": "",
+                "timeout": 10,
+                "depends_on": [],
+            }
+        ]
+        semaphore = asyncio.Semaphore(5)
+        mock_bus = MagicMock(spec=DelegationBus)
+        verification = SubtaskVerificationResult(
+            task_id="a", passed=True, marker="[QA gate: tier-1 + tier-2 PASSED]"
+        )
+        repair_seen_output: list[str] = []
+
+        async def capture_repair(
+            task: dict[str, Any], result: dict[str, Any], *a: Any, **kw: Any
+        ) -> tuple[dict[str, Any], bool]:
+            repair_seen_output.append(result["output"])
+            return result, False
+
+        with (
+            patch("supporter.tools.delegate.scheduler.run_sub_agent") as mock_run,
+            patch(
+                "supporter.tools.delegate.scheduler.run_qa_gate_verify_only",
+                new_callable=AsyncMock,
+                return_value=verification,
+            ),
+            patch(
+                "supporter.tools.delegate.scheduler._repair_or_rerequest",
+                new=capture_repair,
+            ),
+        ):
+            mock_run.return_value = {
+                "id": "a",
+                "status": TaskStatus.COMPLETED,
+                "output": "wrote code",
+                "duration": 1.0,
+            }
+            await create_capsule("marker_job", "test", tasks, 1)
+            results, _ = await _execute_dag(
+                tasks, semaphore, semaphore, mock_bus, "marker_job"
+            )
+
+        assert repair_seen_output == ["wrote code"], (
+            "repair must see original output without marker"
+        )
+        assert results[0]["output"].endswith("[QA gate: tier-1 + tier-2 PASSED]")
 
     @pytest.mark.asyncio
     async def test_completed_event_includes_efficiency_fields(self) -> None:
@@ -1198,7 +1265,7 @@ async def test_execute_dag_timeout_branch_publishes_timeout() -> None:
 
         mock_bus = MagicMock(spec=DelegationBus)
         await create_capsule("job", "test", tasks, 1)
-        results = await _execute_dag(tasks, semaphore, semaphore, mock_bus, "job")
+        results, _ = await _execute_dag(tasks, semaphore, semaphore, mock_bus, "job")
 
     assert results[0]["status"] == TaskStatus.TIMEOUT
     published = [
@@ -1324,7 +1391,7 @@ async def test_run_milestone_propagates_terminal_capsule_failure() -> None:
     with (
         patch(
             "supporter.tools.delegate.scheduler._execute_dag",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=([], {})),
         ),
         patch(
             "supporter.tools.delegate.scheduler.mark_capsule_completed",
@@ -1605,3 +1672,350 @@ def test_global_semaphore_is_single_shared_object() -> None:
     assert api.__dict__["_get_global_semaphore"] is _get_global_semaphore
     assert _get_global_semaphore() is _get_global_semaphore()
     assert getattr(api, "_GLOBAL_SEMAPHORE", None) is None
+
+
+@pytest.mark.asyncio
+async def test_active_delegation_discarded_on_setup_failure() -> None:
+    """Discard _ACTIVE_DELEGATIONS when setup raises before callback registration."""
+    from supporter.tools.delegate import api
+
+    _ACTIVE_DELEGATIONS.clear()
+    try:
+        tasks_json = '[{"id": "t1", "task": "test"}]'
+        with (
+            patch(
+                "supporter.tools.delegate.api.create_capsule",
+                new=AsyncMock(side_effect=RuntimeError("disk full")),
+            ),
+            pytest.raises(Exception, match="Delegation failed"),
+        ):
+            await api.delegate_tasks("boom", tasks_json)
+
+        assert len(_ACTIVE_DELEGATIONS) == 0, (
+            f"Expected empty, got {_ACTIVE_DELEGATIONS}"
+        )
+    finally:
+        _ACTIVE_DELEGATIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_active_delegation_not_blocked_after_setup_failure() -> None:
+    """A failed delegation must not permanently block subsequent calls."""
+    from supporter.tools.delegate import api
+
+    _ACTIVE_DELEGATIONS.clear()
+    try:
+        tasks_json = '[{"id": "t1", "task": "test"}]'
+        with (
+            patch(
+                "supporter.tools.delegate.api.create_capsule",
+                new=AsyncMock(side_effect=RuntimeError("disk full")),
+            ),
+            pytest.raises(Exception, match="Delegation failed"),
+        ):
+            await api.delegate_tasks("boom1", tasks_json)
+
+        # Second call must not be blocked by the failed first call
+        with (
+            patch(
+                "supporter.tools.delegate.api.create_capsule",
+                new=AsyncMock(side_effect=RuntimeError("disk full")),
+            ),
+            pytest.raises(Exception, match="Delegation failed"),
+        ):
+            await api.delegate_tasks("boom2", tasks_json)
+
+    finally:
+        _ACTIVE_DELEGATIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_repaired_completed_not_overridden_to_error() -> None:
+    """Repaired COMPLETED is not forced back to ERROR by pre-repair snapshot."""
+    from supporter.tools.delegate.bus import DelegationBus
+
+    tasks = [
+        {
+            "id": "a",
+            "task": "t",
+            "tools": {"read_file"},
+            "model": "m",
+            "persona": "p",
+            "context": "",
+            "timeout": 10,
+            "depends_on": [],
+        }
+    ]
+    semaphore = asyncio.Semaphore(5)
+    mock_bus = MagicMock(spec=DelegationBus)
+
+    pre_verification = SubtaskVerificationResult(
+        task_id="a", passed=False, reason="tier-1 tests failing"
+    )
+    post_verification = SubtaskVerificationResult(
+        task_id="a", passed=True, marker="[QA gate: tier-1 + tier-2 PASSED]"
+    )
+    verify_call_count = 0
+
+    async def counting_verify(*_args: Any, **_kwargs: Any) -> SubtaskVerificationResult:
+        nonlocal verify_call_count
+        verify_call_count += 1
+        return pre_verification if verify_call_count == 1 else post_verification
+
+    async def successful_repair(
+        task: Any, result: Any, *_a: Any, **_kw: Any
+    ) -> tuple[dict[str, Any], bool]:
+        result = {**result, "output": "repaired output"}
+        return result, True
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler.run_sub_agent",
+            new=AsyncMock(
+                return_value={
+                    "id": "a",
+                    "status": TaskStatus.COMPLETED,
+                    "output": "repaired output",
+                    "duration": 1.0,
+                }
+            ),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.run_qa_gate_verify_only",
+            new_callable=AsyncMock,
+            side_effect=counting_verify,
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler._repair_or_rerequest",
+            new=successful_repair,
+        ),
+    ):
+        await create_capsule("repair_job", "test", tasks, 1)
+        results, verifications = await _execute_dag(
+            tasks, semaphore, semaphore, mock_bus, "repair_job"
+        )
+
+    assert results[0]["status"] == TaskStatus.COMPLETED, (
+        f"Repaired COMPLETED must not be forced to ERROR, got {results[0]['status']}"
+    )
+    assert verifications["a"].passed is True
+    assert verify_call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_save_verifications_failure_does_not_crash_milestone() -> None:
+    """A write failure in save_verifications must not prevent MilestoneCompleted."""
+    from supporter.tools.delegate.bus import DelegationBus
+
+    bus = MagicMock(spec=DelegationBus)
+    events: list[Any] = []
+
+    def capturing_publish(event: Any) -> None:
+        events.append(event)
+
+    bus.publish = capturing_publish
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler._execute_dag",
+            new=AsyncMock(return_value=([], {})),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.mark_capsule_completed",
+            new=AsyncMock(),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.save_verifications",
+            new=AsyncMock(side_effect=RuntimeError("disk full")),
+        ),
+        patch("supporter.tools.delegate.scheduler.remove_bus"),
+    ):
+        await run_milestone(
+            "m",
+            [],
+            asyncio.Semaphore(1),
+            asyncio.Semaphore(1),
+            bus,
+            "save_fail",
+        )
+
+    milestone_events = [e for e in events if isinstance(e, MilestoneCompleted)]
+    assert len(milestone_events) == 1, (
+        f"MilestoneCompleted must fire even when save_verifications fails, "
+        f"got events: {[type(e).__name__ for e in events]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_double_verify_when_repair_is_noop() -> None:
+    """Verify no double QA verify call when repair is a no-op."""
+    from supporter.tools.delegate.bus import DelegationBus
+
+    tasks = [
+        {
+            "id": "t1",
+            "task": "do something",
+            "tools": {"read_file"},
+            "model": "m",
+            "persona": "p",
+            "context": "",
+            "timeout": 10,
+            "depends_on": [],
+        }
+    ]
+    semaphore = asyncio.Semaphore(5)
+    mock_bus = MagicMock(spec=DelegationBus)
+    verify_calls = 0
+
+    async def counting_verify(*_args: Any, **_kwargs: Any) -> SubtaskVerificationResult:
+        nonlocal verify_calls
+        verify_calls += 1
+        return SubtaskVerificationResult(task_id="t1", passed=True, reason="")
+
+    async def noop_repair(
+        task: Any, result: Any, *_a: Any, **_kw: Any
+    ) -> tuple[dict[str, Any], bool]:
+        return result, False
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler.run_sub_agent",
+            new=AsyncMock(
+                return_value={
+                    "id": "t1",
+                    "status": TaskStatus.COMPLETED,
+                    "output": "valid output",
+                    "duration": 1.0,
+                }
+            ),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.run_qa_gate_verify_only",
+            new=AsyncMock(side_effect=counting_verify),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler._repair_or_rerequest",
+            new=noop_repair,
+        ),
+    ):
+        await create_capsule("noop_repair_job", "test", tasks, 1)
+        _results, verifications = await _execute_dag(
+            tasks, semaphore, semaphore, mock_bus, "noop_repair_job"
+        )
+
+    assert verify_calls == 1, (
+        f"Expected exactly 1 QA verify call when repair is no-op, got {verify_calls}"
+    )
+    assert verifications["t1"].passed is True
+
+
+@pytest.mark.asyncio
+async def test_reverify_uses_distinct_attempt_after_repair() -> None:
+    """Re-verification after repair uses distinct attempt number for unique ids."""
+    from supporter.tools.delegate.bus import DelegationBus
+
+    tasks = [
+        {
+            "id": "t1",
+            "task": "do something",
+            "tools": {"read_file"},
+            "model": "m",
+            "persona": "p",
+            "context": "",
+            "timeout": 10,
+            "depends_on": [],
+        }
+    ]
+    semaphore = asyncio.Semaphore(5)
+    mock_bus = MagicMock(spec=DelegationBus)
+
+    # Track the attempt values passed to run_qa_gate_verify_only
+    verify_attempts: list[int] = []
+
+    async def tracking_verify(
+        _task: Any, _result: Any, *_a: Any, attempt: int = 0, **_kw: Any
+    ) -> SubtaskVerificationResult:
+        nonlocal verify_attempts
+        verify_attempts.append(attempt)
+        return SubtaskVerificationResult(task_id="t1", passed=True, reason="")
+
+    async def successful_repair(
+        task: Any, result: Any, *_a: Any, **_kw: Any
+    ) -> tuple[dict[str, Any], bool]:
+        result = {**result, "output": "repaired output"}
+        return result, True
+
+    with (
+        patch(
+            "supporter.tools.delegate.scheduler.run_sub_agent",
+            new=AsyncMock(
+                return_value={
+                    "id": "t1",
+                    "status": TaskStatus.COMPLETED,
+                    "output": "repaired output",
+                    "duration": 1.0,
+                }
+            ),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler.run_qa_gate_verify_only",
+            new=AsyncMock(side_effect=tracking_verify),
+        ),
+        patch(
+            "supporter.tools.delegate.scheduler._repair_or_rerequest",
+            new=successful_repair,
+        ),
+    ):
+        await create_capsule("attempt_test_job", "test", tasks, 1)
+        _results, _verifications = await _execute_dag(
+            tasks, semaphore, semaphore, mock_bus, "attempt_test_job"
+        )
+
+    # Should see exactly 2 calls with attempt=0 then attempt=1
+    assert verify_attempts == [0, 1], (
+        f"Expected [0, 1] for attempt values, got {verify_attempts}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_preserves_prior_verifications() -> None:
+    """save_verifications merges with existing capsule verifications."""
+    from supporter.tools.delegate.capsule import (
+        load_capsule,
+        save_verifications,
+    )
+
+    await create_capsule("resume_ver", "test", [_task("a"), _task("b")], 1)
+
+    # Simulate first run's verification for task "a"
+    first_ver = {"a": SubtaskVerificationResult(task_id="a", passed=True, reason="")}
+    await save_verifications("resume_ver", first_ver)
+
+    capsule = load_capsule("resume_ver")
+    assert capsule["verifications"]["a"]["passed"] is True
+
+    # Simulate resumed run that only verifies task "b"
+    second_ver = {
+        "b": SubtaskVerificationResult(task_id="b", passed=False, reason="fail")
+    }
+    await save_verifications("resume_ver", second_ver)
+
+    capsule = load_capsule("resume_ver")
+    # Task "a"'s verification must survive the resumed save
+    assert capsule["verifications"]["a"]["passed"] is True
+    assert capsule["verifications"]["b"]["passed"] is False
+    assert capsule["verifications"]["b"]["reason"] == "fail"
+
+
+def _task(task_id: str, depends_on: list[str] | None = None) -> dict[str, Any]:
+    """Build a minimal task dict for capsule/resume tests."""
+    return {
+        "id": task_id,
+        "task": f"task {task_id}",
+        "tools": set(),
+        "model": "m",
+        "persona": "p",
+        "context": "",
+        "timeout": 10,
+        "depends_on": depends_on or [],
+    }

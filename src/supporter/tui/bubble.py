@@ -189,7 +189,7 @@ class MessageBubble(Vertical):
 
     def watch_collapsed(self, value: bool) -> None:
         if self._meta_label:
-            visible = (
+            visible = bool(
                 not value
                 and not self._meta_suppressed
                 and self.role != "user"
@@ -490,9 +490,7 @@ class MessageBubble(Vertical):
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
             self._meta_label.display = (
-                not self.collapsed
-                and not self.defer_meta
-                and not self._meta_suppressed
+                not self.collapsed and not self.defer_meta and not self._meta_suppressed
             )
         if self._message_view and self._message_view.size.width > 0:
             self._message_view.styles.width = self._message_view.size.width
@@ -564,9 +562,7 @@ class MessageBubble(Vertical):
         alone do NOT — a model that only "thinks" and returns no answer would
         otherwise leave an empty bordered bar.
         """
-        return bool(
-            self.content.strip() or self.tool_calls or self._has_appended
-        )
+        return bool(self.content.strip() or self.tool_calls or self._has_appended)
 
     def replace_content(self, new_text: str) -> None:
         """Replace plain-text content of a finalized pure-text bubble.

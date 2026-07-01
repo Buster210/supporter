@@ -16,7 +16,6 @@ from ..file_ops import validate_path
 from . import guardrails, humanize, session, snapshot
 from .core import BrowseRequest, _page_host
 
-# WI-3: Track whether last _confirm_or_block needed confirmation
 _last_confirmation_needed: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_last_confirmation_needed", default=False
 )
@@ -24,11 +23,11 @@ _last_confirmation_needed: contextvars.ContextVar[bool] = contextvars.ContextVar
 __all__ = [
     "_EVAL_DETAIL_MAX",
     "_NAV_MAX_ATTEMPTS",
+    "_NETWORK_IDLE_CAP_MS",
     "_PAGE_IDS",
     "_PAGE_ID_SEQ",
     "_REF_VISIBLE_TIMEOUT_MS",
     "_ROLE_NAME_JS",
-    "_SETTLE_TIMEOUT_MS",
     "_attach_viewport_image",
     "_capture",
     "_confirm_always",
@@ -67,16 +66,9 @@ _PAGE_ID_SEQ = 0
 
 _EVAL_DETAIL_MAX = 500
 _REF_VISIBLE_TIMEOUT_MS = 8_000
-# WHY: networkidle returns ~500ms after the network goes quiet, so this cap is
-# only paid on pages that never idle (beacons/websockets/polling) — where a
-# longer wait never improves the post-action snapshot. Capped low to avoid
-# burning seconds per action; genuine slow settles use the `waitnetwork` action.
-_SETTLE_TIMEOUT_MS = 1000
+_NETWORK_IDLE_CAP_MS = 1000
 _NAV_MAX_ATTEMPTS = 3
 
-# Chromium net errors safe to retry: timeouts and connection/DNS flaps. Errors
-# that signal a permanent verdict (ERR_BLOCKED_BY_*, ERR_ABORTED, invalid URL)
-# are deliberately absent so a blocked or malformed navigation fails fast.
 _TRANSIENT_NAV_ERRORS = (
     "err_connection_reset",
     "err_connection_closed",
@@ -220,7 +212,6 @@ def _record_locator(page: Any, req: BrowseRequest) -> Any:
 
 
 async def _confirm_or_block(page: Any, req: BrowseRequest, locator: Any) -> str | None:
-    # WI-3: Reset confirmation flag each invocation
     _last_confirmation_needed.set(False)
 
     if locator is not None:
@@ -232,7 +223,6 @@ async def _confirm_or_block(page: Any, req: BrowseRequest, locator: Any) -> str 
     if not guardrails.needs_confirmation(req.action, aria_role, aria_name, host):
         return None
 
-    # WI-3: Mark that confirmation was needed (for trust promotion filtering)
     _last_confirmation_needed.set(True)
 
     target = req.ref or f"frame selector {req.selector!r}"
@@ -366,7 +356,7 @@ async def _post_action_snapshot(page: Any, req: BrowseRequest) -> str:
 
     await page.wait_for_timeout(humanize.jitter_ms(0.3, 0.3, 0.15, 0.6))
     with contextlib.suppress(PlaywrightTimeoutError):
-        await page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
+        await page.wait_for_load_state("networkidle", timeout=_NETWORK_IDLE_CAP_MS)
     return await _capture(page, req, force_full=False, label=f" after {req.action}")
 
 
@@ -386,6 +376,27 @@ async def _attach_viewport_image(page: Any) -> None:
         await sink(img_bytes, "image/png")
     except Exception:
         logger.debug("auto image attach failed", exc_info=True)
+
+
+async def _attach_fullpage_image(page: Any) -> None:
+    sink = guardrails.browse_image_sink
+    if sink is None:
+        return
+    try:
+        max_height_px = config.browse_fullpage_shot_max_px
+        clip = None
+        if max_height_px > 0:
+            page_height = await page.evaluate("() => document.body.scrollHeight")
+            if isinstance(page_height, (int, float)) and page_height > max_height_px:
+                page_width = await page.evaluate("() => document.body.scrollWidth")
+                clip = {"x": 0, "y": 0, "width": page_width, "height": max_height_px}
+        if clip is not None:
+            img_bytes = await page.screenshot(type="png", clip=clip)
+        else:
+            img_bytes = await page.screenshot(type="png", full_page=True)
+        await sink(img_bytes, "image/png")
+    except Exception:
+        logger.debug("auto full-page image attach failed", exc_info=True)
 
 
 async def _diff_text(page: Any, req: BrowseRequest) -> str:

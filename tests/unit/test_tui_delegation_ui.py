@@ -357,8 +357,8 @@ async def test_listener_injects_capsule_result_on_milestone_completed(
     await listener.listen("job123")
 
     message = inject_message.call_args.args[0]
-    assert "DELEGATION_CAPSULE_RESULT (json):" in message
-    assert '"status": "completed"' in message
+    assert "Delegation result" in message
+    assert "status: completed" in message
     drop_progress.assert_called_once_with("job123")
 
 
@@ -402,7 +402,7 @@ async def test_listener_falls_back_for_completed_milestone(
         "job123",
         status="completed_with_failures",
     )
-    assert '"completed_with_failures"' in inject_message.call_args.args[0]
+    assert "completed_with_failures" in inject_message.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -425,8 +425,7 @@ async def test_listener_falls_back_for_cancelled_milestone(
     await listener.listen("job123")
 
     message = inject_message.call_args.args[0]
-    assert '"status": "cancelled"' in message
-    assert '"total_duration": 3.21' in message
+    assert "status: cancelled" in message
 
 
 @pytest.mark.asyncio
@@ -483,6 +482,7 @@ async def test_capsule_result_reaches_model_without_raw_bubble() -> None:
 @pytest.mark.asyncio
 async def test_render_delegation_signal_mounts_centered_label() -> None:
     app = MagicMock()
+    app._is_streaming = False
     chat_view = MagicMock(spec=ChatContainer)
     chat_view.mount = AsyncMock()
     chat_view.follow_end = MagicMock()
@@ -528,7 +528,7 @@ async def test_process_system_message_uses_agent_role_without_active_turn() -> N
     await bound("system-only")
 
     app._process_message_cycle.assert_awaited_once_with(
-        "system-only", mount_user=True, role="agent"
+        "system-only", mount_user=False, role="agent"
     )
 
 
@@ -557,10 +557,10 @@ def test_planner_capsule_mounts_visible_bubble_and_feeds_model() -> None:
     assert "## Plan: Design the thing" in markdown
     assert "lay out modules" in markdown
     assert "DELEGATION_CAPSULE_RESULT" not in markdown
-    # ...and the full JSON still reaches the model for synthesis.
+    # ...and a human-readable summary still reaches the model for synthesis.
     model_msg = inject_message.call_args.args[0]
-    assert "DELEGATION_CAPSULE_RESULT (json):" in model_msg
-    assert '"agent": "planner"' in model_msg
+    assert "Delegation result" in model_msg
+    assert "agent: planner" in model_msg
 
 
 def test_worker_capsule_does_not_mount_bubble() -> None:
@@ -577,7 +577,7 @@ def test_worker_capsule_does_not_mount_bubble() -> None:
     listener._inject_capsule_result(payload)
 
     plan_bubble_injector.assert_not_called()
-    assert "DELEGATION_CAPSULE_RESULT (json):" in inject_message.call_args.args[0]
+    assert "Delegation result" in inject_message.call_args.args[0]
 
 
 def test_drop_delegation_progress_collapses_block() -> None:

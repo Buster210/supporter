@@ -85,6 +85,7 @@ class AppConfig:
     browse_batch_chars_cap: int = 150_000
     browse_max_links: int = 100
     browse_eval_chars_cap: int = 16_000
+    browse_fullpage_shot_max_px: int = 12_000
     durable_history_enabled: bool = True
     history_dir: str = ".supporter/history"
     replay_image_count: int = 2
@@ -96,16 +97,22 @@ class AppConfig:
     idle_monitor_enabled: bool = True
     empty_resume_policy: str = "trust"
 
-    # WI-3: Generalized trust gating
     browser_trusted_hosts: str = ""
     browser_micro_behavior_rate: float = 0.06
     browser_promotion_threshold: int = 5
-    # Auto-approve browser actions (files remain gated)
     browser_auto_approve: bool = True
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-oss-120b:free"
     # G2: Plan → Implement → Verify → Replan loop: max replan cycles on verify failure
     replan_max_cycles: int = 3
+
+
+@dataclass(frozen=True)
+class SubtaskVerificationResult:
+    task_id: str
+    passed: bool
+    reason: str = ""
+    marker: str = ""
 
 
 @dataclass
@@ -291,3 +298,18 @@ class TaskAnomaly(DelegationEvent):
 class TaskUpdateSent(DelegationEvent):
     task_id: str
     message: str
+
+
+@dataclass(frozen=True)
+class VerificationVerdict(DelegationEvent):
+    """A verification outcome for the UI.
+
+    scope='task' for Phase A per-subtask QA, scope='objective' for Phase B
+    verify_plan.
+    """
+
+    task_id: str  # subtask id, or the objective label for scope='objective'
+    scope: str  # "task" | "objective"
+    passed: bool
+    reason: str = ""
+    round: int = 0  # Phase A correction round (0 for objective)

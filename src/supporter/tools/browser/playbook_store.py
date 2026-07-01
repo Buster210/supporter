@@ -57,8 +57,8 @@ class Playbook:
     url_template: str = "/*"
     schema_version: int = SCHEMA_VERSION  # v1->v2 additive
     variables: list[str] = field(default_factory=list)  # B: template variables
-    version: int = 1  # WI-2: auto-repair version counter
-    previous_version_ref: str = ""  # WI-2: archive filename of prior version
+    version: int = 1
+    previous_version_ref: str = ""
     success_count: int = 0  # D: replay success metric
     fail_count: int = 0  # D: replay failure metric
     last_used_ts: float = 0.0  # D: last replay timestamp
@@ -104,9 +104,6 @@ def _save_playbook_sync(playbook: Playbook) -> None:
 
 async def save_playbook(playbook: Playbook) -> None:
     await asyncio.to_thread(_save_playbook_sync, playbook)
-
-
-# ── WI-2: Versioned archive helpers ──────────────────────────────────────────
 
 
 def _archive_playbook_sync(host: str, goal: str) -> str | None:
@@ -279,9 +276,6 @@ def _delete_playbook_sync(host: str, goal: str) -> bool:
     return True
 
 
-# ── WI-1: URL pattern matching ──────────────────────────────────────────────
-
-
 def _normalize_url_path(url: str) -> str:
     """Normalize a URL path by replacing volatile segments with wildcards.
 
@@ -358,8 +352,6 @@ def url_pattern_match(current_url: str, template: str) -> bool:
 
     return bool(re.fullmatch(regex, current_path))
 
-
-# ── WI-1: In-memory host index ──────────────────────────────────────────────
 
 _HOST_INDEX: dict[str, dict[str, list[dict[str, Any]]]] = {}
 _HOST_INDEX_TTL: float = 60.0

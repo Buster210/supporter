@@ -71,7 +71,8 @@ class ChatAgent:
         # arrives; cleared after verification in the TUI message cycle.
         self.pending_plan_objective: str = ""
         self.pending_plan_text: str = ""
-        self.on_summarize: Callable[[int, int, int], None] | None = None  # (turns_summarized, kept_recent, cache_size)
+        # (turns_summarized, kept_recent, cache_size)
+        self.on_summarize: Callable[[int, int, int], None] | None = None
         # WHY: Cache summary state so compaction survives AFC clobber.
         # _summary covers turns [0, _summary_turn_count) of self.history;
         # _summary_fingerprint is a structural fingerprint of that same prefix,
@@ -284,6 +285,7 @@ class ChatAgent:
         cap = config.history_max_turns
         if cap and len(self.history) > cap:
             del self.history[: len(self.history) - cap]
+
     def summarizer_cache_info(self) -> dict[str, int]:
         """Return summarizer cache occupancy for TUI observability."""
         return summarizer_cache_info()

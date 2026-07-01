@@ -36,8 +36,8 @@ async def test_verify_plan_not_done() -> None:
     assert reason == "only 12 of 50 posts collected"
 
 
-async def test_verify_plan_fail_open_on_exception() -> None:
-    """provider.generate raises -> fail-open: returns (True, ...), never raises."""
+async def test_verify_plan_fail_closed_on_exception() -> None:
+    """provider.generate raises -> fail-closed: returns (False, ...), never raises."""
     fake_provider = SimpleNamespace(
         generate=AsyncMock(side_effect=RuntimeError("network error"))
     )
@@ -47,5 +47,5 @@ async def test_verify_plan_fail_open_on_exception() -> None:
             "collect 50 posts", "PLAN BODY", "RESULT BODY", "gemma-4-31b-it"
         )
 
-    assert ok is True
+    assert ok is False
     assert "network error" in reason

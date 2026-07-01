@@ -13,6 +13,7 @@ and includes prior failure context so the planner can refine.
 from __future__ import annotations
 
 from .decision_log import log_decision
+from .types import SubtaskVerificationResult
 
 __all__ = ["ReplanContext", "format_replan_prompt"]
 
@@ -20,13 +21,19 @@ __all__ = ["ReplanContext", "format_replan_prompt"]
 class ReplanContext:
     """Tracks state across replan cycles."""
 
-    def __init__(self, objective: str, max_cycles: int = 3) -> None:
+    def __init__(
+        self,
+        objective: str,
+        max_cycles: int = 3,
+        subtask_failures: list[SubtaskVerificationResult] | None = None,
+    ) -> None:
         self.objective = objective
         self.max_cycles = max_cycles
         self.cycle = 0
         self.plan = ""
         self.last_result = ""
         self.failures: list[str] = []
+        self.subtask_failures: list[SubtaskVerificationResult] = subtask_failures or []
 
     def next_cycle(self) -> bool:
         """Advance to the next cycle. Return True if within budget."""
@@ -47,14 +54,21 @@ class ReplanContext:
         )
 
     def format_replan_prompt_context(self) -> str:
-        """Format context for the replan prompt (used by caller)."""
         return format_replan_prompt(
-            self.objective, self.plan, self.last_result, self.failures
+            self.objective,
+            self.plan,
+            self.last_result,
+            self.failures,
+            self.subtask_failures,
         )
 
 
 def format_replan_prompt(
-    objective: str, plan: str, result: str, failures: list[str]
+    objective: str,
+    plan: str,
+    result: str,
+    failures: list[str],
+    subtask_failures: list[SubtaskVerificationResult] | None = None,
 ) -> str:
     """Format a replan prompt with objective, plan, result, and failure context.
 
@@ -69,12 +83,19 @@ def format_replan_prompt(
     if result:
         parts.append(f"IMPLEMENTATION RESULT:\n{result}\n")
 
+    if subtask_failures:
+        failed = [f for f in subtask_failures if not f.passed]
+        if failed:
+            failed_lines = [f"- {f.task_id}: {f.reason or 'unknown'}" for f in failed]
+            parts.append("FAILED SUBTASKS:\n" + "\n".join(failed_lines) + "\n")
+
     if failures:
         failure_text = "\n".join(f"- {f}" for f in failures)
         parts.append(f"VERIFICATION FAILURES:\n{failure_text}\n")
 
     parts.append(
-        "Please revise the plan to address the failures and produce a NEW plan."
+        "Please revise the plan to address ALL failures (subtask and verification) "
+        "and produce a NEW plan."
     )
 
     return "".join(parts)

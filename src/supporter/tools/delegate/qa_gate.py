@@ -11,8 +11,11 @@ On any failure the gate feeds the diagnosis back and re-runs, up to
 ``delegate_correction_rounds`` correction rounds. Work that never passes both
 tiers is returned as ERROR with a diagnosis — never as COMPLETED.
 
-For gemini backend tasks, the gate validates the structured payload output
-with confidence requirements instead of tier-1/tier-2 verification.
+For gemini backend tasks, verification is role-aware: finder/research roles
+validate the structured payload output with confidence requirements; all other
+roles (page-pilot, custom, planner, ...) are judged against their actual output
+and task spec via ``_output_verify`` (no git-diff assumptions). Only the
+opencode backend uses the git-diff tier-1/tier-2 path above.
 """
 
 import asyncio
@@ -23,9 +26,9 @@ from typing import Any
 
 from ...config import config
 from ...logger import logger
-from ...types import TaskStatus
+from ...types import SubtaskVerificationResult, TaskStatus, VerificationVerdict
 from .agents import run_sub_agent
-from .backends import GEMINI_BACKEND, OPENCODE_BACKEND, QA_REJECTION_MARKER
+from .backends import GEMINI_BACKEND, OPENCODE_BACKEND
 from .bus import DelegationBus
 from .capsule import validate_delegation_payload
 from .opencode_backend import _resolve_repo
@@ -309,129 +312,144 @@ async def _correct(
     return await _run(task, semaphore, bus, job_id)
 
 
-async def run_qa_gate(
+async def _output_verify(
+    base: dict[str, Any],
+    attempt: int,
+    output: str,
+    semaphore: asyncio.Semaphore,
+    bus: DelegationBus,
+    job_id: str,
+) -> tuple[bool, str]:
+    """Verify a non-code subtask (browser/general/no-role) against its own output.
+
+    No git assumptions: hands the verifier the task spec plus the produced
+    output text and asks whether it satisfies the task.
+    """
+    instructions = (
+        "A previous worker completed a delegated task that does NOT produce a "
+        "git diff (e.g. browser automation, research, or a general task). "
+        "Judge ONLY from the task spec and the output below -- do not run "
+        "`git diff` or assume any files changed. End your reply with exactly "
+        "one line: `QA-VERDICT: APPROVE` if the output satisfies the task, "
+        "otherwise `QA-VERDICT: REJECT`, followed by a one-line reason on "
+        "rejection.\n\nORIGINAL TASK:\n" + base["task"] + "\n\nOUTPUT:\n" + output
+    )
+    task = _make_task(
+        base,
+        f"output_verify_{attempt}",
+        instructions,
+        backend=GEMINI_BACKEND,
+        agent=None,
+    )
+    ran, judge_output = await _run(task, semaphore, bus, job_id)
+    return ran and _verdict_passed(judge_output, _TIER2_TOKEN, "approve"), judge_output
+
+
+async def run_qa_gate_verify_only(
     task: dict[str, Any],
     result: dict[str, Any],
     semaphore: asyncio.Semaphore,
     bus: DelegationBus,
     job_id: str,
-) -> dict[str, Any]:
-    """Gate a task result through verification.
-
-    For opencode tasks: tier-1 and tier-2 verification with correction rounds.
-    For gemini tasks (when delegate_persist_noncode is enabled): predicate-based
-    validation with confidence requirements.
-
-    Returns the result dict: COMPLETED with a QA note appended on approval, or
-    ERROR with a diagnosis if verification cannot pass within correction rounds.
-    """
-    # No off-switch: the gate always runs on completed work (code restriction,
-    # not a prompt). Only non-completed results skip it (nothing to verify).
+    attempt: int = 0,
+) -> SubtaskVerificationResult:
+    """Correction is deferred to post-plan verification during DAG execution."""
+    task_id = task.get("id", "unknown")
     if result.get("status") != TaskStatus.COMPLETED:
-        return result
+        return SubtaskVerificationResult(
+            task_id=task_id,
+            passed=False,
+            reason=f"task status: {result.get('status', 'unknown')}",
+        )
 
     backend = task.get("backend")
     if backend is None:
-        return result
+        return SubtaskVerificationResult(task_id=task_id, passed=True)
 
-    # Handle opencode path (unchanged behavior)
     if backend == OPENCODE_BACKEND:
-        rounds = config.delegate_correction_rounds
-        task_id = task["id"]
-        last_reason = "verification did not pass"
-
-        for attempt in range(rounds + 1):
-            tier1_ok, tier1_output = await _tier1(task, attempt, semaphore, bus, job_id)
-            if not tier1_ok:
-                last_reason = f"tier-1 tests failing:\n{tier1_output[-500:]}"
-            else:
-                approved, rejections = await _tier2(
-                    task, attempt, tier1_output, semaphore, bus, job_id
+        tier1_ok, tier1_output = await _tier1(task, attempt, semaphore, bus, job_id)
+        if not tier1_ok:
+            reason = f"tier-1 tests failing:\n{tier1_output[-500:]}"
+            bus.publish(
+                VerificationVerdict(
+                    job_id=job_id,
+                    task_id=task_id,
+                    scope="task",
+                    passed=False,
+                    reason=reason,
+                    round=attempt,
                 )
-                if approved:
-                    logger.info(f"QA gate: task '{task_id}' approved (round {attempt})")
-                    result["output"] += "\n\n[QA gate: tier-1 + tier-2 PASSED]"
-                    return result
-                last_reason = f"tier-2 rejected: {rejections}"
-
-            if attempt >= rounds:
-                break
-            logger.info(
-                f"QA gate: task '{task_id}' correction round {attempt + 1}/{rounds}"
             )
-            fixed, fix_output = await _correct(
-                task, attempt, last_reason, semaphore, bus, job_id
+            return SubtaskVerificationResult(
+                task_id=task_id, passed=False, reason=reason
             )
-            if not fixed:
-                last_reason = (
-                    f"correction round {attempt + 1} did not complete:\n"
-                    f"{fix_output[-500:]}"
-                )
-                logger.warning(
-                    f"QA gate: task '{task_id}' correction round {attempt + 1} failed"
-                )
-                break
 
-        logger.warning(f"QA gate: task '{task_id}' rejected after {rounds} rounds")
-        result["status"] = TaskStatus.ERROR
-        result["output"] = (
-            f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
+        approved, rejections = await _tier2(
+            task, attempt, tier1_output, semaphore, bus, job_id
         )
-        return result
+        if approved:
+            bus.publish(
+                VerificationVerdict(
+                    job_id=job_id,
+                    task_id=task_id,
+                    scope="task",
+                    passed=True,
+                    round=attempt,
+                )
+            )
+            return SubtaskVerificationResult(
+                task_id=task_id, passed=True, marker="[QA gate: tier-1 + tier-2 PASSED]"
+            )
 
-    # Handle gemini path (when delegate_persist_noncode is enabled)
-    if config.delegate_persist_noncode and backend == GEMINI_BACKEND:
-        agent = task.get("agent")
-        output = result.get("output", "")
-        task_id = task["id"]
+        reason = f"tier-2 rejected: {rejections}"
+        bus.publish(
+            VerificationVerdict(
+                job_id=job_id,
+                task_id=task_id,
+                scope="task",
+                passed=False,
+                reason=reason,
+                round=attempt,
+            )
+        )
+        return SubtaskVerificationResult(task_id=task_id, passed=False, reason=reason)
 
+    agent = task.get("agent")
+    output = result.get("output", "")
+
+    if config.delegate_persist_noncode and agent in _FINDING_ROLES:
         failure = _gemini_predicate_failure(output, agent)
         if failure is None:
-            logger.info(f"QA gate: gemini task '{task_id}' passed predicate")
-            result["output"] += "\n\n[QA gate: gemini predicate PASSED]"
-            return result
-
-        # Needs correction - run correction loop with gemini predicate
-        rounds = config.delegate_correction_rounds
-        last_reason = f"gemini output failed: {failure}"
-
-        for attempt in range(rounds + 1):
-            if attempt >= rounds:
-                break
-            logger.info(
-                f"QA gate: gemini task '{task_id}' correction round "
-                f"{attempt + 1}/{rounds}"
+            return SubtaskVerificationResult(
+                task_id=task_id,
+                passed=True,
+                marker="[QA gate: gemini predicate PASSED]",
             )
-            fixed, fix_output = await _correct(
-                task, attempt, last_reason, semaphore, bus, job_id
+        reason = f"gemini output failed: {failure}"
+        return SubtaskVerificationResult(task_id=task_id, passed=False, reason=reason)
+
+    approved, judge_output = await _output_verify(
+        task, attempt, output, semaphore, bus, job_id
+    )
+    if approved:
+        bus.publish(
+            VerificationVerdict(
+                job_id=job_id, task_id=task_id, scope="task", passed=True, round=attempt
             )
-            if not fixed:
-                last_reason = (
-                    f"correction round {attempt + 1} did not complete:\n"
-                    f"{fix_output[-500:]}"
-                )
-                logger.warning(
-                    f"QA gate: gemini task '{task_id}' correction round "
-                    f"{attempt + 1} failed"
-                )
-                break
-            failure = _gemini_predicate_failure(fix_output, agent)
-            if failure is None:
-                logger.info(
-                    f"QA gate: gemini task '{task_id}' approved (round {attempt + 1})"
-                )
-                result["output"] = fix_output
-                result["output"] += "\n\n[QA gate: gemini predicate PASSED]"
-                return result
-            last_reason = f"gemini output failed: {failure}"
-
-        logger.warning(
-            f"QA gate: gemini task '{task_id}' rejected after {rounds} rounds"
         )
-        result["status"] = TaskStatus.ERROR
-        result["output"] = (
-            f"{QA_REJECTION_MARKER} after {rounds} correction rounds. {last_reason}"
+        return SubtaskVerificationResult(
+            task_id=task_id, passed=True, marker="[QA gate: output verification PASSED]"
         )
-        return result
 
-    return result
+    reason = f"output verification rejected: {judge_output[-300:]}"
+    bus.publish(
+        VerificationVerdict(
+            job_id=job_id,
+            task_id=task_id,
+            scope="task",
+            passed=False,
+            reason=reason,
+            round=attempt,
+        )
+    )
+    return SubtaskVerificationResult(task_id=task_id, passed=False, reason=reason)

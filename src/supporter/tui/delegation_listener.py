@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from ..logger import logger
+from ..tools.delegate.backends import QA_REJECTION_MARKER
 from ..tools.delegate.formatting import format_delegation_table
 
 _OUTPUT_TAIL_MAX_CHARS = 500
@@ -169,6 +170,8 @@ class DelegationListener:
         plan_bubble_injector: PlanBubbleInjector | None = None,
         plan_storer: Callable[[str, str], None] | None = None,
         render_task_done: Callable[[str, str], None] | None = None,
+        render_verification: Callable[[str, bool, str, str], None] | None = None,
+        collapse_verification: Callable[[str], None] | None = None,
     ) -> None:
         self._inject_message = inject_message
         self._drop_progress = drop_progress
@@ -179,7 +182,8 @@ class DelegationListener:
         self._plan_bubble_injector = plan_bubble_injector
         self._plan_storer = plan_storer
         self._output_tails: dict[str, str] = {}
-
+        self._render_verification = render_verification
+        self._collapse_verification = collapse_verification
 
     def _on_task_output_chunk(self, event: Any, job_id: str, bus: Any) -> None:
         """Append to bounded tail and re-render on newline boundaries."""
@@ -205,12 +209,17 @@ class DelegationListener:
         msg = f"Update sent to task {event.task_id}: {event.message}"
         self._render_signal(msg)
 
+    def _on_verification_verdict(self, event: Any, job_id: str, bus: Any) -> None:
+        """Handle VerificationVerdict — add entry to verification block."""
+        if self._render_verification is not None:
+            self._render_verification(job_id, event.passed, event.task_id, event.reason)
+
     def _on_task_terminal(self, event: Any, job_id: str, bus: Any, kind: str) -> None:
         """Handle TaskCompleted/Failed/TimedOut/Skipped."""
         self._clear_task_tail(bus, event.task_id)
-        text = format_delegation_update(
-            job_id, bus, task_id=event.task_id, status=kind
-        )
+        if kind == "FAIL" and QA_REJECTION_MARKER in getattr(event, "error", ""):
+            kind = "DONE"
+        text = format_delegation_update(job_id, bus, task_id=event.task_id, status=kind)
         # Route the task-complete signal into the delegation block (ordered
         # section) when wired; fall back to a standalone signal otherwise.
         if self._render_task_done is not None:
@@ -261,15 +270,13 @@ class DelegationListener:
         status = "cancelled" if not hasattr(event, "results") else "completed"
         payload = self._serialize_milestone_result(event, job_id, status=status)
         self._inject_capsule_result(payload)
-        if self._render_summary is not None:
-            if status == "cancelled":
-                summary = f"Job {job_id} cancelled"
-            else:
-                summary = format_delegation_summary(job_id, bus)
+        if self._render_summary is not None and payload.get("status") == "completed":
+            summary = format_delegation_summary(job_id, bus)
             self._render_summary(job_id, summary)
         self._drop_progress(job_id)
+        if self._collapse_verification is not None:
+            self._collapse_verification(job_id)
         return True
-
 
     async def listen(self, job_id: str) -> None:
         """Listen for delegation events on job_id and render to UI in real time.
@@ -290,6 +297,7 @@ class DelegationListener:
             TaskStarted,
             TaskTimedOut,
             TaskUpdateSent,
+            VerificationVerdict,
         )
 
         terminal_tasks = (
@@ -318,8 +326,9 @@ class DelegationListener:
                     etype = type(event)
 
                     if etype is TaskOutputChunk:
+                        chunk_event = cast(TaskOutputChunk, event)
                         self._on_task_output_chunk(event, job_id, bus)
-                        if "\n" in event.chunk:
+                        if "\n" in chunk_event.chunk:
                             await self._upsert_progress_live(job_id, bus)
                     elif etype in terminal_tasks:
                         self._on_task_terminal(event, job_id, bus, task_kinds[etype])
@@ -330,6 +339,9 @@ class DelegationListener:
                         self._on_task_anomaly(event)
                     elif etype is TaskUpdateSent:
                         self._on_task_update_sent(event)
+                    elif etype is VerificationVerdict:
+                        self._on_verification_verdict(event, job_id, bus)
+
                     elif etype in milestone_events:
                         self._on_milestone_terminal(event, job_id, bus)
                         break
@@ -337,7 +349,6 @@ class DelegationListener:
                 bus.unsubscribe(queue)
         except Exception as e:
             logger.error(f"Delegation listener failed for {job_id}: {e}")
-
 
     def _clear_task_tail(self, bus: Any, task_id: str) -> None:
         """Drop a task's rolling tail on terminal status."""

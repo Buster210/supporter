@@ -8,15 +8,10 @@ from . import guardrails, session
 from .core import BrowseRequest, _page_host
 from .handlers import HANDLERS
 from .recorder import _record_step
-from .support import _attach_viewport_image
+from .support import _attach_fullpage_image, _attach_viewport_image
 
 __all__ = ["browse", "session"]
 
-# State-changing actions: after these, attach a viewport screenshot so the model
-# sees the page alongside the a11y snapshot (Live only — sink is None otherwise).
-# Excludes `screenshot` (its handler already sinks), `diff` (deliberate
-# token-saver), and read-only meta actions (status/tabs/extract/eval/cookies/
-# storage/close/closenow).
 _IMAGE_ACTIONS = frozenset(
     {
         "navigate",
@@ -40,6 +35,8 @@ _IMAGE_ACTIONS = frozenset(
         "solve_cloudflare",
     }
 )
+
+_EXTRACT_IMAGE_ACTIONS = frozenset({"read", "links"})
 
 
 async def browse(
@@ -188,7 +185,6 @@ async def browse(
         f"depth={depth}, compact={compact}"
     )
 
-    # Feature B: close/closenow are orchestrator-only via browser_supervise
     if action in {"close", "closenow"}:
         return (
             "Error: close/closenow actions are orchestrator-only. Use "
@@ -225,9 +221,6 @@ async def browse(
     result = await HANDLERS[action](req)
     await _record_step(req, result)
 
-    # WI-3: Record clean interaction for trust promotion
-    # Only count truly non-confirmation interactions: not in ALWAYS_CONFIRM set
-    # AND the handler didn't trigger a confirmation dialog
     from .support import _last_confirmation_needed
 
     success = not (isinstance(result, str) and result.startswith("Error"))
@@ -241,13 +234,18 @@ async def browse(
             host = await _page_host(page)
             await guardrails.record_clean_interaction(host)
 
-    if action in _IMAGE_ACTIONS and not (
+    if action in _EXTRACT_IMAGE_ACTIONS and not (
+        isinstance(result, str) and result.startswith("Error")
+    ):
+        page = session.active_page()
+        if page is not None:
+            await _attach_fullpage_image(page)
+    elif action in _IMAGE_ACTIONS and not (
         isinstance(result, str) and result.startswith("Error")
     ):
         page = session.active_page()
         if page is not None:
             await _attach_viewport_image(page)
-            # Lean perception: auto-pair diff + screenshot
             if not brief and action not in {
                 "navigate",
                 "newtab",
@@ -308,7 +306,6 @@ async def browse(
                 if prefix:
                     result = f"{prefix}\n\n{result}"
 
-    # WI-1: Cookbook auto-discovery hints on navigate/newtab
     if action in {"navigate", "newtab"} and not (
         isinstance(result, str) and result.startswith("Error")
     ):

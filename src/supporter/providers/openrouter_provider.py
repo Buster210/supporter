@@ -27,15 +27,15 @@ def _messages_to_openai(prompt: str | list[Message]) -> list[dict[str, str]]:
         if content:
             messages.append({"role": role, "content": content})
     return messages
+
+
 def _tools_to_openai(tools: list[Any] | None) -> list[dict[str, Any]] | None:
     """Convert tool callables to OpenAI tools[] format via ToolDef introspection."""
     if not tools:
         return None
     result = []
     for fn in tools:
-        td: ToolDef = (
-            fn if isinstance(fn, ToolDef) else tool_def_from_callable(fn)
-        )
+        td: ToolDef = fn if isinstance(fn, ToolDef) else tool_def_from_callable(fn)
         result.append(
             {
                 "type": "function",

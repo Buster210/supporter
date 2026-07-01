@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from collections.abc import Callable
@@ -14,7 +15,8 @@ from textual.widgets import Button, Input, Label, Static
 from ..config import config
 from ..logger import init_logger, logger, shutdown_logger
 from ..tools.base import ToolError
-from ..types import ModeChanged
+from ..tools.delegate.capsule import load_capsule
+from ..types import ModeChanged, SubtaskVerificationResult
 from .bubble import MessageBubble
 from .chat import (
     ChatContainer,
@@ -24,7 +26,7 @@ from .chat import (
     ThinkingIndicator,
     WelcomeBanner,
 )
-from .delegation import DelegationBlock
+from .delegation import DelegationBlock, VerificationBlock
 from .delegation_listener import DelegationListener
 from .message_processor import ChatMessageProcessor
 from .modals import ConfirmationModal, ProfileSelectModal
@@ -83,6 +85,7 @@ class SupporterApp(App[None]):
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
         self._delegation_blocks: dict[str, DelegationBlock] = {}
+        self._verification_blocks: dict[str, VerificationBlock] = {}
         self._pending_delegation_widgets: deque[tuple[Any, bool]] = deque()
         self._delegation_listener = DelegationListener(
             inject_message=self._inject_delegation_message,
@@ -93,6 +96,8 @@ class SupporterApp(App[None]):
             plan_bubble_injector=self._inject_plan_bubble,
             plan_storer=self._store_pending_plan,
             render_task_done=self._mount_task_signal,
+            render_verification=self._handle_verification_verdict,
+            collapse_verification=self._collapse_verification_block,
         )
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
@@ -266,7 +271,10 @@ class SupporterApp(App[None]):
                 yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
                 yield Input(
-                    placeholder="Type a message... (/agent, /live, /clear, /exit)",
+                    placeholder=(
+                        "Type a message..."
+                        " (/agent, /live, /clear, /exit, /browser-profile)"
+                    ),
                     id="user-input",
                 )
 
@@ -358,6 +366,9 @@ class SupporterApp(App[None]):
         return new_turn
 
     async def _handle_command(self, command: str) -> bool:
+        if command.strip() == "/browser-profile":
+            self.run_worker(self._mode_manager.handle_command(command))
+            return True
         return await self._mode_manager.handle_command(command)
 
     async def set_live_mode(self, live: bool = False) -> None:
@@ -396,6 +407,7 @@ class SupporterApp(App[None]):
 
             from ..config import config
             from ..replan import ReplanContext
+
             cycle_result = await self._process_streaming_execution(
                 text,
                 target_container,
@@ -408,8 +420,23 @@ class SupporterApp(App[None]):
             replan_ctx = None
             last_failure_reason = ""
             if self.agent.pending_plan_objective:
+                job_id = getattr(self.active_turn, "_delegation_job_id", None)
+                subtask_failures = []
+                if job_id:
+                    capsule = await asyncio.to_thread(load_capsule, job_id)
+                    verifications = capsule.get("verifications", {})
+                    subtask_failures = [
+                        SubtaskVerificationResult(
+                            task_id=v["task_id"],
+                            passed=v["passed"],
+                            reason=v.get("reason", ""),
+                        )
+                        for v in verifications.values()
+                    ]
                 replan_ctx = ReplanContext(
-                    self.agent.pending_plan_objective, config.replan_max_cycles
+                    self.agent.pending_plan_objective,
+                    config.replan_max_cycles,
+                    subtask_failures,
                 )
                 replan_ctx.next_cycle()
 
@@ -431,6 +458,14 @@ class SupporterApp(App[None]):
                     )
                     if verified:
                         self.status_label = "✓ Verification complete"
+                        job_id = (
+                            getattr(self.active_turn, "_delegation_job_id", None)
+                            or "current"
+                        )
+                        vblock = self._verification_blocks.get(job_id)
+                        if vblock is not None:
+                            vblock.set_overall("✓ Task completed and verified")
+                            vblock.collapse_when_done()
                         break
                     last_failure_reason = (
                         replan_ctx.failures[-1] if replan_ctx.failures else "Unknown"
@@ -461,6 +496,12 @@ class SupporterApp(App[None]):
                     )
                 )
                 chat_view.jump_to_bottom()
+                job_id = (
+                    getattr(self.active_turn, "_delegation_job_id", None) or "current"
+                )
+                vblock = self._verification_blocks.get(job_id)
+                if vblock is not None:
+                    vblock.set_overall(f"✗ Verification failed: {last_failure_reason}")
 
             if self.agent:
                 self.agent.pending_plan_objective = ""
@@ -619,7 +660,9 @@ class SupporterApp(App[None]):
         chosen = await select_profile_at_startup(self._select_profile)
         if chosen:
             self._toast_manager.notify(
-                self, f"Browser profile: {chosen}", type="profile"
+                self,
+                f"Browser profile: {chosen} — type /browser-profile to change",
+                type="profile",
             )
 
     def _safe_call(
@@ -682,7 +725,8 @@ class SupporterApp(App[None]):
             turn = turns[-1] if turns else None
         bubbles = getattr(turn, "agent_bubbles", None)
         if bubbles:
-            return bubbles[-1]
+            result: MessageBubble = bubbles[-1]
+            return result
         return None
 
     async def _mount_delegation_widget(
@@ -802,6 +846,54 @@ class SupporterApp(App[None]):
         block = self._delegation_blocks.get(job_id)
         if block:
             block.collapse_when_done()
+
+    def _handle_verification_verdict(
+        self, job_id: str, passed: bool, task_id: str, reason: str
+    ) -> None:
+        """Handle a VerificationVerdict: add entry to the verification block."""
+        self._safe_call(
+            lambda: self.run_worker(
+                self._do_handle_verification_verdict(job_id, passed, task_id, reason)
+            )
+        )
+
+    async def _do_handle_verification_verdict(
+        self, job_id: str, passed: bool, task_id: str, reason: str
+    ) -> None:
+        block = await self._mount_verification_block(job_id)
+        if passed:
+            block.add_entry(f"✓ {task_id} verified")
+        else:
+            block.add_entry(f"✗ {task_id} failed: {reason}")
+            target = self.active_turn or self._delegation_mount_target()
+            await target.mount(
+                MessageBubble(
+                    role="system",
+                    content=f"✗ Verification failed for {task_id}: {reason}",
+                )
+            )
+            self.query_one("#chat-view", ChatContainer).follow_end()
+
+    def _collapse_verification_block(self, job_id: str) -> None:
+        """Collapse the verification block when milestone terminates."""
+        self._safe_call(
+            lambda: self.run_worker(self._do_collapse_verification_block(job_id))
+        )
+
+    async def _do_collapse_verification_block(self, job_id: str) -> None:
+        block = self._verification_blocks.get(job_id)
+        if block is not None:
+            block.collapse_when_done()
+
+    async def _mount_verification_block(self, job_id: str) -> VerificationBlock:
+        """Get or create a VerificationBlock for job_id, mounting if needed."""
+        block = self._verification_blocks.get(job_id)
+        if block is not None:
+            return block
+        block = VerificationBlock(title="Verification")
+        self._verification_blocks[job_id] = block
+        await self._mount_delegation_widget(block)
+        return block
 
 
 def main() -> None:

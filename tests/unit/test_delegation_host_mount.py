@@ -71,7 +71,5 @@ async def test_replay_skips_empty_delegation_only_model_message() -> None:
     async with app.run_test(size=(80, 24)):
         await app._replay_history()
         chat_view = app.query_one("#chat-view", ChatContainer)
-        agent_bubbles = [
-            b for b in chat_view.query(MessageBubble) if b.role == "agent"
-        ]
+        agent_bubbles = [b for b in chat_view.query(MessageBubble) if b.role == "agent"]
         assert agent_bubbles == []

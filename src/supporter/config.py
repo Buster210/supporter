@@ -239,6 +239,7 @@ def load_config() -> AppConfig:
         browse_batch_chars_cap=_int_env("BROWSE_BATCH_CHARS_CAP", 150_000),
         browse_max_links=_int_env("BROWSE_MAX_LINKS", 100),
         browse_eval_chars_cap=_int_env("BROWSE_EVAL_CHARS_CAP", 16_000),
+        browse_fullpage_shot_max_px=_int_env("BROWSE_FULLPAGE_SHOT_MAX_PX", 12_000),
         durable_history_enabled=_bool_env("DURABLE_HISTORY", True),
         history_dir=str(Path(project_root) / ".supporter" / "history"),
         replay_image_count=_int_env("REPLAY_IMAGE_COUNT", 2),

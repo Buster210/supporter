@@ -23,6 +23,12 @@ from .validation import validate_tasks
 
 _on_delegation_start: Callable[[str, str], None] | None = None
 
+# ponytail: module-level set tracks in-flight delegation jobs.
+# Prevents LLM tool-call loops where delegate_tasks is re-invoked
+# before the prior background task finishes. Cleaned up via
+# milestone_task.add_done_callback.
+_ACTIVE_DELEGATIONS: set[str] = set()
+
 
 def set_delegation_start_callback(cb: Callable[[str, str], None] | None) -> None:
     global _on_delegation_start
@@ -75,11 +81,19 @@ async def delegate_tasks(
             field (id/task).
     """
     logger.info(f"Tool: delegate_tasks -- milestone='{milestone}'")
+    if _ACTIVE_DELEGATIONS:
+        existing = ", ".join(sorted(_ACTIVE_DELEGATIONS))
+        raise ToolError(
+            f"Delegation already in progress (jobs: {existing}). "
+            "Wait for it to complete or cancel it first."
+        )
+    job_id: str | None = None
     try:
         validated_tasks = validate_tasks(tasks)
         parallel_cap = max(1, min(max_parallel, config.delegate_max_hard_cap))
         job_semaphore = asyncio.Semaphore(parallel_cap)
         job_id = str(uuid.uuid4())[:DELEGATE_JOB_ID_LEN]
+        _ACTIVE_DELEGATIONS.add(job_id)
 
         bus = get_bus(job_id, milestone)
         for validated_task in validated_tasks:
@@ -139,6 +153,7 @@ async def delegate_tasks(
         JOB_TASKS[job_id] = milestone_task
         BACKGROUND_TASKS.add(milestone_task)
         milestone_task.add_done_callback(BACKGROUND_TASKS.discard)
+        milestone_task.add_done_callback(lambda _t: _ACTIVE_DELEGATIONS.discard(job_id))
 
         # Terse summary for the model only -- the full plan table is already
         # rendered to the user via the start callback above. Do NOT include the
@@ -154,6 +169,8 @@ async def delegate_tasks(
             "live status."
         )
     except Exception as e:
+        if job_id is not None:
+            _ACTIVE_DELEGATIONS.discard(job_id)
         raise ToolError(f"Delegation failed: {e}") from e
 
 

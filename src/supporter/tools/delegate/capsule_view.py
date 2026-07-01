@@ -296,8 +296,11 @@ def format_plan_capsule(payload: dict[str, Any]) -> str:
     milestone = payload.get("milestone", "")
     job_id = payload.get("job_id", "")
     status = payload.get("status", "")
+    totals = payload.get("totals", {})
+    # No totals -> assume success (back-compat); else need >=1 completed task
+    planning_succeeded = not totals or totals.get("completed", 0) > 0
     lines: list[str] = []
-    if milestone:
+    if milestone and planning_succeeded:
         lines.append(f"## Plan: {milestone}")
     if job_id or status:
         parts = []

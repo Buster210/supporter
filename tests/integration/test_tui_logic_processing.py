@@ -99,6 +99,7 @@ async def test_process_streaming_with_tool_calls() -> None:
 @pytest.mark.asyncio
 async def test_process_streaming_empty_chunk() -> None:
     app = MagicMock()
+    app._pending_delegation_widgets = []
     processor = ChatMessageProcessor(app)
     chunk = MagicMock()
     chunk.is_tool_call = False
@@ -120,6 +121,7 @@ async def test_process_streaming_empty_chunk() -> None:
 @pytest.mark.asyncio
 async def test_process_streaming_chat_turn_mount() -> None:
     app = MagicMock()
+    app._pending_delegation_widgets = []
     processor = ChatMessageProcessor(app)
     chunk = MagicMock()
     chunk.is_tool_call = False
