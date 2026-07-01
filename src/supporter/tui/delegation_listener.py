@@ -270,11 +270,8 @@ class DelegationListener:
         status = "cancelled" if not hasattr(event, "results") else "completed"
         payload = self._serialize_milestone_result(event, job_id, status=status)
         self._inject_capsule_result(payload)
-        if self._render_summary is not None:
-            if status == "cancelled":
-                summary = f"Job {job_id} cancelled"
-            else:
-                summary = format_delegation_summary(job_id, bus)
+        if self._render_summary is not None and payload.get("status") == "completed":
+            summary = format_delegation_summary(job_id, bus)
             self._render_summary(job_id, summary)
         self._drop_progress(job_id)
         if self._collapse_verification is not None:
