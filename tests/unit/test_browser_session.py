@@ -627,9 +627,10 @@ async def test_resolve_profile_returns_env_override(
     assert session._SELECTED_PROFILE is None
 
 
-async def test_resolve_profile_caches_callback_result(
+async def test_resolve_profile_defaults_when_multiple(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """When multiple profiles exist and no env var, default to 'Default'."""
     monkeypatch.setattr(config, "browser_profile_name", None)
     session._SELECTED_PROFILE = None
 
@@ -650,9 +651,9 @@ async def test_resolve_profile_caches_callback_result(
     try:
         result1 = await session._resolve_profile_name()
         result2 = await session._resolve_profile_name()
-        assert result1 == "PickedProfile"
-        assert result2 == "PickedProfile"
-        assert session._SELECTED_PROFILE == "PickedProfile"
+        assert result1 == "Default"
+        assert result2 == "Default"
+        assert session._SELECTED_PROFILE == "Default"
     finally:
         guardrails.browse_profile_select_callback = None
         session._SELECTED_PROFILE = None
@@ -690,9 +691,10 @@ async def test_resolve_profile_uses_default_when_no_profiles(
     assert session._SELECTED_PROFILE == "Default"
 
 
-async def test_resolve_profile_raises_when_no_callback(
+async def test_resolve_profile_defaults_when_no_callback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """When multiple profiles exist and no callback, default to 'Default'."""
     monkeypatch.setattr(config, "browser_profile_name", None)
     session._SELECTED_PROFILE = None
     guardrails.browse_profile_select_callback = None
@@ -702,13 +704,15 @@ async def test_resolve_profile_raises_when_no_callback(
     ]
     monkeypatch.setattr(profiles, "list_profiles", lambda _: test_profiles)
 
-    with pytest.raises(RuntimeError, match="no interactive picker available"):
-        await session._resolve_profile_name()
+    result = await session._resolve_profile_name()
+    assert result == "Default"
+    assert session._SELECTED_PROFILE == "Default"
 
 
-async def test_resolve_profile_raises_on_cancel(
+async def test_resolve_profile_defaults_when_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """When callback returns None, still default to 'Default'."""
     monkeypatch.setattr(config, "browser_profile_name", None)
     session._SELECTED_PROFILE = None
 
@@ -722,8 +726,9 @@ async def test_resolve_profile_raises_on_cancel(
     ]
     monkeypatch.setattr(profiles, "list_profiles", lambda _: test_profiles)
 
-    with pytest.raises(RuntimeError, match="cancelled"):
-        await session._resolve_profile_name()
+    result = await session._resolve_profile_name()
+    assert result == "Default"
+    assert session._SELECTED_PROFILE == "Default"
 
 
 class _Clock:

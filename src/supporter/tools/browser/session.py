@@ -417,16 +417,7 @@ async def _resolve_profile_name() -> str:
         _SELECTED_PROFILE = profiles[0].dir_name
         return _SELECTED_PROFILE
 
-    cb = guardrails.browse_profile_select_callback
-    if cb is None:
-        raise RuntimeError(
-            "Browser profile not selected and no interactive picker available; "
-            "set BROWSER_PROFILE_NAME environment variable."
-        )
-    chosen = await cb(profiles)
-    if not chosen:
-        raise RuntimeError("Browser profile selection cancelled.")
-    _SELECTED_PROFILE = chosen
+    _SELECTED_PROFILE = "Default"
     return _SELECTED_PROFILE
 
 
@@ -442,12 +433,21 @@ def list_chrome_profiles() -> list[Any]:
     return profiles_mod.list_profiles(_profile_dir())
 
 
+def set_selected_profile(name: str) -> str | None:
+    """Set the active profile name. Returns the previous value."""
+    global _SELECTED_PROFILE
+    old = _SELECTED_PROFILE
+    _SELECTED_PROFILE = name
+    return old
+
+
 async def select_profile_at_startup(
-    select_cb: Callable[[list[Any]], Awaitable[str | None]],
+    _select_cb: Callable[[list[Any]], Awaitable[str | None]],
 ) -> str | None:
-    """At startup: if no env var pins a profile and Chrome has multiple
-    profiles, prompt the user to pick one. Single profile is auto-selected.
+    """At startup: if no env var pins a profile, default to "Default".
+
     Returns the chosen profile dir_name, or None if already configured.
+    Use /browsers --profile to change at runtime.
     """
     global _SELECTED_PROFILE
     if is_profile_configured():
@@ -460,11 +460,9 @@ async def select_profile_at_startup(
     if len(profiles) == 1:
         _SELECTED_PROFILE = profiles[0].dir_name
         return _SELECTED_PROFILE
-    chosen = await select_cb(profiles)
-    if chosen:
-        _SELECTED_PROFILE = chosen
-        return chosen
-    return None
+    # Multiple profiles exist — use Default instead of prompting at startup.
+    _SELECTED_PROFILE = "Default"
+    return _SELECTED_PROFILE
 
 
 def _clone_ignore(_dir: str, names: list[str]) -> set[str]:

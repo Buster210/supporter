@@ -204,6 +204,10 @@ class ModeManager:
 
     async def handle_command(self, command: str) -> bool:
         cmd = command.lower().strip()
+
+        if cmd == "/browser-profile":
+            return await self._handle_browser_profile()
+
         handlers = {
             "/exit": self._app.exit,
             "/clear": self._app.action_clear_screen,
@@ -217,4 +221,55 @@ class ModeManager:
         result = handlers[cmd]()
         if asyncio.iscoroutine(result):
             await result
+        return True
+
+    async def _handle_browser_profile(self) -> bool:
+        # Import here to avoid circular imports
+        from ..tools.browser.session import (
+            close_session,
+            list_chrome_profiles,
+            set_selected_profile,
+        )
+
+        profiles = list_chrome_profiles()
+        if not profiles:
+            self._app._toast_manager.notify(
+                self._app,
+                "No Chrome profiles found or profile is configured via environment",
+                type="system",
+            )
+            return True
+
+        from .modals import ProfileSelectModal
+
+        chosen = await self._app.push_screen_wait(ProfileSelectModal(profiles))
+        if not chosen:
+            return True
+
+        old_profile = set_selected_profile(chosen)
+        if old_profile == chosen:
+            self._app._toast_manager.notify(
+                self._app,
+                f"Already using profile: {chosen}",
+                type="profile",
+            )
+            return True
+
+        # Close existing browser session to force relaunch
+        from ..tools.browser.session import is_session_alive
+
+        if is_session_alive():
+            await close_session()
+            self._app._toast_manager.notify(
+                self._app,
+                f"Switched to profile: {chosen} (browser restarted)",
+                type="profile",
+            )
+        else:
+            self._app._toast_manager.notify(
+                self._app,
+                f"Switched to profile: {chosen}",
+                type="profile",
+            )
+
         return True

@@ -271,7 +271,10 @@ class SupporterApp(App[None]):
                 yield Label("[LIVE]", id="mode-indicator", markup=False)
                 yield Label(">", id="prompt-symbol")
                 yield Input(
-                    placeholder="Type a message... (/agent, /live, /clear, /exit)",
+                    placeholder=(
+                        "Type a message..."
+                        " (/agent, /live, /clear, /exit, /browser-profile)"
+                    ),
                     id="user-input",
                 )
 
@@ -363,6 +366,9 @@ class SupporterApp(App[None]):
         return new_turn
 
     async def _handle_command(self, command: str) -> bool:
+        if command.strip() == "/browser-profile":
+            self.run_worker(self._mode_manager.handle_command(command))
+            return True
         return await self._mode_manager.handle_command(command)
 
     async def set_live_mode(self, live: bool = False) -> None:
@@ -654,7 +660,9 @@ class SupporterApp(App[None]):
         chosen = await select_profile_at_startup(self._select_profile)
         if chosen:
             self._toast_manager.notify(
-                self, f"Browser profile: {chosen}", type="profile"
+                self,
+                f"Browser profile: {chosen} — type /browser-profile to change",
+                type="profile",
             )
 
     def _safe_call(

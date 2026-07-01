@@ -81,8 +81,7 @@ class ProfileSelectModal(ModalScreen[str | None]):
 
         with Vertical(id="modal-container"):
             yield Label(
-                "Browser profile missing(BROWSER_PROFILE_NAME/BROWSER_PROFILE_PATH), "
-                "select profile:",
+                "Select Chrome Profile",
                 id="modal-header",
             )
             yield OptionList(id="profile-list")
