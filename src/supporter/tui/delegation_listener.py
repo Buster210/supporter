@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, cast
 
 from ..logger import logger
+from ..tools.delegate.backends import QA_REJECTION_MARKER
 from ..tools.delegate.formatting import format_delegation_table
 
 _OUTPUT_TAIL_MAX_CHARS = 500
@@ -216,6 +217,8 @@ class DelegationListener:
     def _on_task_terminal(self, event: Any, job_id: str, bus: Any, kind: str) -> None:
         """Handle TaskCompleted/Failed/TimedOut/Skipped."""
         self._clear_task_tail(bus, event.task_id)
+        if kind == "FAIL" and QA_REJECTION_MARKER in getattr(event, "error", ""):
+            kind = "DONE"
         text = format_delegation_update(job_id, bus, task_id=event.task_id, status=kind)
         # Route the task-complete signal into the delegation block (ordered
         # section) when wired; fall back to a standalone signal otherwise.

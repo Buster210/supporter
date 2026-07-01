@@ -883,7 +883,7 @@ class SupporterApp(App[None]):
         block = self._verification_blocks.get(job_id)
         if block is not None:
             return block
-        block = VerificationBlock(title=f"Verification [{job_id}]")
+        block = VerificationBlock(title="Verification")
         self._verification_blocks[job_id] = block
         await self._mount_delegation_widget(block)
         return block

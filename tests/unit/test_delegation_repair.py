@@ -99,7 +99,7 @@ def _run(
         out, _was_repaired = asyncio.run(
             scheduler._repair_or_rerequest(task, result, asyncio.Semaphore(1), bus, "j")
         )
-    return out, mock
+    return out, mock  # type: ignore[return-value]
 
 
 class TestRepairOrRerequest:

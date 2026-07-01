@@ -11,7 +11,10 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.events import Click
 from textual.widgets import Collapsible, Static
+
+from .bubble import SectionHeader
 
 _STATUS_STYLE = {
     "completed": ("green", "✓"),
@@ -170,7 +173,7 @@ class DelegationBlock(Collapsible):
     def set_signal(self, text: str) -> None:
         """Append a per-task completion signal line (accumulates across tasks)."""
         self._signal_text = (
-            f"{self._signal_text}\n{text}".strip() if self._signal_text else text
+            f"{self._signal_text}\n\n{text}".strip() if self._signal_text else text
         )
         self._apply("signal", self._signal_text)
 
@@ -183,28 +186,50 @@ class DelegationBlock(Collapsible):
         self.collapsed = True
 
 
-class VerificationBlock(Collapsible):
-    """Collapsible verification section — one paragraph per verified task.
+class _ClickAwareSectionHeader(SectionHeader):
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        block = self.parent
+        while block is not None and not isinstance(block, VerificationBlock):
+            block = block.parent
+        if block is not None:
+            block.toggle()
 
-    Created collapsed; expands on first entry, collapses when settled.
-    """
 
+class VerificationBlock(Vertical):
     def __init__(self, title: str = "Verification", **kwargs: Any) -> None:
-        super().__init__(title=title, collapsed=True, **kwargs)
+        super().__init__(**kwargs)
         self.add_class("verification-block")
-        self._content_widget: Static | None = None
-        self._overall_widget: Static | None = None
+        self._header = _ClickAwareSectionHeader(
+            "Verification", classes="section-header"
+        )
+        self._content_widget = Static("", classes="verification-content-text")
+        self._overall_widget = Static("", classes="verification-overall")
         self._entries: list[str] = []
+        self._passed = 0
+        self._failed = 0
+        self._collapsed = True
+        self._overall_text = ""
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="verification-content"):
-            self._content_widget = Static("", classes="verification-content-text")
-            self._content_widget.display = False
-            yield self._content_widget
+        yield self._header
+        yield self._content_widget
+        yield self._overall_widget
 
-            self._overall_widget = Static("", classes="verification-overall")
-            self._overall_widget.display = False
-            yield self._overall_widget
+    def on_mount(self) -> None:
+        self._refresh()
+
+    def _heading(self) -> str:
+        return f"Verification — {self._passed}/{self._passed + self._failed}"
+
+    def _refresh(self) -> None:
+        self._header.update_label(self._heading(), self._collapsed, True)
+        self._content_widget.display = bool(self._entries) and not self._collapsed
+        self._overall_widget.display = bool(self._overall_text) and not self._collapsed
+
+    def toggle(self) -> None:
+        self._collapsed = not self._collapsed
+        self._refresh()
 
     @staticmethod
     def _styled(text: str) -> Text:
@@ -212,26 +237,26 @@ class VerificationBlock(Collapsible):
         return Text(text, style="red" if text.startswith("✗") else "green")
 
     def add_entry(self, text: str) -> None:
-        """Append a paragraph; auto-expand on first entry. Failure lines render
-        red, success lines green (per-line, so a mixed block colors correctly)."""
         self._entries.append(text)
-        if self._content_widget is not None:
-            body = Text()
-            for i, entry in enumerate(self._entries):
-                if i:
-                    body.append("\n\n")
-                body.append_text(self._styled(entry))
-            self._content_widget.update(body)
-            self._content_widget.display = True
-        if self.collapsed:
-            self.collapsed = False
+        if text.startswith("✗"):
+            self._failed += 1
+        else:
+            self._passed += 1
+        body = Text()
+        for i, entry in enumerate(self._entries):
+            if i:
+                body.append("\n")
+            body.append_text(self._styled(entry))
+        self._content_widget.update(body)
+        self._refresh()
 
     def set_overall(self, text: str) -> None:
         """Set the final overall-status line (red on failure, green on success)."""
-        if self._overall_widget is not None:
-            self._overall_widget.update(self._styled(text))
-            self._overall_widget.display = True
+        self._overall_text = text
+        self._overall_widget.update(self._styled(text))
+        self._refresh()
 
     def collapse_when_done(self) -> None:
         """Collapse once verification settles."""
-        self.collapsed = True
+        self._collapsed = True
+        self._refresh()

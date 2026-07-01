@@ -225,4 +225,9 @@ def _close_file_handler() -> None:
         sys.stderr.write(f"Failed to close supporter log handler: {e}\n")
 
 
+def main() -> None:
+    init_logger()
+    logger.info("Test message")
+
+
 atexit.register(shutdown_logger)
