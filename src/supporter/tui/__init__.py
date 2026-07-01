@@ -860,7 +860,11 @@ class SupporterApp(App[None]):
     async def _do_handle_verification_verdict(
         self, job_id: str, passed: bool, task_id: str, reason: str
     ) -> None:
-        if not passed:
+        block = await self._mount_verification_block(job_id)
+        if passed:
+            block.add_entry(f"✓ {task_id} verified")
+        else:
+            block.add_entry(f"✗ {task_id} failed: {reason}")
             target = self.active_turn or self._delegation_mount_target()
             await target.mount(
                 MessageBubble(
@@ -869,9 +873,6 @@ class SupporterApp(App[None]):
                 )
             )
             self.query_one("#chat-view", ChatContainer).follow_end()
-            return
-        block = await self._mount_verification_block(job_id)
-        block.add_entry(f"✓ {task_id} verified")
 
     def _collapse_verification_block(self, job_id: str) -> None:
         """Collapse the verification block when milestone terminates."""

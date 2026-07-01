@@ -316,19 +316,27 @@ async def _execute_dag(
                             "duration": time.perf_counter() - started_at,
                             "tokens": {},
                         }
-                verification = await run_qa_gate_verify_only(
-                    enriched, result, global_semaphore, bus, job_id
-                )
-                result, was_repaired = await _repair_or_rerequest(
-                    enriched, result, global_semaphore, bus, job_id
-                )
-                # Re-verify only when repair actually replaced the output;
-                # otherwise reuse the pre-repair result to avoid doubled cost,
-                # duplicate sub-task ids, and non-deterministic verdict flips.
-                if was_repaired:
-                    verification = await run_qa_gate_verify_only(
-                        enriched, result, global_semaphore, bus, job_id, attempt=1
+                # Planner tasks produce a plan, not work output — skip QA gate.
+                if enriched.get("agent") == "planner":
+                    verification = SubtaskVerificationResult(
+                        task_id=task_id,
+                        passed=True,
+                        marker="[QA gate: planner task, skipped]",
                     )
+                else:
+                    verification = await run_qa_gate_verify_only(
+                        enriched, result, global_semaphore, bus, job_id
+                    )
+                    result, was_repaired = await _repair_or_rerequest(
+                        enriched, result, global_semaphore, bus, job_id
+                    )
+                    # Re-verify only when repair actually replaced the output;
+                    # otherwise reuse the pre-repair result to avoid doubled cost,
+                    # duplicate sub-task ids, and non-deterministic verdict flips.
+                    if was_repaired:
+                        verification = await run_qa_gate_verify_only(
+                            enriched, result, global_semaphore, bus, job_id, attempt=1
+                        )
                 verifications[task_id] = verification
                 if verification.passed:
                     if verification.marker:
