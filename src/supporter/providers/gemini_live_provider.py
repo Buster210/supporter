@@ -30,6 +30,13 @@ from .gemini_codec import message_to_content
 
 _STALE_HANDLE_ERRORS = ("session not found", "invalid session handle")
 
+# Idle watchdog: if the Live socket goes silent this long (e.g. after a
+# fire-and-forget tool like delegate_tasks, where the model never sends
+# turn_complete/generation_complete), synthesize turn completion so the TUI
+# spinner clears instead of hanging forever.
+# ponytail: fixed window; make configurable if a tool legitimately blocks >this.
+_LIVE_IDLE_TIMEOUT_S = 90.0
+
 
 def _is_key_error(error: BaseException) -> bool:
     """Return True if the error is likely key-attributable (quota/auth)."""
@@ -877,10 +884,16 @@ class GeminiLiveProvider:
             loop = asyncio.get_running_loop()
 
             try:
-                async with asyncio.timeout(None) as _drain_cm:
+                async with asyncio.timeout(_LIVE_IDLE_TIMEOUT_S) as _drain_cm:
                     async for response in session.receive():
+                        if not state.draining:
+                            _drain_cm.reschedule(loop.time() + _LIVE_IDLE_TIMEOUT_S)
                         if response.tool_call:
                             await self._handle_tool_call(session, response.tool_call)
+                            if not state.draining:
+                                _drain_cm.reschedule(
+                                    loop.time() + _LIVE_IDLE_TIMEOUT_S
+                                )
                             continue
                         _process_response(self, session, response, state)
                         if state.turn_complete:
@@ -958,8 +971,10 @@ class GeminiLiveProvider:
                 yield LLMChunk(text="", is_last=True, model=self.model_name)
 
             try:
-                async with asyncio.timeout(None) as _drain_cm:
+                async with asyncio.timeout(_LIVE_IDLE_TIMEOUT_S) as _drain_cm:
                     async for response in session.receive():
+                        if not state.draining:
+                            _drain_cm.reschedule(loop.time() + _LIVE_IDLE_TIMEOUT_S)
                         if response.tool_call:
                             for fc in response.tool_call.function_calls:
                                 yield LLMChunk(
@@ -971,6 +986,10 @@ class GeminiLiveProvider:
                                     model=self.model_name,
                                 )
                             await self._handle_tool_call(session, response.tool_call)
+                            if not state.draining:
+                                _drain_cm.reschedule(
+                                    loop.time() + _LIVE_IDLE_TIMEOUT_S
+                                )
                             continue
                         # _process_response handles common logic; we yield text chunks.
                         _process_response(self, session, response, state)
