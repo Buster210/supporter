@@ -229,7 +229,6 @@ class TestResetRuntimeState:
         assert len(_model_cooldowns) == 0
         assert len(_SUMMARIZER_CACHE) == 0
 
-
     def test_summarizer_cache_cleared(self) -> None:
         """After reset, summarizer transcript cache is empty."""
         from supporter.history_summarizer import _SUMMARIZER_CACHE

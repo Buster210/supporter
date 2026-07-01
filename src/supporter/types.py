@@ -109,7 +109,6 @@ class AppConfig:
 
 @dataclass(frozen=True)
 class SubtaskVerificationResult:
-
     task_id: str
     passed: bool
     reason: str = ""
@@ -300,6 +299,7 @@ class TaskUpdateSent(DelegationEvent):
     task_id: str
     message: str
 
+
 @dataclass(frozen=True)
 class VerificationVerdict(DelegationEvent):
     """A verification outcome for the UI.
@@ -308,8 +308,8 @@ class VerificationVerdict(DelegationEvent):
     verify_plan.
     """
 
-    task_id: str          # subtask id, or the objective label for scope='objective'
-    scope: str            # "task" | "objective"
+    task_id: str  # subtask id, or the objective label for scope='objective'
+    scope: str  # "task" | "objective"
     passed: bool
     reason: str = ""
-    round: int = 0        # Phase A correction round (0 for objective)
+    round: int = 0  # Phase A correction round (0 for objective)

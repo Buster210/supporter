@@ -10,6 +10,7 @@ from supporter.config import config
 from supporter.llm.types import GenOptions
 from supporter.tools.delegate.agents import _cache
 from supporter.tools.delegate.api import (
+    _ACTIVE_DELEGATIONS,
     cancel_delegation,
     check_delegation,
     delegate_tasks,
@@ -39,6 +40,13 @@ class ScriptedProvider:
         self, prompt: str, options: GenOptions | None = None
     ) -> LLMResult:
         self.prompts.append(prompt)
+        if "QA-VERDICT: APPROVE" in prompt:
+            return LLMResult(
+                text="QA-VERDICT: APPROVE",
+                model="scripted-model",
+                duration=0.01,
+                usage={"total_tokens": 3},
+            )
         task_id = "synthesize" if "TASK:\nSummarize" in prompt else "map"
         result = {
             "summary": f"{task_id} summary",
@@ -80,6 +88,7 @@ class BlockingProvider:
 def isolate_delegation_flow(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "allowed_directories", [str(tmp_path)])
     _cache.clear()
+    _ACTIVE_DELEGATIONS.clear()
 
 
 def _job_id(plan: str) -> str:

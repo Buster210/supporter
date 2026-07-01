@@ -106,8 +106,6 @@ async def save_playbook(playbook: Playbook) -> None:
     await asyncio.to_thread(_save_playbook_sync, playbook)
 
 
-
-
 def _archive_playbook_sync(host: str, goal: str) -> str | None:
     """Archive current playbook before repair; returns archive path or None."""
     try:
@@ -278,8 +276,6 @@ def _delete_playbook_sync(host: str, goal: str) -> bool:
     return True
 
 
-
-
 def _normalize_url_path(url: str) -> str:
     """Normalize a URL path by replacing volatile segments with wildcards.
 
@@ -355,7 +351,6 @@ def url_pattern_match(current_url: str, template: str) -> bool:
         regex = regex_path
 
     return bool(re.fullmatch(regex, current_path))
-
 
 
 _HOST_INDEX: dict[str, dict[str, list[dict[str, Any]]]] = {}

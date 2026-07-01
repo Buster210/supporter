@@ -67,9 +67,7 @@ class TestMessageBubble:
             {"type": "content", "content": "   \n", "collapsed": False},
         ]
         bubble.finalize()
-        assert all(
-            el["type"] != "content" for el in bubble.elements
-        ), bubble.elements
+        assert all(el["type"] != "content" for el in bubble.elements), bubble.elements
 
     def test_finalize_keeps_real_content_elements(self) -> None:
         bubble = MessageBubble(role="agent", content="answer")

@@ -131,10 +131,10 @@ def test_capsule_injection_feeds_model_only() -> None:
     payload = {"job_id": "j1", "status": "completed", "tasks": []}
     listener._inject_capsule_result(payload)
 
-    # JSON is sent to the model (system message).
+    # A human-readable capsule summary is sent to the model (system message).
     model_msg = inject_message.call_args.args[0]
-    assert "DELEGATION_CAPSULE_RESULT (json):" in model_msg
-    assert '"job_id": "j1"' in model_msg
+    assert "Delegation result" in model_msg
+    assert "status: completed" in model_msg
 
 
 def test_render_progress_live_mounts_bubble_not_buffered() -> None:

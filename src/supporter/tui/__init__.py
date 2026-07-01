@@ -401,6 +401,7 @@ class SupporterApp(App[None]):
 
             from ..config import config
             from ..replan import ReplanContext
+
             cycle_result = await self._process_streaming_execution(
                 text,
                 target_container,
@@ -413,9 +414,7 @@ class SupporterApp(App[None]):
             replan_ctx = None
             last_failure_reason = ""
             if self.agent.pending_plan_objective:
-                job_id = getattr(
-                    self.active_turn, "_delegation_job_id", None
-                )
+                job_id = getattr(self.active_turn, "_delegation_job_id", None)
                 subtask_failures = []
                 if job_id:
                     capsule = await asyncio.to_thread(load_capsule, job_id)
@@ -453,8 +452,9 @@ class SupporterApp(App[None]):
                     )
                     if verified:
                         self.status_label = "✓ Verification complete"
-                        job_id = getattr(
-                            self.active_turn, "_delegation_job_id", "current"
+                        job_id = (
+                            getattr(self.active_turn, "_delegation_job_id", None)
+                            or "current"
                         )
                         vblock = self._verification_blocks.get(job_id)
                         if vblock is not None:
@@ -490,14 +490,12 @@ class SupporterApp(App[None]):
                     )
                 )
                 chat_view.jump_to_bottom()
-                job_id = getattr(
-                    self.active_turn, "_delegation_job_id", "current"
+                job_id = (
+                    getattr(self.active_turn, "_delegation_job_id", None) or "current"
                 )
                 vblock = self._verification_blocks.get(job_id)
                 if vblock is not None:
-                    vblock.set_overall(
-                        f"✗ Verification failed: {last_failure_reason}"
-                    )
+                    vblock.set_overall(f"✗ Verification failed: {last_failure_reason}")
 
             if self.agent:
                 self.agent.pending_plan_objective = ""
@@ -719,7 +717,8 @@ class SupporterApp(App[None]):
             turn = turns[-1] if turns else None
         bubbles = getattr(turn, "agent_bubbles", None)
         if bubbles:
-            return bubbles[-1]
+            result: MessageBubble = bubbles[-1]
+            return result
         return None
 
     async def _mount_delegation_widget(
@@ -840,7 +839,6 @@ class SupporterApp(App[None]):
         if block:
             block.collapse_when_done()
 
-
     def _handle_verification_verdict(
         self, job_id: str, passed: bool, task_id: str, reason: str
     ) -> None:
@@ -872,9 +870,7 @@ class SupporterApp(App[None]):
     def _collapse_verification_block(self, job_id: str) -> None:
         """Collapse the verification block when milestone terminates."""
         self._safe_call(
-            lambda: self.run_worker(
-                self._do_collapse_verification_block(job_id)
-            )
+            lambda: self.run_worker(self._do_collapse_verification_block(job_id))
         )
 
     async def _do_collapse_verification_block(self, job_id: str) -> None:
@@ -891,6 +887,7 @@ class SupporterApp(App[None]):
         self._verification_blocks[job_id] = block
         await self._mount_delegation_widget(block)
         return block
+
 
 def main() -> None:
     """Launch the Supporter TUI dashboard."""

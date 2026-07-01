@@ -20,6 +20,7 @@ __all__ = ["ReplanContext", "format_replan_prompt"]
 
 class ReplanContext:
     """Tracks state across replan cycles."""
+
     def __init__(
         self,
         objective: str,

@@ -959,7 +959,9 @@ class TestOutputTailTruncation:
         )
         repair_seen_output: list[str] = []
 
-        async def capture_repair(task, result, *a, **kw):
+        async def capture_repair(
+            task: dict[str, Any], result: dict[str, Any], *a: Any, **kw: Any
+        ) -> tuple[dict[str, Any], bool]:
             repair_seen_output.append(result["output"])
             return result, False
 

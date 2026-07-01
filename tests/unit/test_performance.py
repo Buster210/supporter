@@ -66,7 +66,7 @@ class TestStartupStructure:
 
             src = inspect.getsource(worker_mod)
             assert "async" in src
-        except (ImportError, TypeError):
+        except ImportError, TypeError:
             pytest.skip("Worker module not available or complex signature")
 
 

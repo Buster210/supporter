@@ -139,6 +139,7 @@ class ChatTurn(Vertical):
         self.user_bubble = user_bubble
         self.agent_bubbles: list[MessageBubble] = []
         self.turn_start_time = time.perf_counter()
+        self._delegation_job_id: str | None = None
 
     def watch_collapsed(self, value: bool) -> None:
         self.set_class(value, "collapsed")

@@ -126,8 +126,6 @@ def is_recording() -> bool:
     return aid in _ACTIVE
 
 
-
-
 def start_repair(playbook: Playbook, good_prefix: list[Step]) -> None:
     """Start repair recording with context about the original playbook."""
     aid = _get_agent_id()

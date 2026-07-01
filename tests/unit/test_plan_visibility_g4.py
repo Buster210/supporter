@@ -130,7 +130,6 @@ def test_format_plan_capsule_renders_objective_and_steps() -> None:
                 "confidence": "medium",
             },
         ],
-        "totals": {"completed": 0, "failed": 0, "skipped": 0, "timed_out": 0},
         "key_findings": ["Schema must support 10M rows"],
         "recommended_next_steps": ["Create migrations"],
     }
@@ -195,10 +194,10 @@ def test_plan_capsule_no_raw_json_in_bubble() -> None:
     assert "## Plan: Do the thing" in markdown
     assert "step 1" in markdown
 
-    # AC3c: The JSON is injected to the model only (separate call).
+    # AC3c: A human-readable capsule summary is injected to the model (separate call).
     model_msg = inject_message.call_args.args[0]
-    assert "DELEGATION_CAPSULE_RESULT (json):" in model_msg
-    assert '"agent": "planner"' in model_msg
+    assert "Delegation result" in model_msg
+    assert "agent: planner" in model_msg
 
 
 @pytest.mark.asyncio
@@ -258,7 +257,6 @@ async def test_format_plan_capsule_with_full_content() -> None:
                 "confidence": "medium",
             },
         ],
-        "totals": {"completed": 0, "failed": 0, "skipped": 0, "timed_out": 0},
         "key_findings": [
             "Must support idempotency for retries",
             "PCI-DSS compliance required",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,7 @@ class MockApp:
         self._toast_manager: Any = MagicMock()
         self._supporter_queue_display: Any = MagicMock()
         self._message_processor: Any = MagicMock()
+        self._pending_delegation_widgets: deque[tuple[Any, bool]] = deque()
 
     def _flush_queued(self) -> None:
         pass
@@ -177,6 +179,9 @@ class MockBubble:
 
     def remove(self) -> None:
         self.removed = True
+
+    def has_visible_answer(self) -> bool:
+        return bool(self.content.strip() or self.tool_calls)
 
 
 class MockTurn:

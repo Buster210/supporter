@@ -72,7 +72,7 @@ def _render_progress(markdown: str) -> RenderableType:
         table.add_column(header, ratio=2, overflow="fold")
     for row in data:
         if 0 <= status_idx < len(row):
-            row[status_idx] = _style_status(row[status_idx])
+            row[status_idx] = _style_status(row[status_idx])  # type: ignore[call-overload]
         table.add_row(*row)
 
     return Group(Text(heading, style="bold cyan", justify="center"), Text(""), table)
@@ -181,7 +181,6 @@ class DelegationBlock(Collapsible):
     def collapse_when_done(self) -> None:
         """Collapse this block once delegation is complete."""
         self.collapsed = True
-
 
 
 class VerificationBlock(Collapsible):

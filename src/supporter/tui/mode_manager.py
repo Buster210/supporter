@@ -76,6 +76,7 @@ class ModeManager:
             use_code_execution=True,
             system_instruction=config.default_system_instruction,
         )
+
         # Wire summarization notification for TUI
         def _on_summarize(turns: int, kept: int, cache_size: int) -> None:
             self._app._toast_manager.notify(

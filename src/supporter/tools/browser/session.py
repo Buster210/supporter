@@ -467,7 +467,6 @@ async def select_profile_at_startup(
     return None
 
 
-
 def _clone_ignore(_dir: str, names: list[str]) -> set[str]:
     skip: set[str] = set()
     for n in names:

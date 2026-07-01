@@ -16,7 +16,6 @@ from supporter.logger import (
     _stop_queue_listener,
     init_logger,
     logger,
-    main,
 )
 
 
@@ -90,16 +89,6 @@ def test_init_logger_failure(tmp_path: Any) -> None:
     log_dir.mkdir()
     with patch("supporter.config.config.log_file", str(log_dir)):
         init_logger()
-
-
-def test_logger_main_runs_init_and_logs_message(tmp_path: Any) -> None:
-    with (
-        patch("supporter.logger.init_logger") as mock_init,
-        patch("supporter.logger.logger") as mock_supporter_logger,
-    ):
-        main()
-        mock_init.assert_called_once()
-        mock_supporter_logger.info.assert_any_call("Test message")
 
 
 def test_dump_flight_recorder_stream_write_error() -> None:

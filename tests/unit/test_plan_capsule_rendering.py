@@ -4,8 +4,7 @@ Validate that plan bubbles appear immediately when planner returns,
 render correctly, and expose objective/steps without raw JSON.
 """
 
-from __future__ import annotations
-
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,7 +14,7 @@ from supporter.tui import SupporterApp
 from supporter.tui.delegation import DelegationBlock
 
 
-def _plan_payload() -> dict:
+def _plan_payload() -> dict[str, Any]:
     return {
         "job_id": "j1",
         "agent": "planner",
