@@ -26,6 +26,61 @@ from .constants import (
 _RichMarkdown: Any = None
 
 _MARKDOWN_TRIGGER_RE = re.compile(r"[*+\-#`>\[]|\d+\.\s")
+_CAPSULE_MARKER_RE = re.compile(
+    r"(?:DELEGATION_CAPSULE_RESULT|MILESTONE_RESULT)\s*:?\s*\{"
+)
+
+
+def strip_capsule_marker(text: str) -> str:
+    """Remove a leaked DELEGATION_CAPSULE_RESULT/MILESTONE_RESULT marker plus its
+    trailing balanced-brace JSON object from model output text.
+
+    The live model occasionally echoes this internal signal marker into its
+    response (see prompts.py STEP 4/"After Delegation"). This is the display-side
+    safety net so the user never sees it even if the model slips. Balanced-brace
+    and string aware so nested objects/braces-in-strings don't truncate early.
+    """
+    out = []
+    pos = 0
+    for m in _CAPSULE_MARKER_RE.finditer(text):
+        if m.start() < pos:
+            continue  # inside a JSON object already consumed
+        brace_start = m.end() - 1
+        end = _find_matching_brace(text, brace_start)
+        if end is None:
+            # Truncated/unbalanced JSON: don't strip — preserve all trailing
+            # text so real prose after a malformed blob is never swallowed.
+            break
+        out.append(text[pos : m.start()])
+        pos = end + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _find_matching_brace(text: str, open_idx: int) -> int | None:
+    """Return the index of the `}` matching the `{` at open_idx, brace/string-aware."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(open_idx, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
 
 
 def _md(content: str) -> Any:
@@ -314,7 +369,7 @@ class MessageBubble(Vertical):
             )
             label = "Thinking" if is_thinking else "Thoughts"
             header.update_label(label, el["collapsed"], self.collapsible)
-            content = el["content"]
+            content = strip_capsule_marker(el["content"])
             if getattr(view, "_supporter_last_content", None) != content:
                 view._supporter_last_content = content
                 view.update(_md(content))
@@ -329,7 +384,9 @@ class MessageBubble(Vertical):
 
     def _update_content_widget(self, view: Any, el: dict[str, Any]) -> None:
         view = cast(Static, view)
-        content = el["content"]
+        # Strip at render (not just finalize) so a leaked capsule sentinel is
+        # hidden live during the long delegate turn, not only once it ends.
+        content = strip_capsule_marker(el["content"])
         last = getattr(view, "_supporter_last_content", None)
         if last == content:
             return
@@ -473,6 +530,12 @@ class MessageBubble(Vertical):
         self.model = model or self.model
         self.duration = duration or self.duration
         self.streaming = False
+        # Strip any leaked DELEGATION_CAPSULE_RESULT/MILESTONE_RESULT sentinel
+        # before it can render — safety net for prompts.py's "never echo" rule.
+        for el in self.elements:
+            if el["type"] == "content":
+                el["content"] = strip_capsule_marker(el["content"])
+        self.content = strip_capsule_marker(self.content)
         # Drop whitespace-only content elements — they render as an empty
         # grey .main-content bar (background + padding) even with no text. Safe
         # now: streaming is done, so no element will gain real text later.
