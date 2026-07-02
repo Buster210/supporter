@@ -416,13 +416,7 @@ async def test_agent_execute_with_verification_with_recover() -> None:
     """When ``recover`` is supplied, the provider call is wrapped."""
 
     from supporter.agent import ChatAgent
-    from supporter.recover import AutoRecover, RecoveryStatus
-
-    def _note_recovery(label: str = "manual", detail: str = "") -> Any:
-        async def _action(*args: Any, **kwargs: Any) -> RecoveryStatus:
-            return RecoveryStatus(action=f"note:{label}", healed=True, detail=detail)
-
-        return _action
+    from supporter.recover import AutoRecover, note_recovery
 
     provider = MagicMock()
     provider.get_name.return_value = "fake"
@@ -431,7 +425,7 @@ async def test_agent_execute_with_verification_with_recover() -> None:
 
     recover = AutoRecover(
         name="provider.generate",
-        actions=[_note_recovery("always")],
+        actions=[note_recovery("always")],
         backoff_base=0,
         backoff_cap=0,
     )

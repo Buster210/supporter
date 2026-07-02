@@ -79,6 +79,7 @@ class SupporterApp(App[None]):
             upsert_progress=self._upsert_delegation_progress,
             drop_progress=self._drop_delegation_progress,
             render_signal=self._render_delegation_signal_now,
+            plan_bubble_injector=self._inject_plan_bubble,
         )
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
@@ -359,41 +360,13 @@ class SupporterApp(App[None]):
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
 
-            # Bind agent ref + live plan-signal sink for the plan tool handler.
-            from ..tools.planning import (
-                bind_agent,
-                clear_agent,
-                clear_plan_signal_callback,
-                set_plan_signal_callback,
+            await self._process_streaming_execution(
+                text,
+                target_container,
+                start_time,
+                self.agent,
+                exclude_from_history,
             )
-
-            bind_agent(self.agent)
-            set_plan_signal_callback(self._render_plan_signal_now)
-            try:
-                bubble = await self._process_streaming_execution(
-                    text,
-                    target_container,
-                    start_time,
-                    self.agent,
-                    exclude_from_history,
-                )
-                # Capture plan info BEFORE the finally resets it. The plan bubble
-                # was already mounted IN ORDER by the signal callback during the
-                # turn — we only need it here for post-execution verification.
-                objective = getattr(self.agent, "last_plan_objective", "")
-                plan = getattr(self.agent, "last_plan", "")
-                # Verify the planned turn post-execution (no-op when unplanned).
-                result_text = getattr(bubble, "content", "") if bubble else ""
-                await self._verify_planned_turn(
-                    objective, plan, result_text, target_container, chat_view
-                )
-            finally:
-                # Reset always so a stale plan from a failed turn never leaks
-                # into the next turn's display.
-                self.agent.last_plan = ""
-                self.agent.last_plan_objective = ""
-                clear_agent()
-                clear_plan_signal_callback()
         except ToolError as e:
             await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
         except Exception as e:
@@ -441,41 +414,6 @@ class SupporterApp(App[None]):
         return await self._message_processor.process_streaming(
             text, target, start_time, agent, exclude_from_history
         )
-
-    async def _verify_planned_turn(
-        self,
-        objective: str,
-        plan: str,
-        result_text: str,
-        target: Vertical,
-        chat_view: ChatContainer,
-    ) -> None:
-        """Verify a planned turn's result; warn only when judged incomplete.
-
-        No-op when the turn was unplanned (``objective`` empty). ``verify_plan``
-        is fail-open and never raises; the guard here swallows anything else so
-        verification can never break the turn.
-        """
-        if not objective:
-            return
-        try:
-            from ..prompts import DELEGATE_AGENT_ROSTER
-            from ..worker import verify_plan
-
-            model = DELEGATE_AGENT_ROSTER.get("planner", {}).get(
-                "model", "gemma-4-31b-it"
-            )
-            is_done, reason = await verify_plan(objective, plan, result_text, model)
-            if not is_done:
-                await target.mount(
-                    MessageBubble(
-                        role="system",
-                        content=f"⚠ Verification: incomplete — {reason}",
-                    )
-                )
-                chat_view.jump_to_bottom()
-        except Exception as exc:
-            logger.warning(f"verify_plan gate failed: {exc}")
 
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
@@ -563,19 +501,6 @@ class SupporterApp(App[None]):
         await target.mount(label)
         chat_view.follow_end()
 
-    def _render_plan_signal_now(self, kind: str, text: str) -> None:
-        """Thread/async-safe sink for planner signals (kind, text), in order."""
-        self._safe_call(lambda: self.run_worker(self._render_plan_signal(kind, text)))
-
-    async def _render_plan_signal(self, kind: str, text: str) -> None:
-        chat_view = self.query_one("#chat-view", ChatContainer)
-        target = self.active_turn or chat_view
-        if kind == "plan":
-            await target.mount(MessageBubble(role="system", content=f"PLAN:\n{text}"))
-        else:
-            await target.mount(Static(text, classes="delegation-signal"))
-        chat_view.follow_end()
-
     async def _process_system_message(self, text: str) -> None:
         # The aggregate delegation result must reach the model, but its raw JSON
         # is never shown as a chat bubble — the model's reply renders instead.
@@ -623,6 +548,20 @@ class SupporterApp(App[None]):
 
     def _inject_delegation_message(self, message: str) -> None:
         self._safe_call(self._inject_system_message, message)
+
+    def _inject_plan_bubble(self, markdown: str) -> None:
+        """Mount a visible plan-result bubble from a background thread."""
+        self._safe_call(lambda: self.run_worker(self._mount_plan_bubble(markdown)))
+
+    async def _mount_plan_bubble(self, markdown: str) -> None:
+        bubble = MessageBubble(role="agent", content=markdown)
+        chat_view = self.query_one("#chat-view", ChatContainer)
+        target = self.active_turn or chat_view
+        if hasattr(target, "mount_bubble"):
+            await target.mount_bubble(bubble)
+        else:
+            await target.mount(bubble)
+        chat_view.follow_end()
 
     def _drop_delegation_progress(self, job_id: str) -> None:
         self._delegation_bubbles.pop(job_id, None)

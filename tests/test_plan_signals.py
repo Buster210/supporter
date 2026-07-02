@@ -1,89 +1,26 @@
-"""plan_tool surfaces planner activity live and in order."""
+"""plan_tool removed — planning is now a delegate sub-agent role.
 
-from typing import Any, ClassVar
-from unittest.mock import patch
-
-import pytest
+Stub tests for the backwards-compat signal functions in planning.py.
+"""
 
 from supporter.tools import planning
 
 
-@pytest.mark.asyncio
-async def test_plan_tool_emits_consulting_then_plan_in_order() -> None:
-    events: list[tuple[str, str]] = []
-    planning.set_plan_signal_callback(lambda kind, text: events.append((kind, text)))
-
-    async def fake_make_plan(
-        objective: str, persona: str, model: str, tools_roster: str = ""
-    ) -> str:
-        # The consult signal must already have fired before the plan returns.
-        assert events == [("consulting", "Consulting planner sub-agent…")]
-        return "1. do it"
-
-    try:
-        with patch("supporter.worker.make_plan", fake_make_plan):
-            plan = await planning.plan_tool("obj")
-    finally:
-        planning.clear_plan_signal_callback()
-
-    assert plan == "1. do it"
-    assert events == [
-        ("consulting", "Consulting planner sub-agent…"),
-        ("plan", "1. do it"),
-    ]
+def test_bind_agent_is_noop() -> None:
+    """bind_agent is a no-op stub — should not raise."""
+    planning.bind_agent(object())
 
 
-@pytest.mark.asyncio
-async def test_plan_signal_callback_never_required() -> None:
-    # Headless (no sink bound) must not raise.
+def test_clear_agent_is_noop() -> None:
+    """clear_agent is a no-op stub — should not raise."""
+    planning.clear_agent()
+
+
+def test_set_plan_signal_callback_is_noop() -> None:
+    """set_plan_signal_callback is a no-op stub — should not raise."""
+    planning.set_plan_signal_callback(lambda kind, text: None)
+
+
+def test_clear_plan_signal_callback_is_noop() -> None:
+    """clear_plan_signal_callback is a no-op stub — should not raise."""
     planning.clear_plan_signal_callback()
-
-    async def fake_make_plan(
-        objective: str, persona: str, model: str, tools_roster: str = ""
-    ) -> str:
-        return "x"
-
-    with patch("supporter.worker.make_plan", fake_make_plan):
-        assert await planning.plan_tool("obj") == "x"
-
-
-@pytest.mark.asyncio
-async def test_plan_tool_passes_orchestrator_tool_roster() -> None:
-    """The planner is told which tools the orchestrator actually has."""
-
-    def bash_run() -> None:
-        """Run a sandboxed shell command."""
-
-    def google_search() -> None:
-        """Search the web."""
-
-    class FakeAgent:
-        registry: ClassVar[dict[str, Any]] = {
-            "bash_run": bash_run,
-            "google_search": google_search,
-        }
-        last_plan = ""
-        last_plan_objective = ""
-
-    planning.bind_agent(FakeAgent())
-    captured = {}
-
-    async def fake_make_plan(
-        objective: str, persona: str, model: str, tools_roster: str = ""
-    ) -> str:
-        captured["roster"] = tools_roster
-        return "1. do it"
-
-    try:
-        with patch("supporter.worker.make_plan", fake_make_plan):
-            await planning.plan_tool("obj")
-    finally:
-        planning.clear_agent()
-
-    roster = captured["roster"]
-    assert "bash_run: Run a sandboxed shell command." in roster
-    assert "google_search: Search the web." in roster
-
-
-def test_format_tool_roster_handles_missing_registry() -> None:
-    assert planning._format_tool_roster(object()) == ""

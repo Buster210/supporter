@@ -1000,10 +1000,19 @@ class GeminiLiveProvider:
             finally:
                 # Track whether the receive loop completed normally.
                 # If it didn't, the consumer broke out (GeneratorExit)
-                # and the server is still generating — tear down so the
-                # next turn gets a fresh session instead of a dirty one.
+                # and the server is still generating. If we have a
+                # resumption handle, defer cleanup to _prepare_turn which
+                # will try to resume the session. Otherwise, tear down now
+                # — no handle means no resume is possible.
                 if not self._turn_did_complete:
-                    await self._teardown_session()
+                    if self._session_handle is not None:
+                        self._reconnect_pending = True
+                        logger.info(
+                            "generate_stream() consumer broke early; "
+                            "deferring session resume via handle"
+                        )
+                    else:
+                        await self._teardown_session()
 
                 # ALWAYS run the turn-end epilogue, even if a consumer
                 # breaks early (async generator aclose() injects

@@ -77,7 +77,7 @@ def _patch_pipeline(
 
 
 def test_planner_role_in_roster() -> None:
-    planner = DELEGATE_AGENT_ROSTER["planner"]
+    planner = DELEGATE_AGENT_ROSTER["worker_planner"]
     assert planner["model"] == "gemma-4-31b-it"
     assert planner["tools"] == set()
     assert planner["live"] is False
@@ -120,7 +120,8 @@ async def test_make_plan_uses_planner_persona_and_model(
     prompt, options = fake_provider.calls[0]
     assert "open hackernews and get 50 news" in prompt
     # REST ignores the factory system_instruction -> persona MUST ride options.
-    assert options.system_instruction == DELEGATE_AGENT_ROSTER["planner"]["persona"]
+    expected = DELEGATE_AGENT_ROSTER["worker_planner"]["persona"]
+    assert options.system_instruction == expected
 
 
 async def test_run_worker_happy_path(

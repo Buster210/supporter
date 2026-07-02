@@ -11,6 +11,7 @@ from .prompts import (
     DELEGATE_DEFAULT_PERSONA,
     MODEL_GEMINI_LIVE,
     MODEL_GEMINI_LIVE_FALLBACK,
+    MODEL_GEMMA_26B,
     MODEL_GEMMA_31B,
 )
 from .types import AppConfig
@@ -166,7 +167,7 @@ def load_config() -> AppConfig:
         gemini_live_fallback_model=os.getenv(
             "GEMINI_LIVE_FALLBACK_MODEL", MODEL_GEMINI_LIVE_FALLBACK
         ),
-        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", DEFAULT_MODEL),
+        gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", MODEL_GEMMA_26B),
         log_file=os.getenv("LOG_FILE", "app.log"),
         voice_name=os.getenv("GEMINI_VOICE_NAME", "Puck"),
         default_system_instruction=os.getenv(

@@ -127,11 +127,11 @@ def _install_headless_callbacks() -> Callable[[], None]:
 
 def _planner_profile() -> dict[str, Any]:
     roster = getattr(config, "delegate_agent_roster", None) or {}
-    profile = roster.get("planner")
+    profile = roster.get("worker_planner")
     if profile is None:
         from .prompts import DELEGATE_AGENT_ROSTER
 
-        profile = DELEGATE_AGENT_ROSTER["planner"]
+        profile = DELEGATE_AGENT_ROSTER["worker_planner"]
     return profile
 
 

@@ -28,8 +28,11 @@ def serialize_capsule_result(job_id: str) -> dict[str, Any]:
     synthesis = capsule.get("synthesis", {})
     if not isinstance(synthesis, dict):
         synthesis = {}
+    agents = [t.get("agent", "custom") for t in tasks.values() if isinstance(t, dict)]
+    primary_agent = agents[0] if agents else "custom"
     return {
         "job_id": capsule.get("job_id", job_id),
+        "agent": primary_agent,
         "milestone": capsule.get("milestone", ""),
         "status": effective_status(capsule),
         "capsule_path": capsule_relative_path(job_id),

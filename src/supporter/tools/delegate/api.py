@@ -11,6 +11,7 @@ from ..base import ToolError
 from .bus import bus_exists, get_bus
 from .capsule import create_capsule
 from .capsule_query import serialize_capsule_result as _serialize_capsule_result
+from .formatting import format_delegation_table
 from .scheduler import (
     BACKGROUND_TASKS,
     JOB_TASKS,
@@ -125,17 +126,17 @@ async def delegate_tasks(
         BACKGROUND_TASKS.add(milestone_task)
         milestone_task.add_done_callback(BACKGROUND_TASKS.discard)
 
+        headers = ["#", "Task ID", "Agent", "Dependencies"]
+        rows = []
+        for i, t in enumerate(validated_tasks, 1):
+            deps = ", ".join(t["depends_on"]) or "none"
+            rows.append([str(i), t["id"], t["agent"] or "custom", f"after: {deps}"])
         plan = [
             f"Delegation started for milestone: **{milestone}**",
             f"Job ID: `{job_id}`",
-            "\n| # | Task ID | Agent | Dependencies |",
-            "|---|---------|-------|--------------|",
+            "",
+            format_delegation_table(headers, rows),
         ]
-        for i, t in enumerate(validated_tasks, 1):
-            deps = ", ".join(t["depends_on"]) or "none"
-            plan.append(
-                f"| {i} | {t['id']} | {t['agent'] or 'custom'} | after: {deps} |"
-            )
         plan.append(f"\nSub-agents are running with parallel limit: {parallel_cap}")
         plan.append(
             "\nResults will be automatically posted back here when the "
@@ -177,7 +178,8 @@ async def check_delegation(job_id: str) -> str:
     if not snapshot:
         return f"Job `{job_id}` has no tasks tracked yet."
 
-    rows = []
+    headers = ["Task", "Status", "Agent", "Elapsed"]
+    data_rows = []
     for task_id, state in snapshot.items():
         status = state.get("status", "UNKNOWN")
         agent_label = state.get("agent_label", "?")
@@ -185,11 +187,8 @@ async def check_delegation(job_id: str) -> str:
             elapsed = f"{now - state['started_at']:.0f}s / {state.get('timeout', '?')}s"
         else:
             elapsed = f"{state.get('duration', 0):.1f}s"
-        rows.append(f"| `{task_id}` | {status} | {agent_label} | {elapsed} |")
-
-    header = "| Task | Status | Agent | Elapsed |"
-    separator = "|---|---|---|---|"
-    table = "\n".join([header, separator, *rows])
+        data_rows.append([f"`{task_id}`", status, agent_label, elapsed])
+    table = format_delegation_table(headers, data_rows)
     return f"**Job `{job_id}` — {bus.milestone}**\n\n{table}"
 
 

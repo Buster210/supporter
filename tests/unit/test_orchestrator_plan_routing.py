@@ -1,62 +1,35 @@
-"""Tests for orchestrator-driven planning via the plan tool."""
+"""Tests for orchestrator planning — now a delegate sub-agent role, not a tool."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, patch
-
-import pytest
-
+from supporter.prompts import DELEGATE_AGENT_ROSTER
 from supporter.tools.catalog import (
     ORCHESTRATOR_TOOL_NAMES,
-    ToolSpec,
     build_tool_catalog,
     select_delegate_tools,
     select_tools,
 )
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Catalog / scoping — plan tool removed
 # ---------------------------------------------------------------------------
 
 
-class _FakeProvider:
-    def __init__(self, response: str) -> None:
-        self._response = response
+class TestPlanToolRemoved:
+    def test_plan_not_in_orchestrator_tool_names(self) -> None:
+        assert "plan" not in ORCHESTRATOR_TOOL_NAMES
 
-    async def generate(self, prompt: str, options: Any) -> SimpleNamespace:
-        return SimpleNamespace(text=self._response)
-
-
-def _patch_provider(provider: Any) -> Any:
-    return patch(
-        "supporter.worker.get_provider",
-        return_value=provider,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Catalog / scoping
-# ---------------------------------------------------------------------------
-
-
-class TestPlanToolCatalog:
-    def test_plan_in_orchestrator_tool_names(self) -> None:
-        assert "plan" in ORCHESTRATOR_TOOL_NAMES
-
-    def test_plan_tool_in_catalog(self) -> None:
+    def test_plan_not_in_catalog(self) -> None:
         catalog = build_tool_catalog()
-        assert "plan" in catalog
-        spec = catalog["plan"]
-        assert isinstance(spec, ToolSpec)
-        assert spec.name == "plan"
-        assert callable(spec.callable)
+        assert "plan" not in catalog
 
-    def test_plan_tool_orchestrator_only(self) -> None:
-        """plan must NOT be selectable for sub-agents (delegate_allowed=False)."""
+    def test_plan_not_selectable_for_orchestrator(self) -> None:
         catalog = build_tool_catalog()
-        # Selecting tools for a delegate role should never include "plan"
+        tools = select_tools(catalog, ORCHESTRATOR_TOOL_NAMES)
+        assert "plan" not in tools
+
+    def test_plan_not_selectable_for_delegates(self) -> None:
+        catalog = build_tool_catalog()
         delegate_tools = select_delegate_tools(
             catalog, ORCHESTRATOR_TOOL_NAMES, role="explorer"
         )
@@ -65,104 +38,121 @@ class TestPlanToolCatalog:
         delegate_tools2 = select_delegate_tools(catalog, "all", role="page-pilot")
         assert "plan" not in delegate_tools2
 
-    def test_plan_tool_selected_for_orchestrator(self) -> None:
+
+# ---------------------------------------------------------------------------
+# New planner delegate role
+# ---------------------------------------------------------------------------
+
+
+class TestPlannerDelegateRole:
+    def test_planner_in_roster(self) -> None:
+        planner = DELEGATE_AGENT_ROSTER["planner"]
+        assert planner["model"] == "gemma-4-31b-it"
+        assert planner["live"] is False
+        assert "read_file" in planner["tools"]
+        assert "execute_bash" in planner["tools"]
+        assert "google_search" in planner["tools"]
+        assert "web_search" in planner["tools"]
+
+    def test_planner_not_worker_planner(self) -> None:
+        """planner (orchestration) and worker_planner (browser) are distinct."""
+        planner = DELEGATE_AGENT_ROSTER["planner"]
+        worker_planner = DELEGATE_AGENT_ROSTER["worker_planner"]
+        assert planner is not worker_planner
+        # worker_planner has no tools (browser worker plans, doesn't recon)
+        assert worker_planner["tools"] == set()
+
+    def test_planner_tools_are_delegate_allowed(self) -> None:
+        """All planner recon tools must be delegate_allowed in the catalog."""
+        catalog = build_tool_catalog()
+        planner_tools = DELEGATE_AGENT_ROSTER["planner"]["tools"]
+        for tool_name in planner_tools:
+            spec = catalog[tool_name]
+            assert spec.delegate_allowed, f"{tool_name} not delegate_allowed"
+
+
+# ---------------------------------------------------------------------------
+# Tool ownership: orchestrator has recipe_*, not memory_*; page-pilot has memory_*
+# ---------------------------------------------------------------------------
+
+
+class TestToolOwnership:
+    def test_orchestrator_no_recipes(self) -> None:
+        """Recipe tools removed from orchestrator — orchestrator doesn't use them."""
         catalog = build_tool_catalog()
         tools = select_tools(catalog, ORCHESTRATOR_TOOL_NAMES)
-        assert "plan" in tools
-        assert callable(tools["plan"])
+        for name in (
+            "recipe_save",
+            "recipe_find",
+            "recipe_search",
+            "recipe_run",
+            "recipe_delete",
+            "recipe_list",
+            "recipe_status",
+        ):
+            assert name not in tools, f"{name} should NOT be in orchestrator tools"
 
+    def test_orchestrator_no_memory(self) -> None:
+        catalog = build_tool_catalog()
+        tools = select_tools(catalog, ORCHESTRATOR_TOOL_NAMES)
+        for name in (
+            "memory_write",
+            "memory_read",
+            "memory_search",
+            "memory_list_kinds",
+            "memory_compact",
+            "memory_clear",
+            "memory_status",
+        ):
+            assert name not in tools, f"{name} should NOT be in orchestrator tools"
 
-# ---------------------------------------------------------------------------
-# plan_tool handler
-# ---------------------------------------------------------------------------
+    def test_orchestrator_no_plan(self) -> None:
+        catalog = build_tool_catalog()
+        tools = select_tools(catalog, ORCHESTRATOR_TOOL_NAMES)
+        assert "plan" not in tools
 
+    def test_page_pilot_has_memory(self) -> None:
+        catalog = build_tool_catalog()
+        tools = select_delegate_tools(catalog, "all", role="page-pilot")
+        for name in (
+            "memory_write",
+            "memory_read",
+            "memory_search",
+            "memory_list_kinds",
+            "memory_compact",
+            "memory_clear",
+            "memory_status",
+        ):
+            assert name in tools, f"{name} missing from page-pilot delegate tools"
 
-class TestPlanToolHandler:
-    @pytest.mark.asyncio
-    async def test_returns_plan_text(self) -> None:
-        from supporter.tools.planning import plan_tool
+    def test_recipe_tools_not_delegate_allowed(self) -> None:
+        """recipe_* are orchestrator-only, not available to delegates."""
+        catalog = build_tool_catalog()
+        for name in (
+            "recipe_save",
+            "recipe_find",
+            "recipe_search",
+            "recipe_run",
+            "recipe_delete",
+            "recipe_list",
+            "recipe_status",
+        ):
+            spec = catalog[name]
+            assert not spec.delegate_allowed, f"{name} should not be delegate_allowed"
 
-        with _patch_provider(_FakeProvider("GOAL: test\nSTEPS:\n1. do thing")):
-            result = await plan_tool("do a multi-step thing")
-        assert "GOAL: test" in result
-        assert "STEPS:" in result
-
-    @pytest.mark.asyncio
-    async def test_sets_agent_last_plan(self) -> None:
-        from supporter.tools.planning import bind_agent, clear_agent, plan_tool
-
-        class _FakeAgent:
-            last_plan: str = ""
-            last_plan_objective: str = ""
-
-        agent = _FakeAgent()
-        bind_agent(agent)
-        try:
-            with _patch_provider(_FakeProvider("PLAN: step1\nstep2")):
-                result = await plan_tool("do something complex")
-            assert result == "PLAN: step1\nstep2"
-            assert agent.last_plan == "PLAN: step1\nstep2"
-            assert agent.last_plan_objective == "do something complex"
-        finally:
-            clear_agent()
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_error(self) -> None:
-        from supporter.tools.planning import plan_tool
-
-        failing = AsyncMock()
-        failing.generate = AsyncMock(side_effect=RuntimeError("boom"))
-
-        with patch("supporter.worker.get_provider", return_value=failing):
-            result = await plan_tool("will fail")
-        assert result == ""
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_empty_plan(self) -> None:
-        from supporter.tools.planning import plan_tool
-
-        with _patch_provider(_FakeProvider("")):
-            result = await plan_tool("trivial thing")
-        assert result == ""
-
-    @pytest.mark.asyncio
-    async def test_no_agent_binding_still_works(self) -> None:
-        from supporter.tools.planning import clear_agent, plan_tool
-
-        clear_agent()  # ensure no agent bound
-        with _patch_provider(_FakeProvider("PLAN: ok")):
-            result = await plan_tool("task")
-        assert result == "PLAN: ok"
-
-
-# ---------------------------------------------------------------------------
-# Pre-classifier funnel removed
-# ---------------------------------------------------------------------------
-
-
-class TestFunnelRemoved:
-    def test_is_substantive_task_removed(self) -> None:
-        """_is_substantive_task no longer exists on supporter.tui."""
-        import supporter.tui as tui_mod
-
-        assert not hasattr(tui_mod, "_is_substantive_task")
-
-    def test_trivial_responses_removed(self) -> None:
-        import supporter.tui as tui_mod
-
-        assert not hasattr(tui_mod, "_TRIVIAL_RESPONSES")
-
-    def test_plan_before_act_removed_from_config(self) -> None:
-        from supporter.types import AppConfig
-
-        # plan_before_act field should not exist
-        assert not hasattr(AppConfig, "plan_before_act") or not any(
-            f.name == "plan_before_act"
-            for f in AppConfig.__dataclass_fields__.values()
-            if hasattr(f, "name")
-        )
-
-    def test_run_planner_and_inject_removed(self) -> None:
-        from supporter.tui import SupporterApp
-
-        assert not hasattr(SupporterApp, "_run_planner_and_inject")
+    def test_memory_tools_page_pilot_only(self) -> None:
+        """memory_* are page-pilot-only, not available to other delegates."""
+        catalog = build_tool_catalog()
+        for name in (
+            "memory_write",
+            "memory_read",
+            "memory_search",
+            "memory_list_kinds",
+            "memory_compact",
+            "memory_clear",
+            "memory_status",
+        ):
+            spec = catalog[name]
+            assert spec.allowed_roles == frozenset({"page-pilot"}), (
+                f"{name} allowed_roles should be page-pilot only"
+            )

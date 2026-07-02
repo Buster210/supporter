@@ -49,13 +49,12 @@ def test_context_injection_omitted_when_memory_empty() -> None:
     assert agent._build_context_injection() == ""
 
 
-def test_context_injection_contains_recent_memory() -> None:
+def test_context_injection_no_longer_contains_memory() -> None:
     memory.append_note("user_pref", {"theme": "dark"}, label="t1")
     memory.append_note("todo", {"task": "ship"}, label="rel")
     block = ChatAgent._build_context_injection(limit=5)
-    assert "RECENT WORKING MEMORY" in block
-    assert "user_pref" in block
-    assert "todo" in block
+    # Orchestrator no longer owns memory tools — memory block is absent.
+    assert "RECENT WORKING MEMORY" not in block
 
 
 def test_context_injection_mentions_recipes_when_present() -> None:
@@ -73,7 +72,8 @@ def test_context_injection_omits_recipes_when_empty() -> None:
     memory.append_note("user_pref", {"theme": "dark"})
     block = ChatAgent._build_context_injection(limit=5)
     assert "KNOWN AUTOMATIONS" not in block
-    assert "RECENT WORKING MEMORY" in block
+    # Memory is no longer injected by the orchestrator.
+    assert "RECENT WORKING MEMORY" not in block
 
 
 @pytest.mark.asyncio
@@ -88,8 +88,8 @@ async def test_execute_injects_memory_into_system_prompt() -> None:
     await agent.execute("do the thing")
     sys = _captured_system_instruction(provider)
     assert "BASE PROMPT" in sys
-    assert "RECENT WORKING MEMORY" in sys
-    assert "in_flight_task" in sys
+    # Memory is no longer injected by the orchestrator.
+    assert "RECENT WORKING MEMORY" not in sys
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,8 @@ async def test_execute_with_verification_injects_memory() -> None:
     agent = _new_agent(provider)
     await agent.execute_with_verification("do thing", checks=[])
     sys = _captured_system_instruction(provider)
-    assert "RECENT WORKING MEMORY" in sys
+    # Memory is no longer injected by the orchestrator.
+    assert "RECENT WORKING MEMORY" not in sys
 
 
 @pytest.mark.asyncio
@@ -133,5 +134,5 @@ def test_context_injection_caps_memory_to_limit() -> None:
     for i in range(20):
         memory.append_note("k", {"i": i}, label=f"l{i}")
     block = ChatAgent._build_context_injection(limit=3)
-    # The render block only contains the most recent 3.
-    assert block.count("- k [") == 3
+    # Memory is no longer injected — block should be empty (no recipes either).
+    assert "RECENT WORKING MEMORY" not in block

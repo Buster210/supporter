@@ -59,8 +59,10 @@ class ChatAgent:
         self.system_instruction = system_instruction
         self._store: Any = None
         self._store_prev_len: int = 0
-        self.last_plan: str = ""
-        self.last_plan_objective: str = ""
+        # Plan tracking: set by delegation listener when a planner capsule
+        # arrives; cleared after verification in the TUI message cycle.
+        self.pending_plan_objective: str = ""
+        self.pending_plan_text: str = ""
         # WHY: Cache summary state so compaction survives AFC clobber.
         # _summary covers turns [0, _summary_turn_count) of self.history;
         # _summary_fingerprint is a structural fingerprint of that same prefix,
@@ -112,23 +114,14 @@ class ChatAgent:
 
     @staticmethod
     def _build_context_injection(limit: int = 5) -> str:
-        """Compose the working-memory + recipe digest that gets prepended
-        to the system prompt on every turn.
+        """Compose the recipe digest that gets prepended to the system prompt.
 
-        Each source is independently best-effort: a corrupt store
-        should not prevent the agent from running. Failures are logged
-        at debug level.
+        The orchestrator no longer owns memory tools (page-pilot owns those).
+        Only the recipes block is injected here.
         """
-        from .logger import logger
-        from .memory import memory_snapshot
         from .recipes import recipes_snapshot
-        from .tools.memory_tools import memory_render_block
 
-        def _memory_block() -> str:
-            block = memory_render_block(limit=limit)
-            return block or ""
-
-        def _recipes_block() -> str:
+        try:
             snap = recipes_snapshot()
             total = snap.get("total", 0) if isinstance(snap, dict) else 0
             if not total:
@@ -138,29 +131,8 @@ class ChatAgent:
                 "use the recipe_list / recipe_run / recipe_find tools "
                 "to replay any saved multi-step workflow without LLM tokens."
             )
-
-        def _kinds_block() -> str:
-            snap = memory_snapshot()
-            kinds = snap.get("kinds", {}) if isinstance(snap, dict) else {}
-            if not kinds:
-                return ""
-            kinds_repr = ", ".join(
-                f"{k}={v}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])[:5]
-            )
-            return f"WORKING MEMORY TOTALS: {kinds_repr}"
-
-        parts: list[str] = []
-        for render in (_memory_block, _recipes_block, _kinds_block):
-            try:
-                rendered = render()
-            except Exception as exc:
-                logger.debug(
-                    f"ChatAgent: injection failed [{type(exc).__name__}]: {exc}"
-                )
-                continue
-            if rendered:
-                parts.append(rendered)
-        return "\n\n".join(parts)
+        except Exception:
+            return ""
 
     @staticmethod
     def _entry_text(entry: Any) -> str:

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from ..logger import logger
+from ..tools.delegate.formatting import format_delegation_table
 
 # Maximum tail length for streaming output (last ~500 chars or last 3 lines)
 _OUTPUT_TAIL_MAX_CHARS = 500
@@ -31,6 +32,12 @@ class ProgressUpdater(Protocol):
     async def __call__(self, job_id: str, bus: Any) -> None: ...
 
 
+class PlanBubbleInjector(Protocol):
+    """Injects a formatted plan as a visible bubble in the chat."""
+
+    def __call__(self, markdown: str) -> None: ...
+
+
 _KIND_LABELS = {
     "DONE": "completed",
     "FAIL": "failed",
@@ -42,16 +49,13 @@ _KIND_LABELS = {
 def format_task_signal(job_id: str, kind: str, task_id: str, bus: Any) -> str:
     state = bus.get_snapshot().get(task_id, {})
     agent = str(state.get("agent_label", "?"))
-    goal = str(state.get("task_goal", "")).strip()
-    if len(goal) > 80:
-        goal = goal[:77] + "..."
     label = _KIND_LABELS.get(kind.upper(), kind.lower())
-    detail = f" — {goal}" if goal else ""
-    return f"<br/>\n\nDelegation task {label} — `{task_id}` [{agent}]{detail}\n\n<br/>"
+    return f"<br/>\n\nDelegation task {label} — `{task_id}` [{agent}]\n\n<br/>"
 
 
 def format_delegation_progress(job_id: str, bus: Any) -> str:
-    rows = []
+    headers = ["Task", "Agent", "Status", "Time"]
+    data_rows = []
     for task_id, state in bus.get_snapshot().items():
         status = _display_task_status(str(state.get("status", "PENDING")))
         agent = str(state.get("agent_label", "?"))
@@ -63,27 +67,9 @@ def format_delegation_progress(job_id: str, bus: Any) -> str:
         if output_tail:
             # Show tail indicator for running tasks
             duration_text += f" [{output_tail.splitlines()[0][:40]}]"
-        rows.append(
-            "| "
-            + " | ".join(
-                [
-                    task_id,
-                    agent,
-                    status,
-                    duration_text,
-                ]
-            )
-            + " |"
-        )
-
-    table = [
-        f"Job `{job_id}`",
-        "",
-        "| Task | Agent | Status | Time |",
-        "| ---- | ----- | ------ | ---- |",
-        *rows,
-    ]
-    return "\n".join(table)
+        data_rows.append([task_id, agent, status, duration_text])
+    table = format_delegation_table(headers, data_rows)
+    return f"Job `{job_id}`\n\n{table}"
 
 
 def _display_task_status(status: str) -> str:
@@ -102,11 +88,15 @@ class DelegationListener:
         upsert_progress: ProgressUpdater,
         drop_progress: Callable[[str], None],
         render_signal: Callable[[str], None],
+        plan_bubble_injector: PlanBubbleInjector | None = None,
+        plan_storer: Callable[[str, str], None] | None = None,
     ) -> None:
         self._inject_message = inject_message
         self._upsert_progress = upsert_progress
         self._drop_progress = drop_progress
         self._render_signal = render_signal
+        self._plan_bubble_injector = plan_bubble_injector
+        self._plan_storer = plan_storer
         # Per-task rolling output tails (bounded)
         self._output_tails: dict[str, str] = {}
 
@@ -248,6 +238,25 @@ class DelegationListener:
             )
 
     def _inject_capsule_result(self, payload: dict[str, Any]) -> None:
+        # For planner capsules, mount a visible formatted bubble so the user
+        # sees the raw plan immediately, while still feeding the full JSON to
+        # the LLM for synthesis.
+        agent = payload.get("agent", "")
+        if agent == "planner":
+            if self._plan_bubble_injector is not None:
+                from ..tools.delegate.capsule_view import format_plan_capsule
+
+                try:
+                    plan_md = format_plan_capsule(payload)
+                    if plan_md:
+                        self._plan_bubble_injector(plan_md)
+                except Exception as exc:
+                    logger.warning(f"Failed to render plan bubble: {exc}")
+            # Store the plan on the agent for post-execution verification.
+            if self._plan_storer is not None:
+                objective = payload.get("milestone", "")
+                plan_text = json.dumps(payload, indent=2)
+                self._plan_storer(objective, plan_text)
         msg = (
             "DELEGATION_CAPSULE_RESULT (json):\n```json\n"
             f"{json.dumps(payload, indent=2)}\n```"
@@ -269,6 +278,7 @@ __all__ = [
     "_OUTPUT_TAIL_MAX_CHARS",
     "_OUTPUT_TAIL_MAX_LINES",
     "DelegationListener",
+    "PlanBubbleInjector",
     "_truncate_output_tail",
     "format_delegation_progress",
     "format_task_signal",

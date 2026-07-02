@@ -364,11 +364,14 @@ class MessageBubble(Vertical):
         return escape("\n".join(lines))
 
     def _get_tool_line_max_width(self) -> int:
-        width = self.size.width
+        try:
+            width = self.app.size.width
+        except Exception:
+            width = self.size.width
         if width <= 0:
             return 80
-        # Keep a small safety margin for bubble padding and list indentation.
-        return max(20, width - 6)
+        # bubble padding (4) + section-content margin-left (2) + safety buffer (4)
+        return max(20, width - 10)
 
     def append_token(self, token: str, is_thought: bool = False) -> None:
         if is_thought:
