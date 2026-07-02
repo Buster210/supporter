@@ -501,6 +501,11 @@ class MessageBubble(Vertical):
         new_el["_recheck_markdown"] = True
 
         self._update_ui_content()
+        # Force a Textual re-render so the updated content is painted even when
+        # the widget tree structure hasn't changed (view.update() alone may not
+        # trigger a repaint for in-place content swaps).
+        if self.is_attached:
+            self.refresh()
 
     def on_click(self, event: Click) -> None:
         if not self.collapsed:

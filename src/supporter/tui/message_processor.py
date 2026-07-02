@@ -175,10 +175,22 @@ class ChatMessageProcessor:
             from ..worker import format_response
 
             formatted = await format_response(bubble.content, model)
-            if formatted and formatted != bubble.content:
-                bubble.replace_content(formatted)
-        except Exception as exc:
-            logger.warning(f"_maybe_format_bubble failed: {exc}")
+            logger.debug(
+                "formatter returned %d chars (original=%d)",
+                len(formatted),
+                len(bubble.content),
+            )
+            if not formatted or formatted == bubble.content:
+                logger.debug("formatter returned unchanged content")
+                return
+            logger.info(
+                "formatter changed content (%d -> %d chars), replacing bubble",
+                len(bubble.content),
+                len(formatted),
+            )
+            bubble.replace_content(formatted)
+        except Exception:
+            logger.warning("_maybe_format_bubble failed", exc_info=True)
 
     def _update_status(self, status: str) -> None:
         self._app.status_label = status

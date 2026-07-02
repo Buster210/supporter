@@ -121,9 +121,9 @@ class ModeManager:
         username = getpass.getuser()
         now = datetime.datetime.now().strftime("%I:%M %p")
         prompt = (
-            f"Give a short, unique, and friendly one-sentence greeting to {username}. "
-            f"Current time is {now}. Include the exact username `{username}` "
-            "in the sentence."
+            f"Open the session for {username} (local time {now}) in a single "
+            f"line that sounds like you: a sharp, present partner showing up to "
+            f"work, not a chatbot wishing them a nice day. Address them by name."
         )
 
         banner = self._app.query_one("#welcome-banner")
