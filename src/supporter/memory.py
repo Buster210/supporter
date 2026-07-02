@@ -35,7 +35,7 @@ import os
 import re
 import threading
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -117,14 +117,6 @@ def _memory_path() -> Path:
 # ---------------------------------------------------------------------------
 # WorkingMemory store
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class _MemoryState:
-    path: Path
-    notes: deque[Note] = field(default_factory=deque)
-    # Index by kind for fast ``list(kind=...)`` queries.
-    by_kind: dict[str, list[Note]] = field(default_factory=dict)
 
 
 class WorkingMemory:

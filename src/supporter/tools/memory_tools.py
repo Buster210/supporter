@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from typing import Any
 
 from ..memory import (
     Note,
@@ -37,17 +36,6 @@ __all__ = [
     "memory_status",
     "memory_write",
 ]
-
-
-def _note_to_dict(note: Note) -> dict[str, Any]:
-    return {
-        "timestamp": note.timestamp,
-        "kind": note.kind,
-        "label": note.label,
-        "source": note.source,
-        "value": note.value,
-    }
-
 
 def _format_notes(notes: Iterable[Note]) -> str:
     notes_list = list(notes)

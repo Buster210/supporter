@@ -71,8 +71,6 @@ FAST_HOSTS: Final[frozenset[str]] = frozenset(
     }
 )
 
-HOST_PROMOTION_THRESHOLD: Final = 5
-
 SENSITIVE_ACTION_PATTERNS: Final = (
     "submit",
     "post",

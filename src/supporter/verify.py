@@ -97,18 +97,6 @@ def _named(name: str, c: Callable[[LLMResult, str], Any]) -> Check:
     return _Wrapped()
 
 
-def _sync(c: Callable[[LLMResult, str], Any]) -> Check:
-    """Adapter for tests / simple callers that pass a sync function.
-
-    Best-effort: derives the check name from the wrapped function's
-    ``__name__``. Lambdas fall back to ``"check"``.
-    """
-    name = getattr(c, "__name__", "check")
-    if name == "<lambda>":
-        name = "check"
-    return _named(name, c)
-
-
 # ---------------------------------------------------------------------------
 # Built-in checks
 # ---------------------------------------------------------------------------

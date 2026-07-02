@@ -168,7 +168,7 @@ def load_config() -> AppConfig:
             "GEMINI_LIVE_FALLBACK_MODEL", MODEL_GEMINI_LIVE_FALLBACK
         ),
         gemini_fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", MODEL_GEMMA_26B),
-        log_file=os.getenv("LOG_FILE", "app.log"),
+        log_file=os.getenv("LOG_FILE", "logs/app.log"),
         voice_name=os.getenv("GEMINI_VOICE_NAME", "Puck"),
         default_system_instruction=os.getenv(
             "DEFAULT_SYSTEM_INSTRUCTION", DEFAULT_SYSTEM_INSTRUCTION

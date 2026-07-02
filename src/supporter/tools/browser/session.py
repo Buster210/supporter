@@ -98,49 +98,6 @@ def _get_alloc_lock() -> asyncio.Lock:
         _ALLOC_LOCK = asyncio.Lock()
     return _ALLOC_LOCK
 
-
-def _get_agent_pace_state(aid: str) -> dict[str, Any]:
-    """Get per-agent pacing state, initializing if needed."""
-    if aid not in _ACTION_COUNT:
-        _ACTION_COUNT[aid] = 0
-        _ACTION_CAP_CEILING[aid] = 0
-        _LAST_ACTION_TS[aid] = 0.0
-        _SESSION_START_TS[aid] = 0.0
-        _TEMPO[aid] = 1.0
-    return {
-        "action_count": _ACTION_COUNT[aid],
-        "action_cap_ceiling": _ACTION_CAP_CEILING[aid],
-        "last_action_ts": _LAST_ACTION_TS[aid],
-        "session_start_ts": _SESSION_START_TS[aid],
-        "tempo": _TEMPO[aid],
-    }
-
-
-def _get_agent_page(aid: str) -> Page | None:
-    """Get the active page for a given agent."""
-    return _PAGES.get(aid)
-
-
-def _set_agent_page(aid: str, page: Any) -> None:
-    """Set the active page for a given agent."""
-    _PAGES[aid] = page
-
-
-def _get_agent_frame_selector(aid: str) -> str | None:
-    """Get the frame selector for a given agent."""
-    return _FRAME_SELECTORS.get(aid)
-
-
-def _set_agent_frame_selector(aid: str, selector: str | None) -> None:
-    """Set the frame selector for a given agent."""
-    _FRAME_SELECTORS[aid] = selector
-
-
-def _get_agent_owned_pages(aid: str) -> set[Page]:
-    """Get the set of pages owned by a given agent."""
-    return _OWNED_PAGES.get(aid, set())
-
-
 def _register_owned_page(aid: str, page: Any) -> None:
     """Register a page as owned by a given agent."""
     if aid not in _OWNED_PAGES:
