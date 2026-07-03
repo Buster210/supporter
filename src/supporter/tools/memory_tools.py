@@ -37,6 +37,7 @@ __all__ = [
     "memory_write",
 ]
 
+
 def _format_notes(notes: Iterable[Note]) -> str:
     notes_list = list(notes)
     if not notes_list:

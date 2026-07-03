@@ -98,6 +98,7 @@ def _get_alloc_lock() -> asyncio.Lock:
         _ALLOC_LOCK = asyncio.Lock()
     return _ALLOC_LOCK
 
+
 def _register_owned_page(aid: str, page: Any) -> None:
     """Register a page as owned by a given agent."""
     if aid not in _OWNED_PAGES:

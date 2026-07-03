@@ -144,6 +144,7 @@ def reset_cursor() -> None:
     global _LAST_POS
     _LAST_POS = None
 
+
 def init_cursor(viewport: ViewportSize | None) -> None:
     """Set ``_LAST_POS`` to a realistic starting point inside the viewport."""
     global _LAST_POS
@@ -156,6 +157,7 @@ def init_cursor(viewport: ViewportSize | None) -> None:
         random.uniform(0.15, 0.85) * w,
         random.uniform(0.15, 0.85) * h,
     )
+
 
 def _lognormal_delay(median: float, sigma: float, lo: float, hi: float) -> float:
     value = median * math.exp(random.gauss(0.0, sigma))

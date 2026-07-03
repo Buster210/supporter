@@ -94,6 +94,8 @@ class AppConfig:
     browser_promotion_threshold: int = 5
     # Auto-approve browser actions (files remain gated)
     browser_auto_approve: bool = True
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "openai/gpt-oss-120b:free"
 
 
 @dataclass

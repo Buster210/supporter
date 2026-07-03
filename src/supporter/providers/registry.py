@@ -97,3 +97,29 @@ def _gemini_factory(
 
 
 PROVIDER_FACTORIES["gemini"] = _gemini_factory
+
+
+def _openrouter_factory(
+    *,
+    keys: list[str],
+    model_name: str | None = None,
+    pool_size: int = 2,
+    registry: dict[str, Callable[..., Any]] | None = None,
+    system_instruction: str | None = None,
+    live: bool = False,
+) -> LLMProvider:
+    """Build an OpenRouter provider (REST, no Live support)."""
+    if live:
+        raise ValueError("OpenRouter does not support Live/WebSocket mode")
+    from ..pool import config
+    from .openrouter_provider import OpenRouterProvider
+
+    # Honor caller-supplied keys (shared factory contract); fall back to env config.
+    api_key = (keys[0] if keys else None) or config.openrouter_api_key
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY is missing/empty in environment")
+    target_model = model_name or config.openrouter_model
+    return OpenRouterProvider(api_key=api_key, model_name=target_model)
+
+
+PROVIDER_FACTORIES["openrouter"] = _openrouter_factory

@@ -248,6 +248,8 @@ def load_config() -> AppConfig:
         browser_micro_behavior_rate=float(os.getenv("MICRO_BEHAVIOR_RATE", "0.06")),
         browser_promotion_threshold=_int_env("BROWSER_PROMOTION_THRESHOLD", 5),
         browser_auto_approve=_bool_env("BROWSER_AUTO_APPROVE", True),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
     )
 
 
