@@ -80,6 +80,7 @@ class SupporterApp(App[None]):
             drop_progress=self._drop_delegation_progress,
             render_signal=self._render_delegation_signal_now,
             plan_bubble_injector=self._inject_plan_bubble,
+            plan_storer=self._store_pending_plan,
         )
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
@@ -299,7 +300,7 @@ class SupporterApp(App[None]):
         if self._is_processing:
             self._user_message_queue.append((user_text, False))
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
-                [msg for msg, _ in self._user_message_queue]
+                self._queue_display_labels()
             )
             self._toast_manager.notify(
                 self, f"Message queued ({len(self._user_message_queue)})", type="queue"
@@ -320,6 +321,12 @@ class SupporterApp(App[None]):
 
     async def _mount_user_turn(self, text: str, role: str = "user") -> ChatTurn:
         chat_view = self.query_one("#chat-view", ChatContainer)
+        # Auto-collapse all previous turns so only the active one is expanded.
+        try:
+            for turn in chat_view.query(ChatTurn):
+                turn.auto_collapse()
+        except TypeError:
+            pass  # chat_view not fully initialized (e.g. in tests)
         new_turn = ChatTurn(MessageBubble(role=role, content=text))
         self.active_turn = new_turn
         await chat_view.mount(new_turn)
@@ -360,13 +367,23 @@ class SupporterApp(App[None]):
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
 
-            await self._process_streaming_execution(
+            bubble = await self._process_streaming_execution(
                 text,
                 target_container,
                 start_time,
                 self.agent,
                 exclude_from_history,
             )
+            # Verify the planned turn post-execution (no-op when unplanned).
+            objective = self.agent.pending_plan_objective
+            plan = self.agent.pending_plan_text
+            result_text = getattr(bubble, "content", "") if bubble else ""
+            await self._verify_planned_turn(
+                objective, plan, result_text, target_container, chat_view
+            )
+            # Clear so a stale plan from a failed turn never leaks.
+            self.agent.pending_plan_objective = ""
+            self.agent.pending_plan_text = ""
         except ToolError as e:
             await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
         except Exception as e:
@@ -414,6 +431,41 @@ class SupporterApp(App[None]):
         return await self._message_processor.process_streaming(
             text, target, start_time, agent, exclude_from_history
         )
+
+    async def _verify_planned_turn(
+        self,
+        objective: str,
+        plan: str,
+        result_text: str,
+        target: Vertical,
+        chat_view: ChatContainer,
+    ) -> None:
+        """Verify a planned turn's result; warn only when judged incomplete.
+
+        No-op when the turn was unplanned (``objective`` empty). ``verify_plan``
+        is fail-open and never raises; the guard here swallows anything else so
+        verification can never break the turn.
+        """
+        if not objective:
+            return
+        try:
+            from ..prompts import DELEGATE_AGENT_ROSTER
+            from ..worker import verify_plan
+
+            model = DELEGATE_AGENT_ROSTER.get("planner", {}).get(
+                "model", "gemma-4-31b-it"
+            )
+            is_done, reason = await verify_plan(objective, plan, result_text, model)
+            if not is_done:
+                await target.mount(
+                    MessageBubble(
+                        role="system",
+                        content=f"⚠ Verification: incomplete — {reason}",
+                    )
+                )
+                chat_view.jump_to_bottom()
+        except Exception as exc:
+            logger.warning(f"verify_plan gate failed: {exc}")
 
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading
@@ -481,11 +533,17 @@ class SupporterApp(App[None]):
     def _notify_error(self, message: str) -> None:
         self._safe_call(self._toast_manager.notify, self, message, type="error")
 
+    def _queue_display_labels(self) -> list[str]:
+        # Only user-typed messages belong in the queue badges. System messages
+        # (e.g. the delegation capsule JSON) ride the same queue to serialize
+        # behind a busy agent, but are not user input -- never show them.
+        return [text for text, is_sys in self._user_message_queue if not is_sys]
+
     def _inject_system_message(self, text: str) -> None:
         if self._is_processing:
             self._user_message_queue.append((text, True))
             self.query_one("#queue-display", QueuedMessagesDisplay).update_queue(
-                [msg for msg, _ in self._user_message_queue]
+                self._queue_display_labels()
             )
         else:
             self.run_worker(self._process_system_message(text))
@@ -566,6 +624,12 @@ class SupporterApp(App[None]):
         else:
             await target.mount(bubble)
         chat_view.follow_end()
+
+    def _store_pending_plan(self, objective: str, plan_text: str) -> None:
+        """Store plan on agent for post-execution verification."""
+        if self.agent:
+            self.agent.pending_plan_objective = objective
+            self.agent.pending_plan_text = plan_text
 
     def _drop_delegation_progress(self, job_id: str) -> None:
         self._delegation_bubbles.pop(job_id, None)

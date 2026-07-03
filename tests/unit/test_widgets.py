@@ -185,6 +185,20 @@ class TestChatTurn:
         turn.toggle_collapse()
         assert turn.manually_expanded is True
 
+    def test_auto_collapse_collapses_unless_manually_expanded(self) -> None:
+        user_bubble = MessageBubble(role="user", content="test user")
+        turn = ChatTurn(user_bubble)
+        turn.manually_expanded = False
+        turn.auto_collapse()
+        assert turn.collapsed is True
+
+    def test_auto_collapse_does_not_collapse_when_manually_expanded(self) -> None:
+        user_bubble = MessageBubble(role="user", content="test user")
+        turn = ChatTurn(user_bubble)
+        turn.manually_expanded = True
+        turn.auto_collapse()
+        assert turn.collapsed is False
+
     def test_watch_collapsed_updates_bubbles(self) -> None:
         user_bubble = MessageBubble(role="user", content="test user")
         agent_bubble = MessageBubble(role="agent", content="test agent")
