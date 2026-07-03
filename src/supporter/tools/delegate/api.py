@@ -21,10 +21,10 @@ from .scheduler import (
 )
 from .validation import validate_tasks
 
-_on_delegation_start: Callable[[str], None] | None = None
+_on_delegation_start: Callable[[str, str], None] | None = None
 
 
-def set_delegation_start_callback(cb: Callable[[str], None] | None) -> None:
+def set_delegation_start_callback(cb: Callable[[str, str], None] | None) -> None:
     global _on_delegation_start
     _on_delegation_start = cb
 
@@ -95,8 +95,22 @@ async def delegate_tasks(
         await create_capsule(
             job_id, milestone, validated_tasks, parallel_cap, question_id
         )
+        # Build the user-facing plan table once. It is rendered mechanically in
+        # the TUI via the start callback -- the model never relays it.
+        headers = ["#", "Task ID", "Agent", "Dependencies"]
+        rows = []
+        for i, t in enumerate(validated_tasks, 1):
+            deps = ", ".join(t["depends_on"]) or "none"
+            rows.append([str(i), t["id"], t["agent"] or "custom", f"after: {deps}"])
+        plan_table = (
+            f"Delegation started for milestone: **{milestone}**\n"
+            f"Job ID: `{job_id}`\n\n"
+            f"{format_delegation_table(headers, rows)}\n\n"
+            f"Sub-agents are running with parallel limit: {parallel_cap}"
+        )
+
         if _on_delegation_start:
-            _on_delegation_start(job_id)
+            _on_delegation_start(job_id, plan_table)
 
         bus.publish(
             MilestoneStarted(
@@ -126,29 +140,19 @@ async def delegate_tasks(
         BACKGROUND_TASKS.add(milestone_task)
         milestone_task.add_done_callback(BACKGROUND_TASKS.discard)
 
-        headers = ["#", "Task ID", "Agent", "Dependencies"]
-        rows = []
-        for i, t in enumerate(validated_tasks, 1):
-            deps = ", ".join(t["depends_on"]) or "none"
-            rows.append([str(i), t["id"], t["agent"] or "custom", f"after: {deps}"])
-        plan = [
-            f"Delegation started for milestone: **{milestone}**",
-            f"Job ID: `{job_id}`",
-            "",
-            format_delegation_table(headers, rows),
-        ]
-        plan.append(f"\nSub-agents are running with parallel limit: {parallel_cap}")
-        plan.append(
-            "\nResults will be automatically posted back here when the "
-            "milestone is complete. DO NOT check for results constantly; "
-            "wait for the system message."
+        # Terse summary for the model only -- the full plan table is already
+        # rendered to the user via the start callback above. Do NOT include the
+        # table here, or the model may echo a duplicate.
+        return (
+            f"Delegation started for milestone: **{milestone}**\n"
+            f"Job ID: `{job_id}`\n"
+            f"{len(validated_tasks)} task(s) running (parallel cap "
+            f"{parallel_cap}). The plan table is shown to the user "
+            "automatically; do not reproduce it. Results post back here when "
+            "the milestone completes -- do not poll. Use "
+            f"`check_delegation(job_id='{job_id}')` only if the user asks for "
+            "live status."
         )
-        plan.append(
-            f"You can also use `check_delegation(job_id='{job_id}')` "
-            "for a live non-blocking snapshot, but DO NOT do this "
-            "unless asked by the user."
-        )
-        return "\n".join(plan)
     except Exception as e:
         raise ToolError(f"Delegation failed: {e}") from e
 

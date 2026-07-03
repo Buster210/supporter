@@ -515,7 +515,11 @@ class SupporterApp(App[None]):
         else:
             await self._process_message_cycle(text, mount_user=True, role="agent")
 
-    def _start_delegation_listener(self, job_id: str) -> None:
+    def _start_delegation_listener(self, job_id: str, plan_table: str = "") -> None:
+        # Render the plan table mechanically the moment delegation fires -- the
+        # model never relays it.
+        if plan_table:
+            self._inject_plan_bubble(plan_table)
         self.run_worker(self._delegation_listener.listen(job_id), exclusive=False)
 
     async def _upsert_delegation_progress(self, job_id: str, bus: Any) -> None:
