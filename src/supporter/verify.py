@@ -288,7 +288,10 @@ def build_default_checks(
     required_json_keys: tuple[str, ...] = (),
 ) -> list[Check]:
     """A pragmatic default set: length + garble + (optional) JSON shape."""
-    out: list[Check] = [check_min_chars(min_chars=min_chars), check_no_unicode_garble()]
+    out: list[Check] = [
+        check_min_chars(min_chars=min_chars),
+        check_no_unicode_garble(),
+    ]
     if required_json_keys:
         out.append(check_json_shape(required_json_keys))
     return out
