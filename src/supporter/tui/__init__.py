@@ -73,7 +73,15 @@ class SupporterApp(App[None]):
         self._is_processing = False
         self._user_message_queue: list[tuple[str, bool]] = []
         self._toast_manager = ToastManager()
-        self._delegation_bubbles: dict[str, Any] = {}
+        # Delegation UI is buffered from delegation-start and flushed into the
+        # model's *answer* bubble (the response streamed after results post
+        # back) -- only once that bubble finishes AND the delegation completes,
+        # then its meta line is revealed. See _try_flush_delegations.
+        self._delegation_buffers: dict[str, dict[str, Any]] = {}
+        self._active_delegation_job: str | None = None
+        self._flush_host: MessageBubble | None = None
+        self._flush_host_ready = False
+        self._defer_agent_meta_once = False
         self._delegation_listener = DelegationListener(
             inject_message=self._inject_delegation_message,
             upsert_progress=self._upsert_delegation_progress,
@@ -551,13 +559,50 @@ class SupporterApp(App[None]):
     def _render_delegation_signal_now(self, text: str) -> None:
         self._safe_call(lambda: self.run_worker(self._render_delegation_signal(text)))
 
+    def _delegation_mount_target(self) -> Vertical:
+        # Fallback target when there is no agent bubble to host delegation UI:
+        # the active turn, or the last turn, never the chat root.
+        chat_view = self.query_one("#chat-view", ChatContainer)
+        if self.active_turn is not None:
+            return self.active_turn
+        turns = list(chat_view.query(ChatTurn))
+        return turns[-1] if turns else chat_view
+
+    def _delegation_host_bubble(self) -> MessageBubble | None:
+        # The delegation block belongs INSIDE the model's answer bubble (the
+        # turn's last agent bubble), before its meta line -- not as a sibling
+        # mounted after that bubble's metadata.
+        turn = self.active_turn
+        if turn is None:
+            turns = list(self.query_one("#chat-view", ChatContainer).query(ChatTurn))
+            turn = turns[-1] if turns else None
+        bubbles = getattr(turn, "agent_bubbles", None)
+        if bubbles:
+            return bubbles[-1]  # type: ignore[no-any-return]
+        return None
+
+    async def _mount_delegation_widget(self, widget: Any) -> None:
+        """Mount a delegation widget inside the triggering bubble, before its
+        meta line. Fall back to the turn when no host bubble exists yet."""
+        host = self._delegation_host_bubble()
+        if host is not None and host.append_before_meta(widget):
+            self.query_one("#chat-view", ChatContainer).follow_end()
+            return
+        target = self._delegation_mount_target()
+        if isinstance(widget, MessageBubble) and hasattr(target, "mount_bubble"):
+            await target.mount_bubble(widget)
+        else:
+            await target.mount(widget)
+        self.query_one("#chat-view", ChatContainer).follow_end()
+
     async def _render_delegation_signal(self, text: str) -> None:
         body = text.replace("<br/>", "").replace("`", "").strip()
-        label = Static(body, classes="delegation-signal")
-        chat_view = self.query_one("#chat-view", ChatContainer)
-        target = self.active_turn or chat_view
-        await target.mount(label)
-        chat_view.follow_end()
+        buf = self._delegation_buffers.get(self._active_delegation_job or "")
+        if buf is not None:
+            buf["signals"].append(body)
+            return
+        # No active delegation buffer (shouldn't normally happen): mount inline.
+        await self._mount_delegation_widget(Static(body, classes="delegation-signal"))
 
     async def _process_system_message(self, text: str) -> None:
         # The aggregate delegation result must reach the model, but its raw JSON
@@ -566,64 +611,58 @@ class SupporterApp(App[None]):
             "DELEGATION_CAPSULE_RESULT (json)" in text
             or "MILESTONE_RESULT (json)" in text
         )
-        if self.active_turn:
-            await self._process_message_cycle(text, mount_user=False)
-        elif suppress_bubble:
-            await self._process_message_cycle(text, mount_user=False, role="agent")
-        else:
-            await self._process_message_cycle(text, mount_user=True, role="agent")
+        # A delegation result posts back here: defer the meta line of the answer
+        # bubble it produces so the buffered delegation block can be appended
+        # below the answer text before the meta is revealed.
+        if suppress_bubble:
+            self._defer_agent_meta_once = True
+        try:
+            if self.active_turn:
+                await self._process_message_cycle(text, mount_user=False)
+            elif suppress_bubble:
+                await self._process_message_cycle(text, mount_user=False, role="agent")
+            else:
+                await self._process_message_cycle(text, mount_user=True, role="agent")
+        finally:
+            self._defer_agent_meta_once = False
+        if suppress_bubble:
+            self._register_delegation_flush_host()
 
     def _start_delegation_listener(self, job_id: str, plan_table: str = "") -> None:
-        # Render the plan table mechanically the moment delegation fires -- the
-        # model never relays it.
-        if plan_table:
-            self._inject_plan_bubble(plan_table)
+        # Buffer everything from delegation-start. delegate_tasks is
+        # fire-and-forget: the trigger bubble finishes immediately and the real
+        # answer arrives later in its own bubble (when results post back). The
+        # buffer is flushed into that answer bubble -- never shown live.
+        self._active_delegation_job = job_id
+        self._delegation_buffers[job_id] = {
+            "plan": plan_table or None,
+            "signals": [],
+            "progress": None,
+            "done": False,
+        }
         self.run_worker(self._delegation_listener.listen(job_id), exclusive=False)
 
     async def _upsert_delegation_progress(self, job_id: str, bus: Any) -> None:
-        content = format_delegation_progress(job_id, bus)
-        bubble = self._delegation_bubbles.get(job_id)
-        if bubble is not None:
-            bubble.elements[0]["content"] = content
-            bubble._update_ui_content()
-            return
-
-        bubble = MessageBubble(role="agent", content="")
-        bubble.add_class("delegation-progress")
-        bubble.elements = [
-            {
-                "type": "subagent_result",
-                "content": content,
-                "collapsed": True,
-                "manually_interacted": False,
-            }
-        ]
-        bubble.collapsed = False
-        self._delegation_bubbles[job_id] = bubble
-        chat_view = self.query_one("#chat-view", ChatContainer)
-        target = self.active_turn or chat_view
-        if hasattr(target, "mount_bubble"):
-            await target.mount_bubble(bubble)
-        else:
-            await target.mount(bubble)
-        chat_view.follow_end()
+        # Buffer the latest progress; it is rendered once, on completion.
+        buf = self._delegation_buffers.get(job_id)
+        if buf is not None:
+            buf["progress"] = format_delegation_progress(job_id, bus)
 
     def _inject_delegation_message(self, message: str) -> None:
         self._safe_call(self._inject_system_message, message)
 
     def _inject_plan_bubble(self, markdown: str) -> None:
-        """Mount a visible plan-result bubble from a background thread."""
+        """Buffer/mount a plan-result bubble from a background thread."""
         self._safe_call(lambda: self.run_worker(self._mount_plan_bubble(markdown)))
 
     async def _mount_plan_bubble(self, markdown: str) -> None:
+        buf = self._delegation_buffers.get(self._active_delegation_job or "")
+        if buf is not None:
+            buf["plan"] = markdown
+            return
         bubble = MessageBubble(role="agent", content=markdown)
-        chat_view = self.query_one("#chat-view", ChatContainer)
-        target = self.active_turn or chat_view
-        if hasattr(target, "mount_bubble"):
-            await target.mount_bubble(bubble)
-        else:
-            await target.mount(bubble)
-        chat_view.follow_end()
+        bubble.add_class("delegation-plan")
+        await self._mount_delegation_widget(bubble)
 
     def _store_pending_plan(self, objective: str, plan_text: str) -> None:
         """Store plan on agent for post-execution verification."""
@@ -632,7 +671,76 @@ class SupporterApp(App[None]):
             self.agent.pending_plan_text = plan_text
 
     def _drop_delegation_progress(self, job_id: str) -> None:
-        self._delegation_bubbles.pop(job_id, None)
+        # Delegation reached a terminal state. Mark it done and try to flush --
+        # the flush only fires once the answer bubble is also ready (whichever
+        # of the two events lands last triggers it).
+        buf = self._delegation_buffers.get(job_id)
+        if buf is not None:
+            buf["done"] = True
+        if self._active_delegation_job == job_id:
+            self._active_delegation_job = None
+        self._try_flush_delegations()
+
+    def _register_delegation_flush_host(self) -> None:
+        # The answer bubble for a posted-back delegation result just finished
+        # streaming (its meta deferred): make it the flush host and try to flush.
+        self._flush_host = self._delegation_host_bubble()
+        self._flush_host_ready = True
+        self._try_flush_delegations()
+
+    def _try_flush_delegations(self) -> None:
+        # Flush only when BOTH conditions hold: the answer bubble is ready and
+        # at least one delegation has completed. Reset host readiness up front so
+        # a concurrent caller can't double-schedule the same flush.
+        if not self._flush_host_ready:
+            return
+        ready = [j for j, buf in self._delegation_buffers.items() if buf.get("done")]
+        if not ready:
+            return
+        self._flush_host_ready = False
+        host = self._flush_host
+        self._flush_host = None
+        self.run_worker(self._flush_delegations(host, ready))
+
+    async def _flush_delegations(
+        self, host: MessageBubble | None, job_ids: list[str]
+    ) -> None:
+        for job_id in job_ids:
+            buf = self._delegation_buffers.pop(job_id, None)
+            if buf is not None:
+                await self._append_delegation_block(host, buf)
+        if host is not None:
+            host.reveal_meta()
+        self.query_one("#chat-view", ChatContainer).follow_end()
+
+    async def _append_delegation_block(
+        self, host: MessageBubble | None, buf: dict[str, Any]
+    ) -> None:
+        if buf.get("plan"):
+            plan = MessageBubble(role="agent", content=buf["plan"])
+            plan.add_class("delegation-plan")
+            await self._append_to_host(host, plan)
+        for signal in buf.get("signals", []):
+            label = Static(signal, classes="delegation-signal")
+            await self._append_to_host(host, label)
+        if buf.get("progress"):
+            progress = MessageBubble(role="agent", content="")
+            progress.add_class("delegation-progress")
+            progress.elements = [
+                {
+                    "type": "subagent_result",
+                    "content": buf["progress"],
+                    "collapsed": True,
+                    "manually_interacted": False,
+                }
+            ]
+            progress.collapsed = False
+            await self._append_to_host(host, progress)
+
+    async def _append_to_host(self, host: MessageBubble | None, widget: Any) -> None:
+        if host is not None and host.append_before_meta(widget):
+            return
+        await self._mount_delegation_widget(widget)
 
 
 def main() -> None:

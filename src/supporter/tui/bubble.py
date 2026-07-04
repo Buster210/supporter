@@ -10,6 +10,7 @@ from textual.containers import Vertical
 from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Label, Static
 
 from .constants import (
@@ -93,6 +94,9 @@ class MessageBubble(Vertical):
         self.tool_calls: list[dict[str, Any]] = []
         self.elements: list[dict[str, Any]] = []
         self._render_pending = False
+        # When True, finalize() keeps the meta line hidden so a deferred
+        # delegation block can be appended first; reveal_meta() shows it after.
+        self.defer_meta = False
 
         if self.content:
             self.elements.append(
@@ -458,10 +462,29 @@ class MessageBubble(Vertical):
             self.elements[-1]["collapsed"] = True
         if self._meta_label:
             self._meta_label.update(self._get_meta_text())
-            self._meta_label.display = not self.collapsed
+            self._meta_label.display = not self.collapsed and not self.defer_meta
         if self._message_view and self._message_view.size.width > 0:
             self._message_view.styles.width = self._message_view.size.width
         self._update_ui_content()
+
+    def reveal_meta(self) -> None:
+        """Show a previously deferred meta line (after appended content)."""
+        self.defer_meta = False
+        if self._meta_label:
+            self._meta_label.update(self._get_meta_text())
+            self._meta_label.display = not self.collapsed
+
+    def append_before_meta(self, widget: Any) -> bool:
+        """Mount *widget* after content, before the meta label.
+
+        Returns True if mounted, False when ``_meta_label`` is not composed yet
+        (caller should fall back to another target).
+        """
+        parent = self._meta_label.parent if self._meta_label else None
+        if parent is not None and isinstance(parent, Widget):
+            parent.mount(widget, before=self._meta_label)
+            return True
+        return False
 
     def replace_content(self, new_text: str) -> None:
         """Replace plain-text content of a finalized pure-text bubble.

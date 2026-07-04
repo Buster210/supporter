@@ -143,6 +143,11 @@ class ChatMessageProcessor:
         from .chat import ChatTurn
 
         bubble = bubble_class(role="agent", content="", streaming=True)
+        # The first bubble of a delegation post-back defers its meta line so the
+        # buffered delegation block lands below the answer text first.
+        if getattr(self._app, "_defer_agent_meta_once", False):
+            bubble.defer_meta = True
+            self._app._defer_agent_meta_once = False
         if isinstance(container, ChatTurn):
             await container.mount_bubble(bubble)
         else:

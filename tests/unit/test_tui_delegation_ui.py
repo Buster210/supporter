@@ -488,7 +488,17 @@ async def test_render_delegation_signal_mounts_centered_label() -> None:
     chat_view.mount = AsyncMock()
     chat_view.follow_end = MagicMock()
     app.query_one = MagicMock(return_value=chat_view)
+    chat_view.query.return_value = []
     app.active_turn = None
+    app._delegation_buffers = {}
+    app._active_delegation_job = None
+    app._delegation_mount_target = MagicMock(return_value=chat_view)
+    app._delegation_host_bubble = SupporterApp._delegation_host_bubble.__get__(
+        app, SupporterApp
+    )
+    app._mount_delegation_widget = SupporterApp._mount_delegation_widget.__get__(
+        app, SupporterApp
+    )
     bus = MagicMock()
     bus.get_snapshot.return_value = {
         "get_time": {"agent_label": "explorer", "task_goal": "Find time"}
@@ -571,11 +581,72 @@ def test_worker_capsule_does_not_mount_bubble() -> None:
     assert "DELEGATION_CAPSULE_RESULT (json):" in inject_message.call_args.args[0]
 
 
-def test_drop_delegation_progress_removes_stale_entry() -> None:
+def test_drop_delegation_progress_marks_done_and_tries_flush() -> None:
     app = MagicMock()
-    app._delegation_bubbles = {"job123": object()}
+    app._delegation_buffers = {"job123": {"done": False}}
+    app._active_delegation_job = "job123"
+    app._try_flush_delegations = MagicMock()
 
     bound = SupporterApp._drop_delegation_progress.__get__(app, SupporterApp)
     bound("job123")
 
-    assert app._delegation_bubbles == {}
+    # Buffer is kept (flushed later into the answer bubble), only marked done.
+    assert app._delegation_buffers["job123"]["done"] is True
+    assert app._active_delegation_job is None
+    app._try_flush_delegations.assert_called_once_with()
+
+
+def test_try_flush_waits_for_both_host_and_done() -> None:
+    app = MagicMock()
+    app.run_worker = MagicMock()
+    app._flush_host = object()
+    app._delegation_buffers = {"job123": {"done": False}}
+    bound = SupporterApp._try_flush_delegations.__get__(app, SupporterApp)
+
+    # Host not ready yet -> no flush even though we have a buffer.
+    app._flush_host_ready = False
+    bound()
+    app.run_worker.assert_not_called()
+
+    # Host ready but delegation not done -> still no flush.
+    app._flush_host_ready = True
+    bound()
+    app.run_worker.assert_not_called()
+
+    # Both conditions met -> flush scheduled once and host readiness reset.
+    app._delegation_buffers["job123"]["done"] = True
+    bound()
+    app.run_worker.assert_called_once()
+    assert app._flush_host_ready is False
+    assert app._flush_host is None
+
+
+def test_register_flush_host_sets_answer_bubble_and_tries_flush() -> None:
+    app = MagicMock()
+    host = object()
+    app._delegation_host_bubble = MagicMock(return_value=host)
+    app._try_flush_delegations = MagicMock()
+
+    bound = SupporterApp._register_delegation_flush_host.__get__(app, SupporterApp)
+    bound()
+
+    assert app._flush_host is host
+    assert app._flush_host_ready is True
+    app._try_flush_delegations.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_process_system_message_defers_meta_and_registers_host() -> None:
+    app = MagicMock()
+    app.active_turn = None
+    app._defer_agent_meta_once = False
+    app._process_message_cycle = AsyncMock()
+    app._register_delegation_flush_host = MagicMock()
+
+    msg = "DELEGATION_CAPSULE_RESULT (json):\n```json\n{}\n```"
+    bound = SupporterApp._process_system_message.__get__(app, SupporterApp)
+    await bound(msg)
+
+    # Flag is consumed by bubble creation; reset to False after the cycle.
+    assert app._defer_agent_meta_once is False
+    app._register_delegation_flush_host.assert_called_once_with()
