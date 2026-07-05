@@ -375,23 +375,90 @@ class SupporterApp(App[None]):
             if not self.agent:
                 raise RuntimeError("Agent is not initialized")
 
-            bubble = await self._process_streaming_execution(
+            # G2: the model triages each turn — it answers directly or delegates
+            # to the planner. Run one pass, then engage the verify/replan loop
+            # only if a plan was actually produced (model chose the task route).
+            from ..config import config
+            from ..replan import ReplanContext
+
+            # ponytail: first pass uses the caller's exclude_from_history; a task
+            # turn that verifies first try therefore persists, unlike the old
+            # always-excluded replan path. Acceptable — the answer belongs in
+            # history. Replan re-runs below stay excluded.
+            cycle_result = await self._process_streaming_execution(
                 text,
                 target_container,
                 start_time,
                 self.agent,
                 exclude_from_history,
             )
-            # Verify the planned turn post-execution (no-op when unplanned).
-            objective = self.agent.pending_plan_objective
-            plan = self.agent.pending_plan_text
-            result_text = getattr(bubble, "content", "") if bubble else ""
-            await self._verify_planned_turn(
-                objective, plan, result_text, target_container, chat_view
-            )
+
+            verified = False
+            replan_ctx = None
+            last_failure_reason = ""
+            if self.agent.pending_plan_objective:
+                replan_ctx = ReplanContext(
+                    self.agent.pending_plan_objective, config.replan_max_cycles
+                )
+                replan_ctx.next_cycle()  # attempt 1 = the pass just executed
+
+                while True:
+                    # Phase 3: VERIFY
+                    self.status_label = f"Verifying (attempt {replan_ctx.cycle})..."
+                    objective = self.agent.pending_plan_objective
+                    plan = self.agent.pending_plan_text
+                    result_text = (
+                        getattr(cycle_result, "content", "") if cycle_result else ""
+                    )
+
+                    verified = await self._verify_and_possibly_replan(
+                        objective,
+                        plan,
+                        result_text,
+                        target_container,
+                        chat_view,
+                        replan_ctx,
+                    )
+                    if verified:
+                        self.status_label = "✓ Verification complete"
+                        break
+                    # Not verified; capture reason and replan if budget remains.
+                    last_failure_reason = (
+                        replan_ctx.failures[-1] if replan_ctx.failures else "Unknown"
+                    )
+                    if not replan_ctx.next_cycle():
+                        break
+
+                    # Phase 2: REPLAN + IMPLEMENT — feed failure context back.
+                    self.status_label = (
+                        f"Task: executing (attempt {replan_ctx.cycle})..."
+                    )
+                    current_prompt = replan_ctx.format_replan_prompt_context()
+                    cycle_result = await self._process_streaming_execution(
+                        current_prompt,
+                        target_container,
+                        start_time,
+                        self.agent,
+                        exclude_from_history=True,  # Don't add replan to history
+                    )
+
+            # AC5: Final status when replan budget exhausted
+            if replan_ctx and not verified:
+                await target_container.mount(
+                    MessageBubble(
+                        role="system",
+                        content=(
+                            f"✗ Exhausted {config.replan_max_cycles} replan attempts. "
+                            f"Last failure: {last_failure_reason}"
+                        ),
+                    )
+                )
+                chat_view.jump_to_bottom()
+
             # Clear so a stale plan from a failed turn never leaks.
-            self.agent.pending_plan_objective = ""
-            self.agent.pending_plan_text = ""
+            if self.agent:
+                self.agent.pending_plan_objective = ""
+                self.agent.pending_plan_text = ""
         except ToolError as e:
             await chat_view.mount(MessageBubble(role="agent", content=e.user_message))
         except Exception as e:
@@ -440,22 +507,22 @@ class SupporterApp(App[None]):
             text, target, start_time, agent, exclude_from_history
         )
 
-    async def _verify_planned_turn(
+    async def _verify_and_possibly_replan(
         self,
         objective: str,
         plan: str,
         result_text: str,
         target: Vertical,
         chat_view: ChatContainer,
-    ) -> None:
-        """Verify a planned turn's result; warn only when judged incomplete.
+        replan_ctx: Any,
+    ) -> bool:
+        """Verify result and replan on failure (G2 helper for interactive cycle).
 
-        No-op when the turn was unplanned (``objective`` empty). ``verify_plan``
-        is fail-open and never raises; the guard here swallows anything else so
-        verification can never break the turn.
+        Returns True if verified, False if failed and out of replan budget.
+        ponytail: Replan in interactive TUI reuses same verify_plan predicate
+        as worker; replan message just shows failure + status; actual replanning
+        (re-prompt) happens on next cycle via the message loop.
         """
-        if not objective:
-            return
         try:
             from ..prompts import DELEGATE_AGENT_ROSTER
             from ..worker import verify_plan
@@ -464,16 +531,27 @@ class SupporterApp(App[None]):
                 "model", "gemma-4-31b-it"
             )
             is_done, reason = await verify_plan(objective, plan, result_text, model)
-            if not is_done:
-                await target.mount(
-                    MessageBubble(
-                        role="system",
-                        content=f"⚠ Verification: incomplete — {reason}",
-                    )
+            if is_done:
+                return True
+
+            # Verification failed
+            logger.info(
+                f"TUI: planner says NOT done (cycle {replan_ctx.cycle}): {reason}"
+            )
+            replan_ctx.record_failure(reason)
+
+            # Show failure warning
+            await target.mount(
+                MessageBubble(
+                    role="system",
+                    content=(f"⚠ Verification (attempt {replan_ctx.cycle}): {reason}"),
                 )
-                chat_view.jump_to_bottom()
+            )
+            chat_view.jump_to_bottom()
+            return False
         except Exception as exc:
-            logger.warning(f"verify_plan gate failed: {exc}")
+            logger.warning(f"_verify_and_possibly_replan failed: {exc}")
+            return True  # Fail-open: treat verify errors as pass
 
     def _confirm_write(self, path: Path, content: str) -> bool:
         import threading

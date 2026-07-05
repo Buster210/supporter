@@ -84,6 +84,9 @@ DELEGATE_JOB_ID_LEN = 8
 DELEGATE_RETRY_BACKOFF = [1.0, 3.0]
 DELEGATE_TIER1_COMMANDS: list[list[str]] = []
 
+# G2: Plan → Implement → Verify → Replan loop
+REPLAN_MAX_CYCLES = 3
+
 
 def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -250,6 +253,7 @@ def load_config() -> AppConfig:
         browser_auto_approve=_bool_env("BROWSER_AUTO_APPROVE", True),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free"),
+        replan_max_cycles=_int_env("REPLAN_MAX_CYCLES", REPLAN_MAX_CYCLES),
     )
 
 

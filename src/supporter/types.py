@@ -96,6 +96,8 @@ class AppConfig:
     browser_auto_approve: bool = True
     openrouter_api_key: str | None = None
     openrouter_model: str = "openai/gpt-oss-120b:free"
+    # G2: Plan → Implement → Verify → Replan loop: max replan cycles on verify failure
+    replan_max_cycles: int = 3
 
 
 @dataclass

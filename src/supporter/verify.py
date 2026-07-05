@@ -53,6 +53,7 @@ __all__ = [
     "check_json_shape",
     "check_min_chars",
     "check_no_unicode_garble",
+    "check_plan_goals_met",
     "check_recipe_passes",
 ]
 
@@ -238,6 +239,53 @@ def check_files_exist(paths: tuple[str, ...]) -> Check:
         )
 
     return _named("files_exist", _check)
+
+
+def check_plan_goals_met(provider: Any, model: str) -> Check:
+    """Pass when the result semantically fulfils the plan's stated goals.
+
+    Makes a single fresh, stateless LLM call with (plan + result) only.
+    The provider and model are captured at construction time; no shared
+    state is threaded through invocations.
+    """
+    from .llm.types import GenOptions
+    from .prompts import PLAN_VERIFIER_PERSONA
+
+    _persona = PLAN_VERIFIER_PERSONA
+
+    async def _check(result: LLMResult, prompt: str) -> CheckResult:
+        text = result.text or ""
+        # Extract the PLAN section from the prompt (between "PLAN:" and the
+        # next top-level section or end of string).
+        plan_match = re.search(
+            r"PLAN:\s*\n(.*?)(?=\n[A-Z][A-Z ]{2,}:|\Z)", prompt, re.DOTALL
+        )
+        plan_text = plan_match.group(1).strip() if plan_match else prompt
+        judge_prompt = f"OBJECTIVE:\n{plan_text}\n\nRESULT:\n{text}"
+        try:
+            options = GenOptions(system_instruction=_persona)
+            gen = await provider.generate(judge_prompt, options)
+            verdict = (getattr(gen, "text", "") or "").strip()
+            first_line = verdict.splitlines()[0].upper() if verdict else ""
+            if "NOT_DONE" in first_line or "NOT DONE" in first_line:
+                reason = (
+                    verdict.split("\n", 1)[1].strip() if "\n" in verdict else verdict
+                )
+                return CheckResult(
+                    name="plan_goals_met",
+                    ok=False,
+                    detail=reason or "plan goals not met",
+                )
+            return CheckResult(name="plan_goals_met", ok=True, detail="ok")
+        except Exception as exc:
+            # Fail-open: semantic check outage must not trap the loop.
+            return CheckResult(
+                name="plan_goals_met",
+                ok=True,
+                detail=f"semantic check unavailable: {exc}",
+            )
+
+    return _named("plan_goals_met", _check)
 
 
 # ---------------------------------------------------------------------------

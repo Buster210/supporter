@@ -73,6 +73,14 @@ def _patch_pipeline(
     monkeypatch.setattr(worker, "_build_executor_agent", lambda session_id: agent)
     close_mock = AsyncMock()
     monkeypatch.setattr(worker, "close_session", close_mock)
+
+    # G2: Mock verify_plan to pass (verification succeeds on first cycle)
+    async def _fake_verify_plan(
+        objective: str, plan: str, result: str, model: str
+    ) -> tuple[bool, str]:
+        return (True, "verified")
+
+    monkeypatch.setattr(worker, "verify_plan", _fake_verify_plan)
     return close_mock
 
 

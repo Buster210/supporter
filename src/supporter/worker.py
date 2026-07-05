@@ -30,6 +30,7 @@ from .config import config
 from .llm.types import GenOptions
 from .logger import logger
 from .pool import get_provider
+from .replan import ReplanContext
 from .tools import file_ops
 from .tools.browser import guardrails
 from .tools.browser.session import close_session
@@ -272,6 +273,22 @@ def _verification_prompt(report_path: Path, reason: str) -> str:
     )
 
 
+def _replan_prompt(report_path: Path, replan_ctx: ReplanContext) -> str:
+    """Format a replan prompt when the executor's result fails verification.
+
+    ponytail: Replan message goes to the *executor* (who then drives browser
+    per the revised plan). Caller (run_worker) regenerates the plan and feeds
+    the revised plan back to executor.
+    """
+    last_failure = replan_ctx.failures[-1] if replan_ctx.failures else "No feedback"
+    return (
+        f"The planner reviewed your report and judged "
+        f"it NOT done:\n{last_failure}\n\n"
+        "Keep driving the browser to address the gaps, then rewrite the COMPLETE "
+        f"report to {report_path} via write_file(path=..., content=<full markdown>)."
+    )
+
+
 async def _teardown(agent: ChatAgent | None) -> None:
     try:
         await close_session(force=True)
@@ -297,7 +314,13 @@ async def run_worker(
 ) -> Path:
     """Plan the task, drive the browser to fulfil it, and write an executive
     markdown report. Returns the report path. Raises ``RuntimeError`` if no
-    report was produced within ``max_executor_turns``."""
+    report was produced within ``max_executor_turns``.
+
+    Implements G2 replan loop:
+    - PLAN → IMPLEMENT → VERIFY
+    - If VERIFY fails, REPLAN with failure context and try again
+      (max replan_max_cycles).
+    """
     task = task.strip()
     if not task:
         raise ValueError("task must be a non-empty string")
@@ -310,47 +333,109 @@ async def run_worker(
         logger.info(f"worker: task={task!r} -> report {report_path}")
 
         profile = _planner_profile()
-        plan = await make_plan(task, profile["persona"], profile["model"])
         planner_model = profile["model"]
-        session_id = f"worker-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
-        agent = _build_executor_agent(session_id)
-        prompt = _build_executor_prompt(task, plan, report_path)
+
+        # G2: Replan loop context
+        replan_ctx = ReplanContext(task, max_cycles=config.replan_max_cycles)
 
         verified = False
-        for turn in range(1, max_executor_turns + 1):
-            logger.info(f"worker: executor turn {turn}/{max_executor_turns}")
-            try:
-                await agent.execute(prompt)
-            except Exception as exc:  # keep driving on a transient turn failure
-                logger.warning(f"worker: executor turn {turn} errored: {exc}")
+        # Outer loop: replan cycles (G2)
+        while replan_ctx.next_cycle():
+            logger.info(
+                f"worker: replan cycle {replan_ctx.cycle}/{config.replan_max_cycles}"
+            )
+
+            # Phase 1: PLAN
+            if replan_ctx.cycle == 1:
+                # Initial plan
+                plan = await make_plan(task, profile["persona"], planner_model)
+                logger.info(f"worker: initial plan ({len(plan)} chars)")
+            else:
+                # Revised plan (replan)
+                logger.info(f"worker: replanning (cycle {replan_ctx.cycle})...")
+                revised_prompt = replan_ctx.format_replan_prompt_context()
+                plan = await make_plan(
+                    revised_prompt, profile["persona"], planner_model
+                )
+                logger.info(f"worker: revised plan ({len(plan)} chars)")
+
+            replan_ctx.plan = plan
+            session_id = f"worker-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+            agent = _build_executor_agent(session_id)
+
+            if replan_ctx.cycle == 1:
+                prompt = _build_executor_prompt(task, plan, report_path)
+            else:
+                prompt = _replan_prompt(report_path, replan_ctx)
+
+            # Phase 2: IMPLEMENT (executor turns)
+            for turn in range(1, max_executor_turns + 1):
+                logger.info(
+                    f"worker: executor turn {turn}/{max_executor_turns} "
+                    f"(replan cycle {replan_ctx.cycle})"
+                )
+                try:
+                    await agent.execute(prompt)
+                except Exception as exc:  # keep driving on transient turn failure
+                    logger.warning(f"worker: executor turn {turn} errored: {exc}")
+
+                if _report_ready(report_path):
+                    # Report created; break executor loop to verify
+                    break
+                prompt = _continuation_prompt(report_path)
+            else:
+                logger.warning(
+                    f"worker: exhausted executor turns in cycle {replan_ctx.cycle}"
+                )
+
+            # Phase 3: VERIFY
             if _report_ready(report_path):
                 try:
                     result_text = report_path.read_text(encoding="utf-8")
                 except OSError:
                     result_text = ""
+
+                replan_ctx.last_result = result_text
                 ok, reason = await verify_plan(task, plan, result_text, planner_model)
                 if ok:
-                    logger.info(f"worker: planner verified report after turn {turn}")
+                    logger.info(
+                        f"worker: planner verified report in cycle {replan_ctx.cycle}"
+                    )
                     verified = True
                     break
+                # Verification failed; record and continue replan loop
                 logger.info(
-                    f"worker: planner says NOT done after turn {turn}: {reason}"
+                    f"worker: planner says NOT done in cycle {replan_ctx.cycle}: "
+                    f"{reason}"
                 )
-                prompt = _verification_prompt(report_path, reason)
+                replan_ctx.record_failure(reason)
             else:
-                prompt = _continuation_prompt(report_path)
-        else:
-            logger.warning("worker: exhausted executor turns without a verified report")
+                # No report produced in this cycle; stop replanning
+                logger.warning(
+                    f"worker: no report after executor turns in cycle "
+                    f"{replan_ctx.cycle}; stopping replan loop"
+                )
+                break
+
+            await _teardown(agent)
+            agent = None
+
+        if not verified:
+            logger.warning(
+                f"worker: exhausted replan cycles ({config.replan_max_cycles}) "
+                "without verified report"
+            )
     finally:
-        await _teardown(agent)
+        if agent is not None:
+            await _teardown(agent)
         restore_callbacks()
 
     if not _report_ready(report_path):
         raise RuntimeError(f"worker did not produce a report at {report_path}")
     if not verified:
         raise RuntimeError(
-            f"worker produced a report at {report_path} but the planner never "
-            "verified it satisfies the plan within the turn budget"
+            f"worker produced a report at {report_path} but exhausted replan "
+            f"cycles ({config.replan_max_cycles}) without verification"
         )
     logger.info(f"worker: done -> {report_path}")
     return report_path

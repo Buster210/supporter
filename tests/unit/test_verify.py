@@ -20,6 +20,7 @@ from supporter.verify import (
     check_json_shape,
     check_min_chars,
     check_no_unicode_garble,
+    check_plan_goals_met,
     check_recipe_passes,
 )
 
@@ -440,3 +441,152 @@ async def test_agent_execute_with_verification_with_recover() -> None:
     # The provider was called twice: once for the failed attempt, once
     # for the recovered retry.
     assert provider.generate.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# AC1/AC5: No iteration awareness in verification/replan prompts
+# ---------------------------------------------------------------------------
+#
+_BANNED_TOKENS = (
+    "attempt",
+    "try",
+    "iteration",
+    "round",
+    "last chance",
+    "X of Y",
+)
+
+
+def _contains_banned(text: str) -> list[str]:
+    """Return banned tokens found in *text* (case-insensitive word match)."""
+    lower = text.lower()
+    return [tok for tok in _BANNED_TOKENS if tok in lower]
+
+
+def test_retry_template_has_no_iteration_tokens() -> None:
+    """The VerificationLoop retry template must not expose attempt count."""
+    cfg = VerificationConfig()
+    banned = _contains_banned(cfg.retry_template)
+    assert not banned, f"retry_template contains banned tokens: {banned}"
+
+
+def test_replan_prompt_has_no_iteration_tokens(tmp_path: Path) -> None:
+    """The worker replan prompt must not expose attempt/iteration count."""
+    from supporter.replan import ReplanContext
+    from supporter.worker import _replan_prompt
+
+    ctx = ReplanContext("gather data", max_cycles=3)
+    ctx.cycle = 2
+    ctx.failures.append("missing sections")
+    prompt = _replan_prompt(tmp_path / "report.md", ctx)
+    banned = _contains_banned(prompt)
+    assert not banned, f"_replan_prompt contains banned tokens: {banned}"
+
+
+def test_verification_prompt_has_no_iteration_tokens(tmp_path: Path) -> None:
+    """The worker verification-failure prompt must not expose iteration."""
+    from supporter.worker import _verification_prompt
+
+    prompt = _verification_prompt(tmp_path / "report.md", "incomplete data")
+    banned = _contains_banned(prompt)
+    assert not banned, f"_verification_prompt contains banned tokens: {banned}"
+
+
+def test_replan_format_prompt_has_no_iteration_tokens() -> None:
+    """The replan prompt sent to the planner must not expose iteration."""
+    from supporter.replan import format_replan_prompt
+
+    prompt = format_replan_prompt(
+        objective="gather data",
+        plan="step 1: visit sites",
+        result="partial results",
+        failures=["missing field X"],
+    )
+    banned = _contains_banned(prompt)
+    assert not banned, f"format_replan_prompt contains banned tokens: {banned}"
+
+
+def test_executor_prompt_has_no_iteration_tokens(tmp_path: Path) -> None:
+    """The initial executor prompt must not expose iteration."""
+    from supporter.worker import _build_executor_prompt
+
+    prompt = _build_executor_prompt("task", "plan text", tmp_path / "r.md")
+    banned = _contains_banned(prompt)
+    assert not banned, f"executor prompt contains banned tokens: {banned}"
+
+
+def test_continuation_prompt_has_no_iteration_tokens(tmp_path: Path) -> None:
+    """The continuation prompt must not expose iteration."""
+    from supporter.worker import _continuation_prompt
+
+    prompt = _continuation_prompt(tmp_path / "report.md")
+    banned = _contains_banned(prompt)
+    assert not banned, f"continuation prompt contains banned tokens: {banned}"
+
+
+def test_verifier_persona_has_no_iteration_tokens() -> None:
+    """The plan verifier persona must not expose iteration."""
+    from supporter.prompts import PLAN_VERIFIER_PERSONA
+
+    banned = _contains_banned(PLAN_VERIFIER_PERSONA)
+    assert not banned, f"PLAN_VERIFIER_PERSONA contains banned tokens: {banned}"
+
+
+# ---------------------------------------------------------------------------
+# AC2: Semantic verification check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_plan_goals_met_fails_when_result_omits_plan_item() -> None:
+    """Semantic check FAILS when the result omits a plan-required section."""
+    mock_provider = MagicMock()
+    mock_result = MagicMock()
+    mock_result.text = "VERDICT: NOT_DONE\nMissing the Methodology section."
+    mock_provider.generate = AsyncMock(return_value=mock_result)
+
+    plan_text = (
+        "OBJECTIVE:\ngather top 10 Hacker News stories\n\n"
+        "PLAN:\n"
+        "1. Visit Hacker News\n"
+        "2. Collect titles, points, links\n"
+        "3. Write report with sections: Findings, Methodology, Summary"
+    )
+    result_text = "# Report\n\n## Findings\nStory 1, Story 2..."
+    check = check_plan_goals_met(mock_provider, "test-model")
+    # The check extracts PLAN from the prompt and sends it with the result.
+    cr = await check(_result(result_text), plan_text)  # type: ignore[misc]
+    assert cr.ok is False
+    assert cr.name == "plan_goals_met"
+    mock_provider.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_check_plan_goals_met_passes_when_result_covers_goals() -> None:
+    """Semantic check PASSES when the LLM judges the result complete."""
+    mock_provider = MagicMock()
+    mock_result = MagicMock()
+    mock_result.text = "VERDICT: DONE\nResult covers all plan sections."
+    mock_provider.generate = AsyncMock(return_value=mock_result)
+
+    plan_text = (
+        "OBJECTIVE:\ngather top 10 Hacker News stories\n\n"
+        "PLAN:\n1. Visit HN\n2. Collect data\n3. Write report"
+    )
+    result_text = "# Report\n## Findings\n1. Story A\n## Methodology\n..."
+    check = check_plan_goals_met(mock_provider, "test-model")
+    cr = await check(_result(result_text), plan_text)  # type: ignore[misc]
+    assert cr.ok is True
+    assert cr.name == "plan_goals_met"
+
+
+@pytest.mark.asyncio
+async def test_check_plan_goals_met_fails_open_on_provider_error() -> None:
+    """Semantic check fail-opens when the LLM call errors."""
+    mock_provider = MagicMock()
+    mock_provider.generate = AsyncMock(side_effect=RuntimeError("API down"))
+
+    check = check_plan_goals_met(mock_provider, "test-model")
+    cr = await check(_result("some result"), "PLAN:\ndo stuff")  # type: ignore[misc]
+    assert cr.ok is True  # fail-open
+    assert "unavailable" in cr.detail
