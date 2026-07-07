@@ -18,15 +18,12 @@ _CONFIRMATION_CALLBACK: Callable[[Path, str], bool] | None = None
 _GITIGNORE_CACHE: dict[str, Any] = {"spec": None, "mtime": 0}
 
 
-def set_confirmation_callback(callback: Callable[[Path, str], bool] | None) -> None:
-    global _CONFIRMATION_CALLBACK
-    _CONFIRMATION_CALLBACK = callback
-
-
 def register_confirmation_callback(
     callback: Callable[[Path, str], bool] | None,
 ) -> None:
-    set_confirmation_callback(callback)
+    # ponytail: inlined set_confirmation_callback (only caller)
+    global _CONFIRMATION_CALLBACK
+    _CONFIRMATION_CALLBACK = callback
 
 
 def emit_confirmation_line(message: str = "") -> None:

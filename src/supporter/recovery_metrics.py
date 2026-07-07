@@ -27,9 +27,6 @@ class RecoveryCounters:
     key_rotations: int = 0
     re_snapshots_survived: int = 0
 
-    def snapshot(self) -> dict[str, int]:
-        return asdict(self)
-
 
 _counters = RecoveryCounters()
 
@@ -48,7 +45,8 @@ def record_re_snapshot_survived() -> None:
 
 def recovery_snapshot() -> dict[str, int]:
     """Return a copy of the current recovery counters for inspection."""
-    return _counters.snapshot()
+    # ponytail: removed redundant snapshot() method; call asdict() directly
+    return asdict(_counters)
 
 
 def reset_recovery_counters() -> None:

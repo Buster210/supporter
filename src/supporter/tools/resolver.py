@@ -37,12 +37,17 @@ def extract_declared_tool_names(tools: Sequence[Any]) -> set[str]:
     return names
 
 
+def _has_tool_attr(tools: Sequence[Any], attr_name: str) -> bool:
+    """ponytail: unified helper to check for any tool attribute."""
+    return any(getattr(tool, attr_name, None) is not None for tool in tools)
+
+
 def _has_server_search_tool(tools: Sequence[Any]) -> bool:
-    return any(getattr(tool, "google_search", None) is not None for tool in tools)
+    return _has_tool_attr(tools, "google_search")
 
 
 def _has_code_execution_tool(tools: Sequence[Any]) -> bool:
-    return any(getattr(tool, "code_execution", None) is not None for tool in tools)
+    return _has_tool_attr(tools, "code_execution")
 
 
 def ensure_function_search_tool(

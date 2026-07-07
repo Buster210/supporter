@@ -103,10 +103,7 @@ def _notify_keypool_failure(provider: LLMProvider, error: BaseException) -> None
     ``provider`` is not a GeminiProvider.
     """
     try:
-        from .keypool import (
-            get_key_pool,
-            reset_key_pool,  # noqa: F401  (kept for symmetry)
-        )
+        from .keypool import get_key_pool
 
         api_key = getattr(provider, "api_key", None)
         if not isinstance(api_key, str) or not api_key:
@@ -114,6 +111,7 @@ def _notify_keypool_failure(provider: LLMProvider, error: BaseException) -> None
         pool = get_key_pool()
         if pool is None:
             return
+        # ponytail: removed unused reset_key_pool import (symmetry no longer needed)
         pool.report_failure(api_key, error)
     except Exception as exc:
         logger.debug(f"keypool notification skipped [{type(exc).__name__}]: {exc}")
