@@ -442,6 +442,11 @@ async def run_worker(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for supporter-worker (plan, execute, write report).
+
+    Parses task and options, runs the full plan-execute-verify-replan loop,
+    and writes the final report to disk. Returns 0 on success, 1 on failure.
+    """
     parser = argparse.ArgumentParser(
         prog="supporter-worker",
         description=(

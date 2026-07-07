@@ -30,10 +30,14 @@ def _truncate_output_tail(text: str) -> str:
 
 
 class MessageInjector(Protocol):
+    """Callback to inject a message into the chat."""
+
     def __call__(self, message: str) -> None: ...
 
 
 class ProgressUpdater(Protocol):
+    """Async callback to update delegation progress on the UI."""
+
     async def __call__(self, job_id: str, bus: Any) -> None: ...
 
 
@@ -129,6 +133,8 @@ def format_delegation_summary(job_id: str, bus: Any) -> str:
 
 
 class DelegationListener:
+    """Listens for delegation events and renders task progress + signals to the UI."""
+
     def __init__(
         self,
         inject_message: MessageInjector,
@@ -238,6 +244,11 @@ class DelegationListener:
     # ── main event loop ──────────────────────────────────────────────────
 
     async def listen(self, job_id: str) -> None:
+        """Listen for delegation events on job_id and render to UI in real time.
+
+        Dispatches events (task start/complete/fail, anomaly, milestone) to
+        appropriate handler methods which render signals and progress updates.
+        """
         from ..tools.delegate.bus import get_bus
         from ..types import (
             MilestoneCancelled,

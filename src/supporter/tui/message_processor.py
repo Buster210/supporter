@@ -17,10 +17,13 @@ class _StreamingState:
 
 
 class ChatMessageProcessor:
+    """Process streaming chunks, render to bubbles, handle recovery and formatting."""
+
     def __init__(self, app: Any) -> None:
         self._app = app
 
     def wire_recovery_observer(self, agent: Any) -> None:
+        """Wire recovery callback to update UI status on recovery events."""
         provider = getattr(agent, "provider", None)
         if provider is None:
             return
@@ -50,6 +53,12 @@ class ChatMessageProcessor:
         agent: ChatAgent,
         exclude_from_history: bool = False,
     ) -> Any:
+        """Stream a prompt and render chunks to bubbles, with formatting pass on finish.
+
+        Spawns the streaming execution, creates/appends to bubbles on first/subsequent
+        chunks, finalizes with duration, and asynchronously reformats the final
+        bubble (fire-and-forget to avoid blocking the message cycle).
+        """
         from .bubble import MessageBubble
 
         state = _StreamingState()

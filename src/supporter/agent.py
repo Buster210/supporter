@@ -39,6 +39,14 @@ def _extract_assistant_message(result: LLMResult) -> Any | None:
 
 
 class ChatAgent:
+    """Multi-turn conversational agent with durable history and auto-planning.
+
+    Wraps an LLM provider with conversation history, optional durable persistence,
+    history compaction (summarization + trimming), and integration with tool
+    registries. Supports both streaming and non-streaming execution, with built-in
+    prompt classification for trivial vs. task routing.
+    """
+
     def __init__(
         self,
         provider: LLMProvider,
@@ -272,6 +280,12 @@ class ChatAgent:
             del self.history[: len(self.history) - cap]
 
     async def execute(self, prompt: str) -> LLMResult:
+        """Execute a single turn with the LLM, return result. History auto-synced.
+
+        Summarizes old turns if past trigger threshold, sends prompt with
+        compacted history to the provider, and persists both user and assistant
+        turns to durable history (if enabled).
+        """
         logger.info(f"Agent: executing prompt — length={len(prompt)}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full prompt: {prompt!r}")
@@ -459,6 +473,12 @@ class ChatAgent:
     async def execute_stream(
         self, prompt: str, exclude_from_history: bool = False
     ) -> AsyncIterator[LLMChunk]:
+        """Stream LLM chunks, with optional history exclusion.
+
+        Routing (direct vs. delegate) is driven by the system prompt's
+        task-triage block, not by caller-side classification. Yields chunks
+        as they arrive.
+        """
         logger.info(f"Agent: executing streaming prompt — length={len(prompt)}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Agent: full streaming prompt: {prompt!r}")
@@ -497,6 +517,11 @@ class ChatAgent:
         logger.info(f"Agent: stream complete — history_size={len(self.history)}")
 
     def clear_history(self) -> None:
+        """Erase all conversation history and rotate durable history to a new session.
+
+        Clears in-memory history, summary cache, and spawns a new session ID
+        for durable storage (if enabled). Used when starting a fresh conversation.
+        """
         logger.info("Clearing agent session history")
         self.history = []
         self._summary = ""

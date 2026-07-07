@@ -41,6 +41,12 @@ if TYPE_CHECKING:
 
 
 class SupporterApp(App[None]):
+    """Interactive TUI dashboard for autonomous agent with delegation monitoring.
+
+    Combines live chat, prompt routing (direct/task), streaming responses,
+    browser automation, code execution, and real-time delegation visibility.
+    """
+
     CSS_PATH = "styles.tcss"
 
     status_label = reactive("Thinking")
@@ -86,6 +92,7 @@ class SupporterApp(App[None]):
         )
 
     async def on_mode_changed(self, event: ModeChanged) -> None:
+        """Handle agent mode toggle (live/offline). Display status bubble."""
         indicator = self.query_one("#mode-indicator", Label)
         indicator.update(f"[{event.mode}]")
         status = "ENABLED" if event.enabled else "DISABLED"
@@ -96,9 +103,15 @@ class SupporterApp(App[None]):
         )
 
     async def on_mount(self) -> None:
-        # WHY: Lazy imports — these modules spawn subprocesses, open OS handles,
-        # or touch the network at import time. Deferring to on_mount avoids
-        # startup overhead before the app is interactive.
+        """Initialize TUI on startup: register callbacks, warm pools, setup agent.
+
+        Lazy imports defer subprocess/network initialization until app is visible.
+        Spawns workers for agent setup, job resumption, and browser prewarm.
+        """
+        # Tool/pool imports below are intentionally lazy: each pulls in modules
+        # that spawn subprocesses, open OS handles, or touch the network at
+        # import time (e.g. browser prewarm). Keeping them out of module top
+        # defers that work until the app is actually starting up.
         from ..tools.bash.sandbox import register_bash_callbacks
         from ..tools.browser.guardrails import register_browse_callback
         from ..tools.delegate.api import set_delegation_start_callback
@@ -138,6 +151,7 @@ class SupporterApp(App[None]):
             self._toast_manager.notify(self, msg, type="system")
 
     async def on_unmount(self) -> None:
+        """Clean up on exit: cancel workers, deregister callbacks, close session."""
         from ..tools.bash.sandbox import register_bash_callbacks
         from ..tools.browser.guardrails import register_browse_callback
         from ..tools.browser.session import close_session
@@ -225,6 +239,7 @@ class SupporterApp(App[None]):
         chat_view.jump_to_bottom()
 
     def compose(self) -> ComposeResult:
+        """Compose the TUI layout: header, chat view, input area, mode indicator."""
         with Vertical(id="main-container"):
             yield SupporterHeader(id="supporter-header")
             with ChatContainer(id="chat-view"):
@@ -243,10 +258,12 @@ class SupporterApp(App[None]):
                 )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button press events (e.g., scroll-to-bottom button)."""
         if event.button.id == "scroll-bottom-btn":
             self.query_one("#chat-view", ChatContainer).jump_to_bottom()
 
     def action_scroll_chat(self, direction: str) -> None:
+        """Scroll chat view in given direction. Non-animated for responsiveness."""
         chat_view = self.query_one("#chat-view", ChatContainer)
         # WHY: animate=False avoids burst of repaints that stall the event loop
         # on slow terminals; an instant jump is one repaint, not many.
@@ -260,6 +277,7 @@ class SupporterApp(App[None]):
             chat_view.jump_to_bottom()
 
     def action_clear_screen(self) -> None:
+        """Clear conversation history and remove all chat turns from the view."""
         chat_view = self.query_one("#chat-view")
         if not chat_view.query(ChatTurn) and (not self.agent or not self.agent.history):
             self._toast_manager.notify(self, "Session already clear", type="system")
@@ -273,12 +291,15 @@ class SupporterApp(App[None]):
         self.active_turn = None
 
     def start_thinking(self) -> None:
+        """Increment active query counter, show thinking spinner."""
         self.active_queries += 1
 
     def stop_thinking(self) -> None:
+        """Decrement active query counter, hide spinner when zero."""
         self.active_queries = max(0, self.active_queries - 1)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle user input: queue if busy, route command, or process message."""
         user_text = event.value.strip()
         if not user_text:
             return
@@ -329,6 +350,7 @@ class SupporterApp(App[None]):
         return await self._mode_manager.handle_command(command)
 
     async def set_live_mode(self, live: bool = False) -> None:
+        """Toggle live mode on/off via mode manager."""
         await self._mode_manager.toggle_mode(live=live)
 
     async def _process_message_cycle(
@@ -543,6 +565,7 @@ class SupporterApp(App[None]):
         result = [False]
 
         def callback(value: bool) -> None:
+            """Store modal result and signal completion."""
             result[0] = value
             event.set()
 
@@ -562,6 +585,7 @@ class SupporterApp(App[None]):
         result = [False]
 
         def callback(value: bool) -> None:
+            """Store modal result and signal completion."""
             result[0] = value
             event.set()
 
@@ -756,6 +780,7 @@ class SupporterApp(App[None]):
 
 
 def main() -> None:
+    """Launch the Supporter TUI dashboard."""
     app = SupporterApp()
     app.run()
 

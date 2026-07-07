@@ -149,6 +149,11 @@ def _get_project_root() -> str:
 
 
 def load_config() -> AppConfig:
+    """Load and parse configuration from environment variables.
+
+    Reads .env file, parses API keys (JSON array or comma-separated), and
+    constructs an AppConfig with all required settings. Called at module import.
+    """
     load_dotenv()
     raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
     stripped = raw_keys.replace("\n", " ").replace("\r", "").strip()

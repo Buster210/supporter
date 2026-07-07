@@ -11,6 +11,8 @@ from .llm.types import GenOptions, Message
 
 
 class TaskStatus(StrEnum):
+    """Task execution status enumeration."""
+
     COMPLETED = "completed"
     TIMEOUT = "timeout"
     SKIPPED = "skipped"
@@ -21,6 +23,12 @@ class TaskStatus(StrEnum):
 
 @dataclass
 class AppConfig:
+    """Application configuration loaded from environment variables.
+
+    Contains LLM provider settings, tool configuration, browser automation
+    options, history management, and delegation/verification parameters.
+    """
+
     log_level: str
     provider: str
     gemini_api_keys: list[str]
@@ -102,12 +110,16 @@ class AppConfig:
 
 @dataclass
 class ModeChanged(TextualMessage):
+    """Event fired when an agent mode is toggled (live vs. offline, etc)."""
+
     mode: str
     enabled: bool
 
 
 @dataclass
 class LLMResult:
+    """Result from an LLM generation call, including metadata and full history."""
+
     text: str
     model: str | None = None
     duration: float | None = None
@@ -122,6 +134,8 @@ class LLMResult:
 
 @dataclass
 class LLMChunk:
+    """A single chunk from streaming LLM generation (text, tool call, or thought)."""
+
     text: str
     is_last: bool
     is_thought: bool = False
@@ -133,24 +147,36 @@ class LLMChunk:
 
 
 class LLMProvider(Protocol):
+    """Abstract protocol for LLM providers (Gemini, OpenRouter, etc)."""
+
     async def generate(
         self, prompt: str | list[Message], options: GenOptions | None = None
-    ) -> LLMResult: ...
+    ) -> LLMResult:
+        """Generate a single LLM response."""
+        ...
 
     def generate_stream(
         self, prompt: str | list[Message], options: GenOptions | None = None
-    ) -> AsyncIterator[LLMChunk]: ...
+    ) -> AsyncIterator[LLMChunk]:
+        """Stream LLM response chunks."""
+        ...
 
-    def get_name(self) -> str: ...
+    def get_name(self) -> str:
+        """Return the provider's name."""
+        ...
 
 
 @dataclass(frozen=True)
 class DelegationEvent:
+    """Base event emitted during task delegation (job_id scopes all events)."""
+
     job_id: str
 
 
 @dataclass(frozen=True)
 class MilestoneStarted(DelegationEvent):
+    """Event fired when a delegation milestone starts."""
+
     milestone: str
     task_ids: list[str]
     parallel_cap: int
@@ -158,6 +184,8 @@ class MilestoneStarted(DelegationEvent):
 
 @dataclass(frozen=True)
 class MilestoneCompleted(DelegationEvent):
+    """Event fired when a delegation milestone completes successfully."""
+
     milestone: str
     results: list[dict[str, Any]]
     total_duration: float
@@ -165,12 +193,16 @@ class MilestoneCompleted(DelegationEvent):
 
 @dataclass(frozen=True)
 class MilestoneCancelled(DelegationEvent):
+    """Event fired when a delegation milestone is cancelled."""
+
     milestone: str
     total_duration: float
 
 
 @dataclass(frozen=True)
 class TaskStarted(DelegationEvent):
+    """Event fired when a task starts execution."""
+
     task_id: str
     agent_label: str
     started_at: float
@@ -179,6 +211,8 @@ class TaskStarted(DelegationEvent):
 
 @dataclass(frozen=True)
 class TaskCompleted(DelegationEvent):
+    """Event fired when a task completes successfully."""
+
     task_id: str
     duration: float
     output: str
@@ -194,6 +228,8 @@ class TaskCompleted(DelegationEvent):
 
 @dataclass(frozen=True)
 class TaskFailed(DelegationEvent):
+    """Event fired when a task fails with an error."""
+
     task_id: str
     duration: float
     error: str
@@ -201,12 +237,16 @@ class TaskFailed(DelegationEvent):
 
 @dataclass(frozen=True)
 class TaskTimedOut(DelegationEvent):
+    """Event fired when a task exceeds its timeout."""
+
     task_id: str
     duration: float
 
 
 @dataclass(frozen=True)
 class TaskOutputChunk(DelegationEvent):
+    """Event fired when a task emits a chunk of streaming output."""
+
     task_id: str
     chunk: str
     seq: int
@@ -214,12 +254,16 @@ class TaskOutputChunk(DelegationEvent):
 
 @dataclass(frozen=True)
 class TaskSkipped(DelegationEvent):
+    """Event fired when a task is skipped."""
+
     task_id: str
     reason: str
 
 
 @dataclass(frozen=True)
 class TaskRetrying(DelegationEvent):
+    """Event fired when a task is retried after a transient failure."""
+
     task_id: str
     attempt: int
     reason: str
@@ -227,12 +271,16 @@ class TaskRetrying(DelegationEvent):
 
 @dataclass(frozen=True)
 class HeartbeatTick(DelegationEvent):
+    """Periodic event emitted during long-running milestone execution."""
+
     milestone: str
     snapshot: dict[str, dict[str, Any]]
 
 
 @dataclass(frozen=True)
 class TaskAnomaly(DelegationEvent):
+    """Event fired when a task shows signs of hanging (exceeded time threshold)."""
+
     task_id: str
     agent_label: str
     elapsed_seconds: float
