@@ -144,6 +144,44 @@ MessageBubble.right {
     margin-top: 1;
 }
 
+.delegation-block {
+    width: 1fr;
+    height: auto;
+    margin-top: 1;
+    margin-bottom: 1;
+    border: solid $accent;
+    padding: 0 1;
+}
+
+.delegation-block-content {
+    width: 100%;
+    height: auto;
+    layout: vertical;
+}
+
+.delegation-plan-content {
+    width: 100%;
+    height: auto;
+    color: $primary;
+    margin-bottom: 1;
+}
+
+.delegation-progress-content {
+    width: 100%;
+    height: auto;
+    color: $accent;
+    text-align: center;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.delegation-result-content {
+    width: 100%;
+    height: auto;
+    color: $success;
+    margin-bottom: 0;
+}
+
 .delegation-progress {
     margin-top: 1;
     margin-bottom: 0;

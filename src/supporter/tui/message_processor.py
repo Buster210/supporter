@@ -61,25 +61,19 @@ class ChatMessageProcessor:
             ):
                 await self._handle_chunk(chunk, container, state, MessageBubble)
         finally:
-            # Leave "Streaming" no matter how the stream ended. is_last only
-            # fires on the clean text path; a tool-call/exception end would
-            # otherwise strand the label on "Streaming".
+            # WHY: Reset status even if stream ended via exception or tool-call.
+            # is_last only fires on clean text path.
             self._update_status("Thinking")
             if state.bubble:
                 duration = time.perf_counter() - start_time
                 logger.info(f"UI: stream process finalized — duration={duration:.2f}s")
                 state.bubble.finalize(model=state.actual_model, duration=duration)
-            # The answer is fully on screen now. Drop the thinking spinner BEFORE
-            # the fallback formatter's LLM round-trip (and the cycle's later
-            # verify call) — otherwise "Thinking" lingers long after the response
-            # is visible. The cycle's own stop_thinking() in its finally is then
-            # an idempotent no-op (active_queries clamps at 0).
+            # WHY: Drop spinner before formatter's LLM call — otherwise "Thinking"
+            # lingers after the response is visible.
             self._app.stop_thinking()
             if state.bubble:
-                # Fire-and-forget: the answer is already painted, formatting only
-                # swaps an already-finalized bubble. Awaiting it would hold the
-                # cycle's _is_processing gate during the fallback model's round-trip
-                # and wrongly queue the next message while only the formatter is busy.
+                # WHY: Fire-and-forget — answer already visible. Awaiting would
+                # block the message queue until formatting completes.
                 self._app.run_worker(self._maybe_format_bubble(state.bubble))
 
         return state.bubble
@@ -143,11 +137,6 @@ class ChatMessageProcessor:
         from .chat import ChatTurn
 
         bubble = bubble_class(role="agent", content="", streaming=True)
-        # The first bubble of a delegation post-back defers its meta line so the
-        # buffered delegation block lands below the answer text first.
-        if getattr(self._app, "_defer_agent_meta_once", False):
-            bubble.defer_meta = True
-            self._app._defer_agent_meta_once = False
         if isinstance(container, ChatTurn):
             await container.mount_bubble(bubble)
         else:

@@ -122,8 +122,7 @@ async def test_replan_loop_enters_on_verify_failure() -> None:
 
         # Verify replan loop fired: 2 make_plan calls
         assert len(plan_inputs) == 2, (
-            f"Expected 2 make_plan calls (1 initial + 1 replan), "
-            f"got {len(plan_inputs)}"
+            f"Expected 2 make_plan calls (1 initial + 1 replan), got {len(plan_inputs)}"
         )
         # AC2: Second make_plan input should be replan context with failure reason
         assert "incomplete report" in plan_inputs[1], (

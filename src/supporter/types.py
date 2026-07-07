@@ -237,3 +237,9 @@ class TaskAnomaly(DelegationEvent):
     agent_label: str
     elapsed_seconds: float
     timeout: float
+
+
+@dataclass(frozen=True)
+class TaskUpdateSent(DelegationEvent):
+    task_id: str
+    message: str
